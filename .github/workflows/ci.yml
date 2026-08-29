@@ -66,31 +66,17 @@ jobs:
         if: runner.os == 'Windows' && steps.build.outcome == 'failure'
         shell: bash
         run: |
+          # libc++ links fine (verified earlier); link the REAL shim object
+          # against a tiny main to surface the actual undefined symbols.
+          cat > wvmain.c <<'EOF'
+          int wv_create(int);
+          int main(void) { return wv_create(0) >= 0 ? 0 : 1; }
+          EOF
+          SHIM=$(ls smoke/.janela/cache/wvshim.obj)
+          echo "shim object: $SHIM"
           set -x
-          clang -dumpmachine
-          CLANGDIR=$(dirname "$(which clang)")
-          ls "$CLANGDIR/../x86_64-w64-mingw32/lib/" | grep -iE "^lib(c\+\+|unwind|c\+\+abi)" || true
-          cat > tiny.cc <<'EOF'
-          #include <string>
-          extern "C" int shim_probe(const char *s) {
-            std::string v(s);
-            if (v.empty()) throw std::string("boom");
-            return (int)v.size();
-          }
-          EOF
-          cat > tinymain.c <<'EOF'
-          int shim_probe(const char *s);
-          int main(void) { return shim_probe("hi") == 2 ? 0 : 1; }
-          EOF
-          clang++ -c tiny.cc -o tiny.obj -std=c++17
-          clang -c tinymain.c -o tinymain.obj
-          echo "--- link with -lc++ only ---"
-          clang tinymain.obj tiny.obj -lc++ -o probe1.exe 2>&1 | tail -20 || true
-          echo "--- link with -lc++ -lunwind ---"
-          clang tinymain.obj tiny.obj -lc++ -lunwind -o probe2.exe 2>&1 | tail -20 || true
-          echo "--- link via clang++ (reference) ---"
-          clang++ tinymain.obj tiny.obj -o probe3.exe 2>&1 | tail -20 || true
-          ls -l probe*.exe || true
+          clang wvmain.c "$SHIM" -lc++ -lole32 -loleaut32 -lshlwapi -lshell32 \
+            -luser32 -lversion -lgdi32 -ladvapi32 -o wvprobe.exe 2>&1 | head -60 || true
       - name: Fail if the Windows build failed
         if: runner.os == 'Windows' && steps.build.outcome == 'failure'
         run: exit 1
