@@ -89,6 +89,24 @@ notes and scriptc findings behind it are in
 (the run loop is single-threaded), native dialogs/tray/menus, multi-window,
 icons/installers/notarization.
 
+## Releasing
+
+Bump `version` in `package.json` and merge to `main`. The publish workflow
+then does the rest: it compares the version against the registry, and if it
+is new, scaffolds/builds/runs a smoke app on Linux, publishes to npm with
+trusted publishing (OIDC — no token secret), tags the published commit
+`v<version>`, and opens a GitHub release with generated notes.
+
+A merge that does not change the version is a clean no-op: nothing is
+published and no tag is created. If a publish ever succeeds but the tagging
+step does not, npm and git are briefly out of step — reconcile with:
+
+```bash
+git tag -a v<version> -m "janela <version>" <commit>
+git push origin v<version>
+gh release create v<version> --generate-notes --verify-tag
+```
+
 ## License
 
 MIT. Bundles [webview/webview](https://github.com/webview/webview) headers
