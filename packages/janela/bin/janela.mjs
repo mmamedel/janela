@@ -166,15 +166,14 @@ function ffiManifest(shimLib) {
     STR("wvInit", "wv_init"),
     STR("wvEval", "wv_eval"),
     STR("wvBind", "wv_bind"),
-    { name: "wvReqLen", symbol: "wv_req_len", params: ["i32"], returns: "i32" },
-    { name: "wvReqByte", symbol: "wv_req_byte", params: ["i32", "i32"], returns: "i32" },
-    { name: "wvReplyReset", symbol: "wv_reply_reset", params: ["i32"], returns: "i32" },
-    { name: "wvReplyPush", symbol: "wv_reply_push", params: ["i32", "i32"], returns: "i32" },
+    STR("wvReply", "wv_reply"),
     {
       name: "wvRun", symbol: "wv_run",
       params: [
         "i32",
-        { callback: { id: "run", params: ["u32", "u32", { context: "run" }], returns: "i32", lifetime: "call" } },
+        // The request rides in as a `string` param (format 3), so a payload
+        // costs one callback argument rather than one FFI call per byte.
+        { callback: { id: "run", params: ["u32", "string", { context: "run" }], returns: "i32", lifetime: "call" } },
         { context: "run" },
       ],
       returns: "i32",
@@ -189,8 +188,15 @@ function ffiManifest(shimLib) {
     { name: "wvFsRead", symbol: "wv_fs_read", params: ["i32", "string"], returns: "i32" },
     { name: "wvFsWrite", symbol: "wv_fs_write", params: ["i32", "string", "string"], returns: "i32" },
     { name: "wvFsStatus", symbol: "wv_fs_status", params: ["i32", "i32"], returns: "i32" },
-    { name: "wvFsLen", symbol: "wv_fs_len", params: ["i32", "i32"], returns: "i32" },
-    { name: "wvFsByte", symbol: "wv_fs_byte", params: ["i32", "i32", "i32"], returns: "i32" },
+    {
+      name: "wvFsTake", symbol: "wv_fs_take",
+      params: [
+        "i32", "i32",
+        { callback: { id: "sink", params: ["string", { context: "sink" }], returns: "void", lifetime: "call" } },
+        { context: "sink" },
+      ],
+      returns: "i32",
+    },
     { name: "wvFsFree", symbol: "wv_fs_free", params: ["i32", "i32"], returns: "i32" },
   ];
 
@@ -207,7 +213,7 @@ function ffiManifest(shimLib) {
     // "undefined symbol: clock_gettime" — reproducible with a plain
     // `scriptc build hello.ts` on Windows, no FFI involved.
     return {
-      ffi_format: 2,
+      ffi_format: 3,
       functions,
       libraries: [shimLib],
       system_libraries: [
@@ -222,7 +228,7 @@ function ffiManifest(shimLib) {
     // the link as plain input files and ld64 accepts .tbd stubs.
     const sdk = capture(["xcrun", "--sdk", "macosx", "--show-sdk-path"]);
     return {
-      ffi_format: 2,
+      ffi_format: 3,
       functions,
       libraries: [
         shimLib,
@@ -233,7 +239,7 @@ function ffiManifest(shimLib) {
     };
   }
   return {
-    ffi_format: 2,
+    ffi_format: 3,
     functions,
     libraries: [shimLib],
     system_libraries: [

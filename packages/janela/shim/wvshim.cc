@@ -1,15 +1,16 @@
-// wvshim.cc — a C-ABI shim over webview.h shaped to scriptc's FFI format 2.
+// wvshim.cc — a C-ABI shim over webview.h shaped to scriptc's FFI format 3.
 //
-// Three constraints drive every design decision here:
+// Two constraints still drive the design:
 //   1. scriptc has no pointer/u64 type, so webview_t can never cross the
 //      boundary. We keep a handle table and hand out int32 indices.
-//   2. Callback params/returns are numeric scalars only, so the request JSON
-//      cannot be passed as a callback argument. We stage it in a shim-side
-//      buffer and let TS drain it byte-at-a-time via re-entrant FFI calls.
-//   3. Callbacks are lifetime:"call" only. webview_bind wants a retained
-//      callback, which is not expressible. Instead the TS callback is handed
-//      to wv_run(), which blocks for the whole app lifetime — so "call scope"
-//      and "app lifetime" coincide, and bind dispatch happens inside it.
+//   2. Callbacks are lifetime:"call" only in this format. webview_bind wants a
+//      retained callback, which is not expressible. Instead the TS callback is
+//      handed to wv_run(), which blocks for the whole app lifetime — so "call
+//      scope" and "app lifetime" coincide, and bind dispatch happens inside it.
+//
+// What format 3 removed: callback params may now be `string`/`bytes`, so a
+// payload crosses into TS as one argument instead of one FFI call per byte.
+// Payloads coming the other way ride `string` params on ordinary functions.
 
 #include "webview.h"
 
@@ -43,14 +44,15 @@ struct App {
   bool used = false;
   std::vector<Bind> binds;
 
-  // Callback supplied by TS for the duration of wv_run().
-  int32_t (*cb)(uint32_t, uint32_t, void *) = nullptr;
+  // Callback supplied by TS for the duration of wv_run(). The request rides in
+  // as a (ptr, len) string param rather than being drained byte-at-a-time.
+  int32_t (*cb)(uint32_t, const uint8_t *, size_t, void *) = nullptr;
   void *cb_ctx = nullptr;
 
   // Staging for the in-flight request.
   std::string req;      // JSON args array from JS
   std::string cur_id;   // webview's call id, needed by webview_return
-  std::string reply;    // response body assembled by TS
+  std::string reply;    // response body handed over by TS in one call
   uint32_t seq = 0;
 
   // ---- async support ----
@@ -208,9 +210,11 @@ void trampoline(const char *id, const char *req, void *arg) {
   a->deferred = false;
   a->seq++;
 
-  // Re-entrancy: this call lands back in TS, which will call wv_req_byte()
-  // etc. back into this shim before returning.
-  int32_t status = a->cb(bind_index, a->seq, a->cb_ctx);
+  // Re-entrancy: this call lands back in TS, which calls wv_reply() back into
+  // this shim before returning.
+  int32_t status = a->cb(bind_index,
+                         reinterpret_cast<const uint8_t *>(a->req.data()),
+                         a->req.size(), a->cb_ctx);
 
   // An async handler called wv_defer(): the call id now lives in the pending
   // table and wv_resolve() will answer the page later. Returning now would
@@ -235,7 +239,8 @@ void tick_on_ui_thread(webview_t, void *arg) {
   App *a = &g_apps[reinterpret_cast<uintptr_t>(arg)];
   if (!a->used || !a->cb) return;  // app quit between dispatch and delivery
   a->seq++;
-  a->cb(TICK_BIND, a->seq, a->cb_ctx);
+  // A tick carries no request payload.
+  a->cb(TICK_BIND, reinterpret_cast<const uint8_t *>(""), 0, a->cb_ctx);
 }
 
 }  // namespace
@@ -317,31 +322,12 @@ int32_t wv_bind(int32_t h, const uint8_t *p, size_t n) {
   return static_cast<int32_t>(idx);
 }
 
-// ---- request payload, drained byte-at-a-time from inside the TS callback ----
-int32_t wv_req_len(int32_t h) {
+// Stage the response body for the call being handled (or, after wv_defer, for
+// the pending call that wv_resolve will answer). One call, whole payload.
+int32_t wv_reply(int32_t h, const uint8_t *p, size_t n) {
   App *a = app_at(h);
   if (!a) return -1;
-  return static_cast<int32_t>(a->req.size());
-}
-
-int32_t wv_req_byte(int32_t h, int32_t i) {
-  App *a = app_at(h);
-  if (!a || i < 0 || static_cast<size_t>(i) >= a->req.size()) return -1;
-  return static_cast<uint8_t>(a->req[i]);
-}
-
-// ---- reply payload, pushed byte-at-a-time from inside the TS callback ----
-int32_t wv_reply_reset(int32_t h) {
-  App *a = app_at(h);
-  if (!a) return -1;
-  a->reply.clear();
-  return 0;
-}
-
-int32_t wv_reply_push(int32_t h, int32_t byte) {
-  App *a = app_at(h);
-  if (!a) return -1;
-  a->reply.push_back(static_cast<char>(byte & 0xff));
+  a->reply.assign(reinterpret_cast<const char *>(p), n);
   return 0;
 }
 
@@ -448,21 +434,18 @@ int32_t wv_fs_status(int32_t h, int32_t id) {
   return j->status.load(std::memory_order_acquire);
 }
 
-int32_t wv_fs_len(int32_t h, int32_t id) {
+// Hand a finished job's payload to TS in one call. The callback is
+// lifetime:"call", so it runs synchronously here — on the UI thread, the only
+// thread allowed to touch the scriptc runtime. The worker is already done by
+// then (the caller has observed a terminal status), so `data` is stable.
+int32_t wv_fs_take(int32_t h, int32_t id,
+                   void (*sink)(const uint8_t *, size_t, void *), void *ctx) {
   if (!app_at(h)) return -1;
   FsJob *j = fs_job_at(id);
-  if (!j) return -1;
+  if (!j || !sink) return -1;
   if (j->status.load(std::memory_order_acquire) == FS_PENDING) return -1;
-  return static_cast<int32_t>(j->data.size());
-}
-
-int32_t wv_fs_byte(int32_t h, int32_t id, int32_t i) {
-  if (!app_at(h)) return -1;
-  FsJob *j = fs_job_at(id);
-  if (!j) return -1;
-  if (j->status.load(std::memory_order_acquire) == FS_PENDING) return -1;
-  if (i < 0 || static_cast<size_t>(i) >= j->data.size()) return -1;
-  return static_cast<uint8_t>(j->data[i]);
+  sink(reinterpret_cast<const uint8_t *>(j->data.data()), j->data.size(), ctx);
+  return 0;
 }
 
 // Release the slot for reuse. Refuses while the worker is still running, so a
@@ -481,7 +464,8 @@ int32_t wv_fs_free(int32_t h, int32_t id) {
 }
 
 // Blocks for the app's lifetime; dispatches bind calls into `cb`.
-int32_t wv_run(int32_t h, int32_t (*cb)(uint32_t, uint32_t, void *),
+int32_t wv_run(int32_t h,
+               int32_t (*cb)(uint32_t, const uint8_t *, size_t, void *),
                void *cb_ctx) {
   App *a = app_at(h);
   if (!a) return -1;

@@ -16,11 +16,8 @@ declare function wvSetHtml(h: number, html: string): number;
 declare function wvInit(h: number, js: string): number;
 declare function wvEval(h: number, js: string): number;
 declare function wvBind(h: number, name: string): number;
-declare function wvReqLen(h: number): number;
-declare function wvReqByte(h: number, i: number): number;
-declare function wvReplyReset(h: number): number;
-declare function wvReplyPush(h: number, b: number): number;
-declare function wvRun(h: number, cb: (bindIndex: number, seq: number) => number): number;
+declare function wvReply(h: number, body: string): number;
+declare function wvRun(h: number, cb: (bindIndex: number, req: string) => number): number;
 declare function wvTerminate(h: number): number;
 declare function wvDefer(h: number): number;
 declare function wvResolve(h: number, id: number, status: number): number;
@@ -29,8 +26,7 @@ declare function wvTickStop(h: number): number;
 declare function wvFsRead(h: number, path: string): number;
 declare function wvFsWrite(h: number, path: string, data: string): number;
 declare function wvFsStatus(h: number, id: number): number;
-declare function wvFsLen(h: number, id: number): number;
-declare function wvFsByte(h: number, id: number, i: number): number;
+declare function wvFsTake(h: number, id: number, sink: (text: string) => void): number;
 declare function wvFsFree(h: number, id: number): number;
 
 const FS_PENDING = 0;
@@ -121,141 +117,6 @@ export interface JanelaApp {
   run: (html: string) => number;
 }
 
-const HEX = "0123456789abcdef";
-
-function uEscape(unit: number): string {
-  return (
-    "\\u" +
-    HEX.charAt((unit >> 12) & 0xf) +
-    HEX.charAt((unit >> 8) & 0xf) +
-    HEX.charAt((unit >> 4) & 0xf) +
-    HEX.charAt(unit & 0xf)
-  );
-}
-
-// The request arrives as UTF-8 JSON bytes. scriptc strings cannot hold lone
-// surrogates (String.fromCharCode(0xd83d) yields a replacement char), so we
-// never build non-ASCII chars directly: every code point >= 0x80 is re-emitted
-// as a JSON \uXXXX escape (a surrogate PAIR of escapes for astral planes),
-// which JSON.parse reconstructs correctly. Legal only because the payload is
-// always JSON, where non-ASCII can only occur inside strings.
-// Builds with push+join for the same reason drainJob does: `out = out + c` is
-// quadratic in scriptc, which a large invoke payload would feel.
-function readRequest(h: number): string {
-  const out: string[] = [];
-  const n = wvReqLen(h) + 0;
-  let i = 0;
-  while (i < n) {
-    const b0 = wvReqByte(h, i) + 0;
-    i = i + 1;
-    let cp = b0;
-    if ((b0 & 0xe0) === 0xc0 && i < n) {
-      cp = ((b0 & 0x1f) << 6) | (wvReqByte(h, i) & 0x3f);
-      i = i + 1;
-    } else if ((b0 & 0xf0) === 0xe0 && i + 1 < n) {
-      cp = ((b0 & 0x0f) << 12) | ((wvReqByte(h, i) & 0x3f) << 6) | (wvReqByte(h, i + 1) & 0x3f);
-      i = i + 2;
-    } else if ((b0 & 0xf8) === 0xf0 && i + 2 < n) {
-      cp =
-        ((b0 & 0x07) << 18) |
-        ((wvReqByte(h, i) & 0x3f) << 12) |
-        ((wvReqByte(h, i + 1) & 0x3f) << 6) |
-        (wvReqByte(h, i + 2) & 0x3f);
-      i = i + 3;
-    }
-    if (cp < 0x80) {
-      out.push(String.fromCharCode(cp));
-    } else if (cp < 0x10000) {
-      out.push(uEscape(cp));
-    } else {
-      const v = cp - 0x10000;
-      out.push(uEscape(0xd800 + (v >> 10)));
-      out.push(uEscape(0xdc00 + (v & 0x3ff)));
-    }
-  }
-  return out.join("");
-}
-
-// The reply must be valid JSON when it reaches the page. Non-ASCII chars can
-// only legally occur inside JSON strings, where a \uXXXX escape is always
-// equivalent — so escaping every char >127 keeps the byte channel ASCII-clean
-// (surrogate halves escape individually, which JSON also permits).
-function writeReply(h: number, body: string): void {
-  wvReplyReset(h);
-  for (let i = 0; i < body.length; i++) {
-    const c = body.charCodeAt(i);
-    if (c < 0x80) {
-      wvReplyPush(h, c);
-    } else {
-      wvReplyPush(h, 92); // backslash
-      wvReplyPush(h, 117); // 'u'
-      wvReplyPush(h, HEX.charCodeAt((c >> 12) & 0xf));
-      wvReplyPush(h, HEX.charCodeAt((c >> 8) & 0xf));
-      wvReplyPush(h, HEX.charCodeAt((c >> 4) & 0xf));
-      wvReplyPush(h, HEX.charCodeAt(c & 0xf));
-    }
-  }
-}
-
-// Drain a finished fs job into a TS string. The bytes are arbitrary UTF-8, and
-// scriptc cannot build a lone surrogate with fromCharCode, so the bytes are
-// re-emitted as a JSON string literal (\uXXXX, surrogate PAIRS for astral
-// planes) and parsed once — JSON.parse is the only reliable way to reassemble
-// an astral character here. Same reason readRequest escapes rather than builds.
-// PERFORMANCE: parts.push(...) + join(), never `s = s + c` in a loop.
-// Repeated concatenation is QUADRATIC in scriptc 0.0.32 — measured 449ms for
-// 200k single-char appends versus 2ms for push+join. On a 1 MB file that is
-// the difference between 12 seconds and a fifth of a second.
-function drainJob(h: number, id: number): string {
-  const n = wvFsLen(h, id) + 0;
-  if (n <= 0) return "";
-  const parts: string[] = [];
-  let i = 0;
-  while (i < n) {
-    const b0 = wvFsByte(h, id, i) + 0;
-    i = i + 1;
-    if (b0 < 0x80) {
-      // JSON forbids a raw " \ or control char inside a string literal.
-      if (b0 === 34) {
-        parts.push('\\"');
-      } else if (b0 === 92) {
-        parts.push("\\\\");
-      } else if (b0 < 0x20) {
-        parts.push(uEscape(b0));
-      } else {
-        parts.push(String.fromCharCode(b0));
-      }
-      continue;
-    }
-    let cp = b0;
-    if ((b0 & 0xe0) === 0xc0 && i < n) {
-      cp = ((b0 & 0x1f) << 6) | (wvFsByte(h, id, i) & 0x3f);
-      i = i + 1;
-    } else if ((b0 & 0xf0) === 0xe0 && i + 1 < n) {
-      cp =
-        ((b0 & 0x0f) << 12) |
-        ((wvFsByte(h, id, i) & 0x3f) << 6) |
-        (wvFsByte(h, id, i + 1) & 0x3f);
-      i = i + 2;
-    } else if ((b0 & 0xf8) === 0xf0 && i + 2 < n) {
-      cp =
-        ((b0 & 0x07) << 18) |
-        ((wvFsByte(h, id, i) & 0x3f) << 12) |
-        ((wvFsByte(h, id, i + 1) & 0x3f) << 6) |
-        (wvFsByte(h, id, i + 2) & 0x3f);
-      i = i + 3;
-    }
-    if (cp < 0x10000) {
-      parts.push(uEscape(cp));
-    } else {
-      const v = cp - 0x10000;
-      parts.push(uEscape(0xd800 + (v >> 10)));
-      parts.push(uEscape(0xdc00 + (v & 0x3ff)));
-    }
-  }
-  return JSON.parse('"' + parts.join("") + '"') as string;
-}
-
 export function createApp(cfg: WindowConfig): JanelaApp {
   const h = wvCreate(0) + 0;
   wvSetTitle(h, cfg.title);
@@ -338,9 +199,13 @@ export function createApp(cfg: WindowConfig): JanelaApp {
       fsIds = keptIds;
       fsCbs = keptCbs;
       for (let i = 0; i < doneIds.length; i++) {
-        // On failure the payload IS the error message, so one drain serves
-        // both outcomes.
-        const payload = drainJob(h, doneIds[i]);
+        // On failure the payload IS the error message, so one take serves both
+        // outcomes. The sink runs synchronously inside wvFsTake (the callback
+        // is lifetime:"call"), so `payload` is set by the time it returns.
+        let payload = "";
+        wvFsTake(h, doneIds[i], (text) => {
+          payload = text;
+        });
         wvFsFree(h, doneIds[i]);
         if (doneOk[i]) {
           doneCbs[i](null, payload);
@@ -417,7 +282,7 @@ export function createApp(cfg: WindowConfig): JanelaApp {
       const INVOKE = wvBind(h, "__invoke") + 0;
       wvSetHtml(h, html);
 
-      const rc = wvRun(h, (bindIndex, _seq) => {
+      const rc = wvRun(h, (bindIndex, req) => {
         // A tick is not an invoke: nothing is waiting on a reply, so the
         // shim never calls webview_return for it.
         if (bindIndex === TICK_BIND) {
@@ -425,15 +290,15 @@ export function createApp(cfg: WindowConfig): JanelaApp {
           return 0;
         }
         if (bindIndex !== INVOKE) {
-          writeReply(h, '"unknown binding"');
+          wvReply(h, '"unknown binding"');
           return 1;
         }
-        const env = JSON.parse(readRequest(h)) as string[];
+        const env = JSON.parse(req) as string[];
         const cmd = env[0];
         const argsJson = env[1];
         for (let i = 0; i < app.names.length; i++) {
           if (app.names[i] === cmd) {
-            writeReply(h, app.handlers[i](argsJson));
+            wvReply(h, app.handlers[i](argsJson));
             return 0;
           }
         }
@@ -444,7 +309,7 @@ export function createApp(cfg: WindowConfig): JanelaApp {
             // that is. Meanwhile the loop is free to serve other calls.
             const id = wvDefer(h) + 0;
             if (id < 0) {
-              writeReply(h, JSON.stringify("cannot defer command: " + cmd));
+              wvReply(h, JSON.stringify("cannot defer command: " + cmd));
               return 1;
             }
             const settle = (status: number): ((json: string) => void) => {
@@ -452,7 +317,7 @@ export function createApp(cfg: WindowConfig): JanelaApp {
               return (json: string) => {
                 if (done) return; // a promise settles once
                 done = true;
-                writeReply(h, json);
+                wvReply(h, json);
                 wvResolve(h, id, status);
               };
             };
@@ -460,7 +325,7 @@ export function createApp(cfg: WindowConfig): JanelaApp {
             return 0;
           }
         }
-        writeReply(h, JSON.stringify("unknown command: " + cmd));
+        wvReply(h, JSON.stringify("unknown command: " + cmd));
         return 1; // rejects the frontend promise
       }) + 0;
       return rc;
