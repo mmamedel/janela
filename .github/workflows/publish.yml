@@ -95,3 +95,52 @@ jobs:
         run: npm install -g npm@latest
       - name: Publish janela@${{ needs.check-version.outputs.version }}
         run: npm publish
+
+  # Tag and release the published commit. Gated twice over: `needs: publish`
+  # carries an implicit success() (a skipped or failed publish skips this job),
+  # and the `if` re-checks both the version decision and the publish result. So
+  # a merge that does not bump the version stays a clean no-op with no tag.
+  tag:
+    needs: [check-version, publish]
+    if: needs.check-version.outputs.should-publish == 'true' && needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      # The only job that writes to the repo; the rest stay read-only.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The exact commit that was smoke-tested and published — never a
+          # moving ref.
+          ref: ${{ github.sha }}
+      - name: Tag v${{ needs.check-version.outputs.version }} and create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
+
+          # Never move an existing tag. npm already has this version by now, so
+          # a collision means the repo state needs a human — say so and stop.
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "::error::$tag already exists on origin — refusing to move it. janela@$VERSION IS published; reconcile the tag by hand."
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "janela $VERSION" "$GITHUB_SHA"
+          git push origin "refs/tags/$tag"
+
+          # --verify-tag: release the annotated tag just pushed, never let gh
+          # invent its own. Retry briefly for tag visibility on the API side.
+          for attempt in 1 2 3; do
+            if gh release create "$tag" --title "$tag" --generate-notes --verify-tag; then
+              exit 0
+            fi
+            echo "release attempt $attempt failed; retrying in 5s"
+            sleep 5
+          done
+          echo "::error::$tag was pushed but the GitHub release could not be created. Run: gh release create $tag --generate-notes --verify-tag"
+          exit 1
