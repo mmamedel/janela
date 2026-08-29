@@ -185,6 +185,13 @@ function ffiManifest(shimLib) {
     { name: "wvResolve", symbol: "wv_resolve", params: ["i32", "i32", "i32"], returns: "i32" },
     { name: "wvTickStart", symbol: "wv_tick_start", params: ["i32", "i32"], returns: "i32" },
     { name: "wvTickStop", symbol: "wv_tick_stop", params: ["i32"], returns: "i32" },
+    // async file I/O: the blocking syscall runs on a shim worker thread
+    { name: "wvFsRead", symbol: "wv_fs_read", params: ["i32", "string"], returns: "i32" },
+    { name: "wvFsWrite", symbol: "wv_fs_write", params: ["i32", "string", "string"], returns: "i32" },
+    { name: "wvFsStatus", symbol: "wv_fs_status", params: ["i32", "i32"], returns: "i32" },
+    { name: "wvFsLen", symbol: "wv_fs_len", params: ["i32", "i32"], returns: "i32" },
+    { name: "wvFsByte", symbol: "wv_fs_byte", params: ["i32", "i32", "i32"], returns: "i32" },
+    { name: "wvFsFree", symbol: "wv_fs_free", params: ["i32", "i32"], returns: "i32" },
   ];
 
   if (process.platform === "win32") {

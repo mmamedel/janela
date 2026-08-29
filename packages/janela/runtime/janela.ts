@@ -26,6 +26,15 @@ declare function wvDefer(h: number): number;
 declare function wvResolve(h: number, id: number, status: number): number;
 declare function wvTickStart(h: number, intervalMs: number): number;
 declare function wvTickStop(h: number): number;
+declare function wvFsRead(h: number, path: string): number;
+declare function wvFsWrite(h: number, path: string, data: string): number;
+declare function wvFsStatus(h: number, id: number): number;
+declare function wvFsLen(h: number, id: number): number;
+declare function wvFsByte(h: number, id: number, i: number): number;
+declare function wvFsFree(h: number, id: number): number;
+
+const FS_PENDING = 0;
+const FS_OK = 1;
 
 // Bind index the shim uses for a timer tick rather than a page invoke.
 const TICK_BIND = 4294967295;
@@ -64,6 +73,14 @@ export type AsyncCommandHandler = (
   reject: (json: string) => void,
 ) => void;
 
+/**
+ * Completion of an async file operation. `err` is null on success; on failure
+ * it carries a Node-shaped message ("ENOENT: no such file or directory, open
+ * '/x'") and `text` is empty. Errors arrive as values, never as throws —
+ * scriptc cannot propagate an exception across the FFI boundary.
+ */
+export type FsCallback = (err: string | null, text: string) => void;
+
 export interface WindowConfig {
   title: string;
   width: number;
@@ -83,6 +100,19 @@ export interface JanelaApp {
   /** Run fn after at least ms. The host loop's timer; scriptc's setTimeout
    *  cannot fire while the window is open (its loop is parked inside run()). */
   sleep: (ms: number, fn: () => void) => void;
+  /**
+   * Read a file without blocking the window. The syscall runs on a shim
+   * worker thread; the callback lands on the UI thread on a later turn.
+   * Prefer this over node:fs readFileSync inside a command — that one blocks
+   * the loop, and with it the whole window.
+   */
+  readFileAsync: (path: string, cb: FsCallback) => void;
+  /** Write a file without blocking the window; cb(null) on success. */
+  writeFileAsync: (
+    path: string,
+    data: string,
+    cb: (err: string | null) => void,
+  ) => void;
   /** Fire an event into the page; payloadJson must be valid JSON text. */
   emit: (event: string, payloadJson: string) => void;
   /** Close the window and make run() return. */
@@ -109,8 +139,10 @@ function uEscape(unit: number): string {
 // as a JSON \uXXXX escape (a surrogate PAIR of escapes for astral planes),
 // which JSON.parse reconstructs correctly. Legal only because the payload is
 // always JSON, where non-ASCII can only occur inside strings.
+// Builds with push+join for the same reason drainJob does: `out = out + c` is
+// quadratic in scriptc, which a large invoke payload would feel.
 function readRequest(h: number): string {
-  let out = "";
+  const out: string[] = [];
   const n = wvReqLen(h) + 0;
   let i = 0;
   while (i < n) {
@@ -132,15 +164,16 @@ function readRequest(h: number): string {
       i = i + 3;
     }
     if (cp < 0x80) {
-      out = out + String.fromCharCode(cp);
+      out.push(String.fromCharCode(cp));
     } else if (cp < 0x10000) {
-      out = out + uEscape(cp);
+      out.push(uEscape(cp));
     } else {
       const v = cp - 0x10000;
-      out = out + uEscape(0xd800 + (v >> 10)) + uEscape(0xdc00 + (v & 0x3ff));
+      out.push(uEscape(0xd800 + (v >> 10)));
+      out.push(uEscape(0xdc00 + (v & 0x3ff)));
     }
   }
-  return out;
+  return out.join("");
 }
 
 // The reply must be valid JSON when it reaches the page. Non-ASCII chars can
@@ -164,6 +197,65 @@ function writeReply(h: number, body: string): void {
   }
 }
 
+// Drain a finished fs job into a TS string. The bytes are arbitrary UTF-8, and
+// scriptc cannot build a lone surrogate with fromCharCode, so the bytes are
+// re-emitted as a JSON string literal (\uXXXX, surrogate PAIRS for astral
+// planes) and parsed once — JSON.parse is the only reliable way to reassemble
+// an astral character here. Same reason readRequest escapes rather than builds.
+// PERFORMANCE: parts.push(...) + join(), never `s = s + c` in a loop.
+// Repeated concatenation is QUADRATIC in scriptc 0.0.32 — measured 449ms for
+// 200k single-char appends versus 2ms for push+join. On a 1 MB file that is
+// the difference between 12 seconds and a fifth of a second.
+function drainJob(h: number, id: number): string {
+  const n = wvFsLen(h, id) + 0;
+  if (n <= 0) return "";
+  const parts: string[] = [];
+  let i = 0;
+  while (i < n) {
+    const b0 = wvFsByte(h, id, i) + 0;
+    i = i + 1;
+    if (b0 < 0x80) {
+      // JSON forbids a raw " \ or control char inside a string literal.
+      if (b0 === 34) {
+        parts.push('\\"');
+      } else if (b0 === 92) {
+        parts.push("\\\\");
+      } else if (b0 < 0x20) {
+        parts.push(uEscape(b0));
+      } else {
+        parts.push(String.fromCharCode(b0));
+      }
+      continue;
+    }
+    let cp = b0;
+    if ((b0 & 0xe0) === 0xc0 && i < n) {
+      cp = ((b0 & 0x1f) << 6) | (wvFsByte(h, id, i) & 0x3f);
+      i = i + 1;
+    } else if ((b0 & 0xf0) === 0xe0 && i + 1 < n) {
+      cp =
+        ((b0 & 0x0f) << 12) |
+        ((wvFsByte(h, id, i) & 0x3f) << 6) |
+        (wvFsByte(h, id, i + 1) & 0x3f);
+      i = i + 2;
+    } else if ((b0 & 0xf8) === 0xf0 && i + 2 < n) {
+      cp =
+        ((b0 & 0x07) << 18) |
+        ((wvFsByte(h, id, i) & 0x3f) << 12) |
+        ((wvFsByte(h, id, i + 1) & 0x3f) << 6) |
+        (wvFsByte(h, id, i + 2) & 0x3f);
+      i = i + 3;
+    }
+    if (cp < 0x10000) {
+      parts.push(uEscape(cp));
+    } else {
+      const v = cp - 0x10000;
+      parts.push(uEscape(0xd800 + (v >> 10)));
+      parts.push(uEscape(0xdc00 + (v & 0x3ff)));
+    }
+  }
+  return JSON.parse('"' + parts.join("") + '"') as string;
+}
+
 export function createApp(cfg: WindowConfig): JanelaApp {
   const h = wvCreate(0) + 0;
   wvSetTitle(h, cfg.title);
@@ -181,6 +273,8 @@ export function createApp(cfg: WindowConfig): JanelaApp {
   let taskFns: (() => void)[] = [];
   let timerFns: (() => void)[] = [];
   let timerDue: number[] = [];
+  let fsIds: number[] = [];
+  let fsCbs: FsCallback[] = [];
   let ticking = false;
 
   const wake = (): void => {
@@ -191,7 +285,7 @@ export function createApp(cfg: WindowConfig): JanelaApp {
 
   const idle = (): void => {
     if (!ticking) return;
-    if (taskFns.length > 0 || timerFns.length > 0) return;
+    if (taskFns.length > 0 || timerFns.length > 0 || fsIds.length > 0) return;
     ticking = false;
     wvTickStop(h);
   };
@@ -221,6 +315,40 @@ export function createApp(cfg: WindowConfig): JanelaApp {
       timerDue = keptDue;
       for (let i = 0; i < fire.length; i++) fire[i]();
     }
+
+    // Finished file jobs: the worker thread has already done the blocking
+    // syscall, so all that happens on this (UI) thread is the drain.
+    if (fsIds.length > 0) {
+      const keptIds: number[] = [];
+      const keptCbs: FsCallback[] = [];
+      const doneIds: number[] = [];
+      const doneCbs: FsCallback[] = [];
+      const doneOk: boolean[] = [];
+      for (let i = 0; i < fsIds.length; i++) {
+        const st = wvFsStatus(h, fsIds[i]) + 0;
+        if (st === FS_PENDING) {
+          keptIds.push(fsIds[i]);
+          keptCbs.push(fsCbs[i]);
+        } else {
+          doneIds.push(fsIds[i]);
+          doneCbs.push(fsCbs[i]);
+          doneOk.push(st === FS_OK);
+        }
+      }
+      fsIds = keptIds;
+      fsCbs = keptCbs;
+      for (let i = 0; i < doneIds.length; i++) {
+        // On failure the payload IS the error message, so one drain serves
+        // both outcomes.
+        const payload = drainJob(h, doneIds[i]);
+        wvFsFree(h, doneIds[i]);
+        if (doneOk[i]) {
+          doneCbs[i](null, payload);
+        } else {
+          doneCbs[i](payload, "");
+        }
+      }
+    }
     idle();
   };
 
@@ -247,6 +375,30 @@ export function createApp(cfg: WindowConfig): JanelaApp {
     sleep: (ms, fn) => {
       timerFns.push(fn);
       timerDue.push(Date.now() + (ms > 0 ? ms : 0));
+      wake();
+    },
+
+    readFileAsync: (path, cb) => {
+      const id = wvFsRead(h, path) + 0;
+      if (id < 0) {
+        app.defer(() => cb("EAGAIN: could not start a read of '" + path + "'", ""));
+        return;
+      }
+      fsIds.push(id);
+      fsCbs.push(cb);
+      wake();
+    },
+
+    writeFileAsync: (path, data, cb) => {
+      const id = wvFsWrite(h, path, data) + 0;
+      if (id < 0) {
+        app.defer(() => cb("EAGAIN: could not start a write of '" + path + "'"));
+        return;
+      }
+      fsIds.push(id);
+      // The write payload is empty on success; the shared callback shape just
+      // ignores the text argument.
+      fsCbs.push((err, _text) => cb(err));
       wake();
     },
 

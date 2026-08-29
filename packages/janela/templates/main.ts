@@ -39,6 +39,20 @@ export function setup(app: JanelaApp): void {
     });
   });
 
+  // File I/O without freezing the window: the read happens on a worker thread
+  // in the shim. Use this instead of node:fs readFileSync, which blocks the
+  // host loop — and with it the whole UI — until the syscall returns.
+  app.commandAsync("readFile", (argsJson, resolve) => {
+    const a = JSON.parse(argsJson) as { path: string };
+    app.readFileAsync(a.path, (err, text) => {
+      if (err !== null) {
+        resolve(JSON.stringify({ ok: false, error: err }));
+        return;
+      }
+      resolve(JSON.stringify({ ok: true, length: text.length, text: text }));
+    });
+  });
+
   app.command("quit", (_argsJson) => {
     app.quit();
     return "null";

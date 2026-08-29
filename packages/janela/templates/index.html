@@ -17,6 +17,10 @@
       <button id="wait">wait 2s (async)</button>
       <button id="quit">Quit</button>
     </p>
+    <p>
+      <input id="path" type="text" value="janela.conf.json" size="32" />
+      <button id="read">read file (async)</button>
+    </p>
     <pre id="out">booting…</pre>
     <ul id="events"></ul>
 
@@ -49,6 +53,16 @@
           out.textContent = "waiting… (try 'add' — it still answers)";
           out.textContent = await janela.invoke("wait", { ms: 2000 });
           e.target.disabled = false;
+        };
+
+        // Reads run on a worker thread in the shim, so even a large file
+        // does not freeze the window while it loads.
+        document.getElementById("read").onclick = async () => {
+          const path = document.getElementById("path").value;
+          const r = await janela.invoke("readFile", { path });
+          out.textContent = r.ok
+            ? `${path}: ${r.length} chars\n\n` + r.text.slice(0, 400)
+            : "error: " + r.error;
         };
 
         document.getElementById("quit").onclick = () => janela.invoke("quit");
