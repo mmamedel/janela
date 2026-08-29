@@ -28,7 +28,7 @@ jobs:
       - name: Compare package.json version against the registry
         id: check
         run: |
-          local_version="$(node -p "require('./package.json').version")"
+          local_version="$(node -p "require('./packages/janela/package.json').version")"
           echo "version=$local_version" >> "$GITHUB_OUTPUT"
           # Exact-version existence check: also correct when local version is
           # older than the registry's `latest` (plain `npm view janela version`
@@ -49,16 +49,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: pnpm
       - name: Install webview build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev xvfb
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
       - name: Scaffold a smoke project
-        run: node bin/janela.mjs init smoke
+        run: node packages/janela/bin/janela.mjs init smoke
       - name: Make the smoke page self-terminating
         run: |
           cat > smoke/index.html <<'EOF'
@@ -72,7 +74,7 @@ jobs:
           EOF
       - name: Build the smoke app
         working-directory: smoke
-        run: node ../bin/janela.mjs build
+        run: node ../packages/janela/bin/janela.mjs build
       - name: Run the smoke app headless (must exit 0)
         working-directory: smoke
         run: xvfb-run -a ./.janela/out/smoke
@@ -94,6 +96,7 @@ jobs:
       - name: Update npm (trusted publishing needs npm >= 11.5)
         run: npm install -g npm@latest
       - name: Publish janela@${{ needs.check-version.outputs.version }}
+        working-directory: packages/janela
         run: npm publish
 
   # Tag and release the published commit. Gated twice over: `needs: publish`

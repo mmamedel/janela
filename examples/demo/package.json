@@ -6,6 +6,6 @@
     "build": "janela build"
   },
   "devDependencies": {
-    "janela": "file:../.."
+    "janela": "workspace:*"
   }
 }

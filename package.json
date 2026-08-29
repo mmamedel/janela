@@ -1,43 +1,19 @@
 {
-  "name": "janela",
-  "version": "0.1.1",
-  "description": "Desktop apps in pure TypeScript, compiled to native. No Rust, no Node, no Electron.",
+  "name": "janela-monorepo",
+  "private": true,
   "type": "module",
-  "bin": {
-    "janela": "bin/janela.mjs",
-    "jn": "bin/janela.mjs"
-  },
-  "dependencies": {
-    "scriptc": "0.0.32"
-  },
-  "license": "MIT",
-  "author": "Mateus Lage",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/mmamedel/janela.git"
-  },
-  "homepage": "https://mmamedel.github.io/janela/",
-  "bugs": {
-    "url": "https://github.com/mmamedel/janela/issues"
-  },
-  "keywords": [
-    "desktop",
-    "webview",
-    "typescript",
-    "native",
-    "tauri",
-    "electron-alternative",
-    "scriptc"
-  ],
+  "packageManager": "pnpm@9.15.9",
   "engines": {
     "node": ">=18"
   },
-  "files": [
-    "bin/",
-    "runtime/",
-    "shim/",
-    "templates/",
-    "vendor-webview/core/include/",
-    "vendor-webview/LICENSE"
-  ]
+  "scripts": {
+    "dev": "pnpm --filter demo dev",
+    "build:demo": "pnpm --filter demo build",
+    "janela": "node packages/janela/bin/janela.mjs"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mmamedel/janela.git"
+  }
 }
