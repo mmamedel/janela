@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>janela — desktop apps in pure TypeScript, compiled to native</title>
+<meta name="description" content="janela (Portuguese for window): desktop apps in pure TypeScript, compiled to native binaries. No Rust, no Node, no Electron. ~500 KB.">
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-raise: #151b24;
+    --bg-inset: #0a0e13;
+    --ink: #e6edf3;
+    --ink-dim: #9aa7b4;
+    --line: #29323d;
+    --accent: #f0a83c;        /* amber — warm light through a window */
+    --accent-ink: #1a1206;
+    --pane: #58a6ff;          /* the glass */
+    --good: #6bd490;
+    --code-key: #ff9d70;
+    --code-str: #a5d6a7;
+    --code-fn: #82b6ff;
+    --code-cm: #7d8b99;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #faf7f2;
+      --bg-raise: #ffffff;
+      --bg-inset: #f0ebe2;
+      --ink: #1f2732;
+      --ink-dim: #5b6672;
+      --line: #e0d8ca;
+      --accent: #c67c1a;
+      --accent-ink: #ffffff;
+      --pane: #1c6fd4;
+      --good: #1e8a4c;
+      --code-key: #b03e12;
+      --code-str: #2c6e35;
+      --code-fn: #1c5fc4;
+      --code-cm: #82796a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    overflow-x: hidden;
+  }
+  a { color: var(--pane); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 24px; }
+
+  /* ---- header ---- */
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 0;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 20px; color: var(--ink); }
+  .brand:hover { text-decoration: none; }
+  .pane-glyph {
+    width: 22px; height: 22px; border: 2px solid var(--accent); border-radius: 5px;
+    display: grid; grid-template: 1fr 1fr / 1fr 1fr; gap: 2px; padding: 2px;
+  }
+  .pane-glyph i { background: var(--pane); border-radius: 1.5px; opacity: .85; }
+  nav { display: flex; gap: 18px; font-size: 15px; flex-wrap: wrap; justify-content: flex-end; }
+  nav a { color: var(--ink-dim); white-space: nowrap; }
+  nav a:hover { color: var(--ink); }
+  @media (max-width: 640px) {
+    nav .anchor { display: none; }
+    nav { gap: 14px; }
+  }
+
+  /* ---- hero ---- */
+  .hero { padding: 72px 0 40px; text-align: center; position: relative; }
+  .hero::before {
+    /* faint window-grid backdrop */
+    content: ""; position: absolute; inset: -80px 0 0; z-index: -1;
+    background:
+      linear-gradient(var(--line) 1px, transparent 1px) 0 0 / 100% 72px,
+      linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0 / 72px 100%;
+    opacity: .25;
+    -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, #000 0%, transparent 70%);
+    mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, #000 0%, transparent 70%);
+  }
+  .hero h1 { font-size: clamp(44px, 8vw, 76px); margin: 0; letter-spacing: -0.03em; font-weight: 800; }
+  .hero h1 .a { color: var(--accent); }
+  .etym { color: var(--ink-dim); font-style: italic; margin: 6px 0 0; }
+  .tagline { font-size: clamp(19px, 3vw, 26px); margin: 22px auto 8px; max-width: 34em; font-weight: 600; }
+  .subtag { color: var(--ink-dim); margin: 0 auto; max-width: 40em; }
+  .subtag strong { color: var(--ink); font-weight: 600; }
+  .install {
+    display: inline-block; margin: 30px auto 6px;
+    background: var(--bg-inset); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 13px 22px; font-size: 17px;
+    max-width: 100%; overflow-x: auto; white-space: nowrap;
+  }
+  .install .p { color: var(--accent); user-select: none; }
+  .cta { display: flex; gap: 12px; justify-content: center; margin-top: 26px; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 11px 22px; border-radius: 8px; font-weight: 600; font-size: 15px;
+    border: 1px solid var(--line); color: var(--ink); background: var(--bg-raise);
+  }
+  .btn:hover { text-decoration: none; border-color: var(--ink-dim); }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .btn svg { width: 17px; height: 17px; fill: currentColor; }
+
+  /* ---- pipeline strip ---- */
+  .pipeline {
+    margin: 64px 0 0; padding: 28px 0;
+    border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    background: var(--bg-raise);
+  }
+  .pipe-row {
+    display: flex; align-items: center; justify-content: center; gap: 14px;
+    flex-wrap: wrap; font-size: 15px;
+  }
+  .pipe-step {
+    background: var(--bg-inset); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 16px; text-align: center;
+  }
+  .pipe-step small { display: block; color: var(--ink-dim); font-size: 12.5px; }
+  .pipe-arrow { color: var(--accent); font-weight: 700; }
+  .pipe-note { text-align: center; color: var(--ink-dim); margin: 14px 0 0; font-size: 14.5px; }
+  .pipe-note b { color: var(--good); }
+
+  /* ---- sections ---- */
+  section { padding: 64px 0 8px; }
+  h2 { font-size: 30px; letter-spacing: -0.02em; margin: 0 0 6px; }
+  .lede { color: var(--ink-dim); margin: 0 0 30px; max-width: 46em; }
+
+  /* ---- code side-by-side ---- */
+  .code-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 800px) { .code-cols { grid-template-columns: 1fr; } }
+  .codecard { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--bg-inset); }
+  .codecard .bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 14px; border-bottom: 1px solid var(--line); background: var(--bg-raise);
+    font-size: 13px; color: var(--ink-dim); font-family: ui-monospace, Menlo, monospace;
+  }
+  .dots { display: inline-flex; gap: 5px; margin-right: 4px; }
+  .dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--line); }
+  .dots i:first-child { background: #f2655a; } .dots i:nth-child(2) { background: #f0b429; } .dots i:last-child { background: #4fc06d; }
+  pre {
+    margin: 0; padding: 16px 18px; overflow-x: auto; font-size: 13.5px; line-height: 1.55;
+    tab-size: 2;
+  }
+  .k { color: var(--code-key); } .s { color: var(--code-str); } .f { color: var(--code-fn); } .c { color: var(--code-cm); font-style: italic; }
+
+  /* ---- features ---- */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .card { background: var(--bg-raise); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px 22px; }
+  .card h3 { margin: 0 0 8px; font-size: 17px; display: flex; align-items: center; gap: 9px; }
+  .card h3 .mini {
+    width: 14px; height: 14px; flex: none; border: 1.5px solid var(--accent); border-radius: 3.5px;
+    display: grid; grid-template: 1fr 1fr / 1fr 1fr; gap: 1.5px; padding: 1.5px;
+  }
+  .card h3 .mini i { background: var(--pane); border-radius: 1px; opacity: .85; }
+  .card p { margin: 0; color: var(--ink-dim); font-size: 14.5px; }
+  .card p code { font-size: 13px; background: var(--bg-inset); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+
+  /* ---- quick start ---- */
+  .qs { border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-inset); padding: 4px 0; }
+  .qs pre { font-size: 14.5px; }
+  .qs .c { font-style: normal; }
+
+  /* ---- status ---- */
+  .status {
+    border: 1px solid var(--line); border-left: 4px solid var(--accent);
+    border-radius: var(--radius); background: var(--bg-raise);
+    padding: 18px 22px; color: var(--ink-dim); font-size: 15px;
+  }
+  .status b { color: var(--ink); }
+
+  footer {
+    margin-top: 80px; padding: 30px 0 44px; border-top: 1px solid var(--line);
+    color: var(--ink-dim); font-size: 14.5px; text-align: center;
+  }
+  footer p { margin: 5px 0; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <a class="brand" href="#">
+      <span class="pane-glyph" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      janela
+    </a>
+    <nav>
+      <a class="anchor" href="#how">How it works</a>
+      <a class="anchor" href="#code">Code</a>
+      <a class="anchor" href="#features">Features</a>
+      <a href="https://github.com/mmamedel/janela">GitHub</a>
+      <a href="https://www.npmjs.com/package/janela">npm</a>
+    </nav>
+  </header>
+
+  <div class="hero">
+    <h1>j<span class="a">a</span>nela</h1>
+    <p class="etym">/ʒaˈnɛlɐ/ — Portuguese for <em>window</em></p>
+    <p class="tagline">Desktop apps in pure TypeScript, compiled to native.</p>
+    <p class="subtag">No Rust. No Node. No Electron. Your backend is TypeScript compiled to a real
+      native binary; your frontend runs in the OS webview. <strong>Binaries come out around 500&nbsp;KB.</strong></p>
+    <div class="install"><span class="p">$</span> npm install -g janela</div>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/mmamedel/janela">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        Star on GitHub
+      </a>
+      <a class="btn" href="https://www.npmjs.com/package/janela">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M0 0v16h16V0H0Zm13 13h-2V5H8v8H3V3h10v10Z"/></svg>
+        janela on npm
+      </a>
+    </div>
+  </div>
+</div>
+
+<div class="pipeline" id="how">
+  <div class="wrap">
+    <div class="pipe-row">
+      <div class="pipe-step"><b>TypeScript</b><small>front <em>and</em> back</small></div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step"><b>scriptc</b><small>TS → native compiler</small></div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step"><b>native binary</b><small>~500 KB, no runtime</small></div>
+      <div class="pipe-arrow">+</div>
+      <div class="pipe-step"><b>OS webview</b><small>WKWebView / WebKitGTK</small></div>
+    </div>
+    <p class="pipe-note">The only JavaScript engine in the room is the one already inside the system webview —
+      <b>no V8, no Node, no bundled Chromium</b>.</p>
+  </div>
+</div>
+
+<div class="wrap">
+  <section id="code">
+    <h2>One language, both sides of the window</h2>
+    <p class="lede">Register commands in TypeScript that compiles to native code. Call them from the page
+      with a promise. Push events back. That's the whole API — and it will feel familiar if you've used Tauri.</p>
+    <div class="code-cols">
+      <div class="codecard">
+        <div class="bar"><span class="dots"><i></i><i></i><i></i></span>src-host/main.ts <span>— compiled to native</span></div>
+        <pre><code><span class="k">import</span> { readFileSync } <span class="k">from</span> <span class="s">"node:fs"</span>;
+<span class="k">import type</span> { JanelaApp } <span class="k">from</span> <span class="s">"./janela"</span>;
+
+<span class="k">export function</span> <span class="f">setup</span>(app: JanelaApp): <span class="k">void</span> {
+  app.<span class="f">command</span>(<span class="s">"add"</span>, (argsJson) =&gt; {
+    <span class="k">const</span> a = JSON.<span class="f">parse</span>(argsJson) <span class="k">as</span> { a: <span class="k">number</span>; b: <span class="k">number</span> };
+    <span class="c">// push an event to the page</span>
+    app.<span class="f">emit</span>(<span class="s">"added"</span>, JSON.<span class="f">stringify</span>(a.a + a.b));
+    <span class="k">return</span> JSON.<span class="f">stringify</span>(a.a + a.b);
+  });
+
+  app.<span class="f">command</span>(<span class="s">"readFile"</span>, (argsJson) =&gt; {
+    <span class="k">const</span> a = JSON.<span class="f">parse</span>(argsJson) <span class="k">as</span> { path: <span class="k">string</span> };
+    <span class="c">// plain node:fs — no plugin layer needed</span>
+    <span class="k">return</span> JSON.<span class="f">stringify</span>(<span class="f">readFileSync</span>(a.path, <span class="s">"utf8"</span>));
+  });
+}</code></pre>
+      </div>
+      <div class="codecard">
+        <div class="bar"><span class="dots"><i></i><i></i><i></i></span>index.html <span>— runs in the OS webview</span></div>
+        <pre><code><span class="c">// janela.invoke / janela.listen are injected</span>
+<span class="c">// before the page loads</span>
+
+<span class="k">const</span> sum = <span class="k">await</span> janela.<span class="f">invoke</span>(<span class="s">"add"</span>, { a: <span class="k">2</span>, b: <span class="k">40</span> });
+<span class="c">// → 42, computed in the native TS binary</span>
+
+janela.<span class="f">listen</span>(<span class="s">"added"</span>, (payload) =&gt; {
+  console.<span class="f">log</span>(<span class="s">"host says:"</span>, payload);
+});
+
+<span class="k">const</span> text = <span class="k">await</span> janela.<span class="f">invoke</span>(<span class="s">"readFile"</span>, {
+  path: <span class="s">"/etc/hosts"</span>,
+});</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="features">
+    <h2>Features</h2>
+    <p class="lede">A worked example — commands, events, and a file reader — lives in
+      <a href="https://github.com/mmamedel/janela/tree/main/examples/demo">examples/demo</a>.</p>
+    <div class="cards">
+      <div class="card">
+        <h3><span class="mini" aria-hidden="true"><i></i><i></i><i></i><i></i></span>Tiny binaries</h3>
+        <p>Around 500&nbsp;KB per app. No bundled browser, no bundled runtime — the window is the
+          webview your OS already ships.</p>
+      </div>
+      <div class="card">
+        <h3><span class="mini" aria-hidden="true"><i></i><i></i><i></i><i></i></span>Pure TypeScript, front and back</h3>
+        <p>The backend is TypeScript compiled to a native binary by
+          <a href="https://scriptc.dev">scriptc</a>. No Rust to learn, no Node process to ship.</p>
+      </div>
+      <div class="card">
+        <h3><span class="mini" aria-hidden="true"><i></i><i></i><i></i><i></i></span>Tauri-shaped API</h3>
+        <p><code>janela.invoke()</code> and <code>janela.listen()</code> in the page;
+          <code>app.command()</code> and <code>app.emit()</code> in the host. Familiar on day one.</p>
+      </div>
+      <div class="card">
+        <h3><span class="mini" aria-hidden="true"><i></i><i></i><i></i><i></i></span>No plugin layer for fs &amp; friends</h3>
+        <p>The backend speaks a <code>node:fs</code> subset out of the box — reading a file or calling
+          an API is just code in a command handler.</p>
+      </div>
+      <div class="card">
+        <h3><span class="mini" aria-hidden="true"><i></i><i></i><i></i><i></i></span>Real app bundles</h3>
+        <p><code>janela build</code> produces the native binary, and on macOS wraps it into an
+          ad-hoc-signed <code>.app</code> you can double-click.</p>
+      </div>
+      <div class="card">
+        <h3><span class="mini" aria-hidden="true"><i></i><i></i><i></i><i></i></span>MIT licensed</h3>
+        <p>Free to use, fork, and ship. Builds on
+          <a href="https://github.com/webview/webview">webview/webview</a> (MIT) and scriptc.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="quickstart">
+    <h2>Quick start</h2>
+    <p class="lede">Node 18+ and a C++ compiler (Xcode Command Line Tools on macOS;
+      <code>g++</code> + <code>libwebkit2gtk-4.1-dev</code> on Linux).</p>
+    <div class="qs">
+      <pre><code><span class="c">$</span> npm install -g janela
+<span class="c">$</span> janela init my-app
+<span class="c">$</span> cd my-app
+<span class="c">$</span> janela dev      <span class="c"># build + run with logs in the terminal</span>
+<span class="c">$</span> janela build    <span class="c"># .janela/out/my-app  (+ my-app.app on macOS)</span></code></pre>
+    </div>
+  </section>
+
+  <section id="status">
+    <h2>Where it stands</h2>
+    <div class="status">
+      <b>janela is an early proof of concept.</b> Today it runs on macOS (Apple Silicon) and
+      Linux (WebKitGTK). Not there yet: Windows, async commands (the run loop is single-threaded),
+      native dialogs, tray and menus, multi-window, and icons/installers/notarization.
+      The design notes behind it are in
+      <a href="https://github.com/mmamedel/janela/blob/main/docs/findings.md">docs/findings.md</a>.
+    </div>
+  </section>
+
+  <footer>
+    <p><b>janela</b> · MIT License · <a href="https://github.com/mmamedel/janela">GitHub</a> ·
+      <a href="https://www.npmjs.com/package/janela">npm</a></p>
+    <p>Built on <a href="https://scriptc.dev">scriptc</a> and
+      <a href="https://github.com/webview/webview">webview/webview</a>
+      (MIT, © Serge Zaitsev and contributors).</p>
+  </footer>
+</div>
+
+</body>
+</html>

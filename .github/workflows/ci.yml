@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install webview build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev xvfb
+      - run: npm ci
+      - name: Scaffold a smoke project
+        run: node bin/janela.mjs init smoke
+      - name: Make the smoke page self-terminating
+        run: |
+          cat > smoke/index.html <<'EOF'
+          <!doctype html><html><body>
+          <script>
+          window.onload = async () => {
+            await janela.invoke("log", "ci smoke page loaded");
+            await janela.invoke("quit");
+          };
+          </script></body></html>
+          EOF
+      - name: Build the smoke app
+        working-directory: smoke
+        run: node ../bin/janela.mjs build
+      # macOS runners have no reliable window session for WKWebView, so the
+      # macOS leg is build-only; the binary is exercised on Linux under Xvfb.
+      - name: Run the smoke app headless (must exit 0)
+        if: runner.os == 'Linux'
+        working-directory: smoke
+        run: xvfb-run -a ./.janela/out/smoke

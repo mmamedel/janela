@@ -1,0 +1,97 @@
+name: Publish to npm
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# One publish pipeline at a time; queued runs wait rather than race.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  # A merge that does not bump package.json's version must succeed as a
+  # no-op: this job always succeeds and the later jobs are skipped.
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      should-publish: ${{ steps.check.outputs.should-publish }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Compare package.json version against the registry
+        id: check
+        run: |
+          local_version="$(node -p "require('./package.json').version")"
+          echo "version=$local_version" >> "$GITHUB_OUTPUT"
+          # Exact-version existence check: also correct when local version is
+          # older than the registry's `latest` (plain `npm view janela version`
+          # only reports latest).
+          published="$(npm view "janela@$local_version" version 2>/dev/null || true)"
+          if [ "$published" = "$local_version" ]; then
+            echo "should-publish=false" >> "$GITHUB_OUTPUT"
+            echo "janela@$local_version already on the registry — skipping publish."
+          else
+            echo "should-publish=true" >> "$GITHUB_OUTPUT"
+            echo "janela@$local_version is not on the registry — will publish."
+          fi
+
+  # Build and run a scaffolded app end to end before anything reaches npm.
+  sanity:
+    needs: check-version
+    if: needs.check-version.outputs.should-publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install webview build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev xvfb
+      - run: npm ci
+      - name: Scaffold a smoke project
+        run: node bin/janela.mjs init smoke
+      - name: Make the smoke page self-terminating
+        run: |
+          cat > smoke/index.html <<'EOF'
+          <!doctype html><html><body>
+          <script>
+          window.onload = async () => {
+            await janela.invoke("log", "ci smoke page loaded");
+            await janela.invoke("quit");
+          };
+          </script></body></html>
+          EOF
+      - name: Build the smoke app
+        working-directory: smoke
+        run: node ../bin/janela.mjs build
+      - name: Run the smoke app headless (must exit 0)
+        working-directory: smoke
+        run: xvfb-run -a ./.janela/out/smoke
+
+  publish:
+    needs: [check-version, sanity]
+    if: needs.check-version.outputs.should-publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # OIDC token for npm trusted publishing — no NPM_TOKEN secret involved.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Update npm (trusted publishing needs npm >= 11.5)
+        run: npm install -g npm@latest
+      - name: Publish janela@${{ needs.check-version.outputs.version }}
+        run: npm publish
