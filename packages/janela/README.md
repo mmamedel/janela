@@ -18,6 +18,19 @@ janela dev                # build + run with logs in the terminal
 janela build              # .janela/out/my-app  (+ my-app.app on macOS)
 ```
 
+Or start from a frontend framework — any Vite-based one:
+
+```bash
+janela init my-app --template vue     # or react | svelte | solid | vanilla
+cd my-app && npm install
+janela dev                            # Vite dev server + HMR, in a native window
+```
+
+`vanilla` is the default and needs no frontend toolchain at all. With a
+framework, `janela dev` runs your Vite dev server and points the window at it,
+and `janela build` flattens the production bundle into the binary — see
+[docs/frontend.md](../../docs/frontend.md).
+
 Requirements: Node 18+, a C++ compiler (Xcode CLT on macOS; g++ +
 `libwebkit2gtk-4.1-dev` on Linux; see [Windows](#windows) below). A worked
 example lives in [`examples/demo`](examples/demo) — commands, events, and a
@@ -61,6 +74,10 @@ my-app/
 ├── src-host/main.ts    backend — exports setup(app), registers commands
 └── janela.conf.json    name, bundle identifier, version, window
 ```
+
+A Vite project adds a `vite.config.js` and a `src/` tree — that config is what
+makes janela build the frontend with Vite instead of inlining `index.html`
+directly.
 
 Frontend API (injected before page load):
 
