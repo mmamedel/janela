@@ -19,6 +19,18 @@
     <pre id="out">booting…</pre>
     <ul id="events"></ul>
 
+    <h2>async commands</h2>
+    <p>
+      <button id="wait">wait 2s</button>
+      <button id="count">count to 20M (sliced)</button>
+      <span id="spinner" style="display:inline-block">◐</span>
+      <span id="asyncout"></span>
+    </p>
+    <p style="color:#666;font-size:13px">
+      The spinner is driven by the page and keeps turning while these run —
+      and every other button still answers. That is the whole point.
+    </p>
+
     <h2>fs.readFile</h2>
     <p>
       <input id="path" type="text" value="/etc/hosts" style="width: 24em" />
@@ -50,6 +62,27 @@
           out.textContent = `add(${a}, ${b}) -> ${sum}`;
         };
         document.getElementById("quit").onclick = () => janela.invoke("quit");
+
+        // A page-driven spinner: proof the UI thread is never parked.
+        const spinner = document.getElementById("spinner");
+        const frames = ["◐", "◓", "◑", "◒"];
+        let f = 0;
+        setInterval(() => { spinner.textContent = frames[f++ % frames.length]; }, 120);
+
+        const asyncout = document.getElementById("asyncout");
+        document.getElementById("wait").onclick = async (e) => {
+          e.target.disabled = true;
+          asyncout.textContent = "waiting…";
+          asyncout.textContent = await janela.invoke("wait", { ms: 2000 });
+          e.target.disabled = false;
+        };
+        document.getElementById("count").onclick = async (e) => {
+          e.target.disabled = true;
+          asyncout.textContent = "counting…";
+          const n = await janela.invoke("countTo", { n: 20000000 });
+          asyncout.textContent = "counted to " + n;
+          e.target.disabled = false;
+        };
 
         document.getElementById("read").onclick = async () => {
           const path = document.getElementById("path").value;

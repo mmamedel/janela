@@ -14,6 +14,7 @@
       <input id="a" type="number" value="2" /> +
       <input id="b" type="number" value="40" />
       <button id="add">add</button>
+      <button id="wait">wait 2s (async)</button>
       <button id="quit">Quit</button>
     </p>
     <pre id="out">booting…</pre>
@@ -41,6 +42,15 @@
           const sum = await janela.invoke("add", { a, b });
           out.textContent = `add(${a}, ${b}) -> ${sum}`;
         };
+        // The window stays responsive while this is pending: the spinner keeps
+        // animating and "add" still works.
+        document.getElementById("wait").onclick = async (e) => {
+          e.target.disabled = true;
+          out.textContent = "waiting… (try 'add' — it still answers)";
+          out.textContent = await janela.invoke("wait", { ms: 2000 });
+          e.target.disabled = false;
+        };
+
         document.getElementById("quit").onclick = () => janela.invoke("quit");
       };
     </script>
