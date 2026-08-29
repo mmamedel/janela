@@ -51,6 +51,38 @@ export function setup(app: JanelaApp): void {
     });
   });
 
+  // The native "open" dialog, paired with the reader above — picking a file is
+  // what makes readFileAsync useful. commandAsync is the right shape here: the
+  // page's promise stays parked while the user takes as long as they like, and
+  // the window carries on serving other calls meanwhile.
+  app.commandAsync("openFile", (_args, resolve) => {
+    app.openFileDialog(
+      { title: "Pick a file", filters: [{ name: "Text", extensions: ["txt", "md"] }] },
+      (paths, err) => {
+        if (err !== undefined) {
+          resolve({ ok: false, error: err });
+          return;
+        }
+        if (paths === null) {
+          resolve({ ok: true, cancelled: true });
+          return;
+        }
+        app.readFileAsync(paths[0], (rerr, text) => {
+          resolve(
+            rerr !== null
+              ? { ok: false, error: rerr }
+              : { ok: true, path: paths[0], length: text.length, text: text },
+          );
+        });
+      },
+    );
+  });
+
+  // The window is yours to change at runtime, not just at startup.
+  app.command("setTitle", (args) => {
+    app.setTitle((args as { title: string }).title);
+  });
+
   app.command("quit", (_args) => {
     app.quit();
   });

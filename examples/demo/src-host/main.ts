@@ -75,6 +75,63 @@ export function setup(app: JanelaApp): void {
     app.defer(step);
   });
 
+  // Native "open" dialog + the async reader: pick a file, then read it
+  // without the window freezing at either step.
+  app.commandAsync("openFile", (_args, resolve) => {
+    app.openFileDialog(
+      {
+        title: "Pick a text file",
+        filters: [
+          { name: "Text", extensions: ["txt", "md", "json"] },
+          { name: "All files", extensions: ["*"] },
+        ],
+      },
+      (paths, err) => {
+        if (err !== undefined) {
+          resolve({ ok: false, error: err });
+          return;
+        }
+        if (paths === null) {
+          resolve({ ok: true, cancelled: true });
+          return;
+        }
+        app.readFileAsync(paths[0], (rerr, text) => {
+          resolve(
+            rerr !== null
+              ? { ok: false, error: rerr }
+              : { ok: true, path: paths[0], length: text.length, text: text.slice(0, 2000) },
+          );
+        });
+      },
+    );
+  });
+
+  // Native "save" dialog. The path comes back; writing it is a separate step,
+  // so the app decides what (and whether) to write.
+  app.commandAsync("saveAs", (args, resolve) => {
+    const a = args as { text: string };
+    app.saveFileDialog(
+      { title: "Save as", defaultName: "untitled.txt" },
+      (path, err) => {
+        if (err !== undefined || path === null) {
+          resolve({ ok: err === undefined, cancelled: path === null, error: err });
+          return;
+        }
+        app.writeFileAsync(path, a.text, (werr) => {
+          resolve(werr !== null ? { ok: false, error: werr } : { ok: true, path: path });
+        });
+      },
+    );
+  });
+
+  app.command("window", (args) => {
+    const a = args as { title?: string; width?: number; height?: number; fullscreen?: boolean };
+    if (a.title !== undefined) app.setTitle(a.title);
+    if (a.width !== undefined && a.height !== undefined) app.setSize(a.width, a.height, 0);
+    if (a.fullscreen !== undefined) app.setFullscreen(a.fullscreen);
+    return "ok";
+  });
+
   app.command("quit", (_args) => {
     app.quit();
   });

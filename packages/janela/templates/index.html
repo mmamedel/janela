@@ -20,6 +20,11 @@
     <p>
       <input id="path" type="text" value="janela.conf.json" size="32" />
       <button id="read">read file (async)</button>
+      <button id="open">pick a file…</button>
+    </p>
+    <p>
+      <input id="title" type="text" value="__NAME__ — renamed" size="24" />
+      <button id="retitle">set window title</button>
     </p>
     <pre id="out">booting…</pre>
     <ul id="events"></ul>
@@ -64,6 +69,18 @@
             ? `${path}: ${r.length} chars\n\n` + r.text.slice(0, 400)
             : "error: " + r.error;
         };
+
+        // The native open dialog. The window keeps serving other commands
+        // while the user is deciding.
+        document.getElementById("open").onclick = async () => {
+          const r = await janela.invoke("openFile", {});
+          if (!r.ok) out.textContent = "error: " + r.error;
+          else if (r.cancelled) out.textContent = "cancelled";
+          else out.textContent = `${r.path}: ${r.length} chars\n\n` + r.text.slice(0, 400);
+        };
+
+        document.getElementById("retitle").onclick = () =>
+          janela.invoke("setTitle", { title: document.getElementById("title").value });
 
         document.getElementById("quit").onclick = () => janela.invoke("quit");
       };

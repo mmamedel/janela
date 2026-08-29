@@ -198,9 +198,11 @@ function ffiManifest(shimLib) {
     // async file I/O: the blocking syscall runs on a shim worker thread
     { name: "wvFsRead", symbol: "wv_fs_read", params: ["i32", "string"], returns: "i32" },
     { name: "wvFsWrite", symbol: "wv_fs_write", params: ["i32", "string", "string"], returns: "i32" },
-    { name: "wvFsStatus", symbol: "wv_fs_status", params: ["i32", "i32"], returns: "i32" },
+    // Job accessors, shared by file I/O and dialogs: both are work whose
+    // answer cannot be produced during the FFI call that starts it.
+    { name: "wvJobStatus", symbol: "wv_job_status", params: ["i32", "i32"], returns: "i32" },
     {
-      name: "wvFsTake", symbol: "wv_fs_take",
+      name: "wvJobTake", symbol: "wv_job_take",
       params: [
         "i32", "i32",
         { callback: { id: "sink", params: ["string", { context: "sink" }], returns: "void", lifetime: "call" } },
@@ -208,7 +210,16 @@ function ffiManifest(shimLib) {
       ],
       returns: "i32",
     },
-    { name: "wvFsFree", symbol: "wv_fs_free", params: ["i32", "i32"], returns: "i32" },
+    { name: "wvJobFree", symbol: "wv_job_free", params: ["i32", "i32"], returns: "i32" },
+    // Native dialogs: the modal runs on a later UI-thread turn, so asking for
+    // one never blocks the invoke that asked. Options ride as plain params
+    // (kind, flags, title, defaultPath, defaultName, filters).
+    {
+      name: "wvDialog", symbol: "wv_dialog",
+      params: ["i32", "i32", "i32", "string", "string", "string", "string"],
+      returns: "i32",
+    },
+    { name: "wvSetFullscreen", symbol: "wv_set_fullscreen", params: ["i32", "i32"], returns: "i32" },
   ];
 
   if (process.platform === "win32") {
@@ -262,9 +273,53 @@ function ffiManifest(shimLib) {
   };
 }
 
+// ---- Windows subsystem ------------------------------------------------------
+
+// A console-subsystem .exe makes Windows open a console window behind the UI.
+// The fix is normally `-mwindows` at link time, but scriptc exposes no way to
+// pass a linker flag: `system_libraries` entries are validated as bare library
+// names and explicitly rejected if they start with "-", `libraries` entries
+// must resolve to existing files, and no env var is read for extra flags
+// (checked in @scriptc/compiler 0.0.35: backend/cc.js, ffi/profile.js).
+//
+// So the subsystem byte is rewritten in the linked PE instead. The entry point
+// is untouched — MinGW's mainCRTStartup runs either way; the field only tells
+// the loader whether to allocate a console. Every offset is checked before
+// anything is written, and a file that does not look like a console-subsystem
+// PE is left alone.
+const IMAGE_SUBSYSTEM_WINDOWS_GUI = 2;
+const IMAGE_SUBSYSTEM_WINDOWS_CUI = 3;
+
+function makeGuiSubsystem(exePath) {
+  const buf = readFileSync(exePath);
+  if (buf.length < 0x40 || buf.readUInt16LE(0) !== 0x5a4d) {
+    fail(`${exePath} is not a PE image (no MZ header)`);
+  }
+  const peOff = buf.readUInt32LE(0x3c);
+  if (peOff + 24 > buf.length || buf.readUInt32LE(peOff) !== 0x00004550) {
+    fail(`${exePath} has no PE signature at ${peOff}`);
+  }
+  // Optional header starts after the 4-byte signature and 20-byte COFF header;
+  // Subsystem sits at +68 in both PE32 (0x10b) and PE32+ (0x20b).
+  const optOff = peOff + 24;
+  const magic = buf.readUInt16LE(optOff);
+  if (magic !== 0x10b && magic !== 0x20b) {
+    fail(`${exePath} has an unrecognised optional header magic 0x${magic.toString(16)}`);
+  }
+  const subOff = optOff + 68;
+  if (subOff + 2 > buf.length) fail(`${exePath} is truncated before its Subsystem field`);
+  const current = buf.readUInt16LE(subOff);
+  if (current === IMAGE_SUBSYSTEM_WINDOWS_GUI) return;
+  if (current !== IMAGE_SUBSYSTEM_WINDOWS_CUI) {
+    fail(`${exePath} has an unexpected subsystem ${current}; refusing to rewrite it`);
+  }
+  buf.writeUInt16LE(IMAGE_SUBSYSTEM_WINDOWS_GUI, subOff);
+  writeFileSync(exePath, buf);
+}
+
 // ---- build ----------------------------------------------------------------
 
-function build(root) {
+function build(root, { gui = true } = {}) {
   const conf = loadConf(root);
   const buildDir = join(root, ".janela", "build");
   const cacheDir = join(root, ".janela", "cache");
@@ -321,6 +376,14 @@ function build(root) {
   // (On arm64 macOS, strip re-signs ad-hoc automatically. MinGW keeps DWARF
   // inside the .exe rather than a side-by-side .pdb, so Windows benefits too.)
   run(["strip", bin]);
+
+  // `janela dev` keeps the console subsystem so console.log from a command is
+  // visible in the terminal; a shipped `janela build` must not flash a console
+  // window behind the UI, and loses stdout as the price.
+  if (process.platform === "win32" && gui) {
+    makeGuiSubsystem(bin);
+    console.log("janela: linked as a GUI-subsystem .exe (no console window)");
+  }
 
   if (process.platform === "darwin") {
     const bundle = join(outDir, `${conf.name}.app`);
@@ -399,7 +462,8 @@ switch (cmd) {
     build(process.cwd());
     break;
   case "dev": {
-    const bin = build(process.cwd());
+    // Console subsystem on Windows: dev is where you want the logs.
+    const bin = build(process.cwd(), { gui: false });
     console.log("janela: running (close the window or Ctrl-C to stop)");
     run([bin]);
     break;

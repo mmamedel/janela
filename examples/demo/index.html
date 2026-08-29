@@ -35,6 +35,8 @@
     <p>
       <input id="path" type="text" value="/etc/hosts" style="width: 24em" />
       <button id="read">read</button>
+      <button id="open">pick a file…</button>
+      <button id="save">save as…</button>
       <span id="fileinfo"></span>
     </p>
     <pre id="filecontent" style="max-height: 12em; overflow: auto; background: #f5f5f5; padding: 0.5em"></pre>
@@ -61,6 +63,22 @@
           const sum = await janela.invoke("add", { a, b });
           out.textContent = `add(${a}, ${b}) -> ${sum}`;
         };
+        // Native dialogs. Both are async commands, so the window keeps
+        // serving other calls for as long as the panel is up.
+        document.getElementById("open").onclick = async () => {
+          const r = await janela.invoke("openFile", {});
+          if (!r.ok) out.textContent = "error: " + r.error;
+          else if (r.cancelled) out.textContent = "cancelled";
+          else out.textContent = `${r.path}: ${r.length} chars\n\n` + r.text.slice(0, 400);
+        };
+
+        document.getElementById("save").onclick = async () => {
+          const r = await janela.invoke("saveAs", { text: out.textContent });
+          out.textContent = r.ok
+            ? (r.cancelled ? "cancelled" : "wrote " + r.path)
+            : "error: " + r.error;
+        };
+
         document.getElementById("quit").onclick = () => janela.invoke("quit");
 
         // A page-driven spinner: proof the UI thread is never parked.

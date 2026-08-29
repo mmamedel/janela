@@ -28,12 +28,27 @@ declare function wvTickStart(h: number, intervalMs: number): number;
 declare function wvTickStop(h: number): number;
 declare function wvFsRead(h: number, path: string): number;
 declare function wvFsWrite(h: number, path: string, data: string): number;
-declare function wvFsStatus(h: number, id: number): number;
-declare function wvFsTake(h: number, id: number, sink: (text: string) => void): number;
-declare function wvFsFree(h: number, id: number): number;
+declare function wvJobStatus(h: number, id: number): number;
+declare function wvJobTake(h: number, id: number, sink: (text: string) => void): number;
+declare function wvJobFree(h: number, id: number): number;
+declare function wvDialog(
+  h: number,
+  kind: number,
+  flags: number,
+  title: string,
+  defaultPath: string,
+  defaultName: string,
+  filters: string,
+): number;
+declare function wvSetFullscreen(h: number, on: number): number;
 
-const FS_PENDING = 0;
-const FS_OK = 1;
+const JOB_PENDING = 0;
+const JOB_OK = 1;
+
+const DLG_OPEN = 0;
+const DLG_SAVE = 1;
+const DLG_MULTIPLE = 1;
+const DLG_DIRECTORY = 2;
 
 // Injected into every page before it loads (webview_init).
 const BOOTSTRAP =
@@ -81,6 +96,32 @@ export type AsyncCommandHandler = (
  */
 export type FsCallback = (err: string | null, text: string) => void;
 
+/** A named group of extensions offered in a dialog's file-type popup. */
+export interface DialogFilter {
+  name: string;
+  /** Bare extensions, no dot and no glob: ["png", "jpg"]. */
+  extensions: string[];
+}
+
+export interface OpenDialogOptions {
+  title?: string;
+  /** Directory the dialog opens in. */
+  defaultPath?: string;
+  /** Allow picking more than one entry. */
+  multiple?: boolean;
+  /** Pick directories instead of files. Not supported on Windows. */
+  directory?: boolean;
+  filters?: DialogFilter[];
+}
+
+export interface SaveDialogOptions {
+  title?: string;
+  defaultPath?: string;
+  /** Filename pre-filled in the name field. */
+  defaultName?: string;
+  filters?: DialogFilter[];
+}
+
 export interface WindowConfig {
   title: string;
   width: number;
@@ -113,6 +154,30 @@ export interface JanelaApp {
     data: string,
     cb: (err: string | null) => void,
   ) => void;
+  /**
+   * Show the native "open" dialog. `cb` gets the chosen paths, or null if the
+   * user cancelled. The modal runs on a later turn of the UI thread, so
+   * calling this from inside a command does not block that command's reply —
+   * pair it with commandAsync when the page is waiting for the result.
+   */
+  openFileDialog: (
+    options: OpenDialogOptions,
+    cb: (paths: string[] | null, err?: string) => void,
+  ) => void;
+  /** Show the native "save" dialog; cb gets the path, or null on cancel. */
+  saveFileDialog: (
+    options: SaveDialogOptions,
+    cb: (path: string | null, err?: string) => void,
+  ) => void;
+  /** Change the window title at any time, not just at startup. */
+  setTitle: (title: string) => void;
+  /**
+   * Resize the window. `hint` is webview's sizing hint: 0 none, 1 minimum,
+   * 2 maximum, 3 fixed.
+   */
+  setSize: (width: number, height: number, hint?: number) => void;
+  /** Enter or leave fullscreen. */
+  setFullscreen: (on: boolean) => void;
   /** Fire an event into the page; the payload is delivered as a value. */
   emit: (event: string, payload: unknown) => void;
   /** Close the window and make run() return. */
@@ -145,8 +210,8 @@ export function createApp(cfg: WindowConfig): JanelaApp {
   let taskFns: (() => void)[] = [];
   let timerFns: (() => void)[] = [];
   let timerDue: number[] = [];
-  let fsIds: number[] = [];
-  let fsCbs: FsCallback[] = [];
+  let jobIds: number[] = [];
+  let jobCbs: FsCallback[] = [];
   let ticking = false;
 
   const wake = (): void => {
@@ -157,7 +222,7 @@ export function createApp(cfg: WindowConfig): JanelaApp {
 
   const idle = (): void => {
     if (!ticking) return;
-    if (taskFns.length > 0 || timerFns.length > 0 || fsIds.length > 0) return;
+    if (taskFns.length > 0 || timerFns.length > 0 || jobIds.length > 0) return;
     ticking = false;
     wvTickStop(h);
   };
@@ -190,34 +255,34 @@ export function createApp(cfg: WindowConfig): JanelaApp {
 
     // Finished file jobs: the worker thread has already done the blocking
     // syscall, so all that happens on this (UI) thread is the drain.
-    if (fsIds.length > 0) {
+    if (jobIds.length > 0) {
       const keptIds: number[] = [];
       const keptCbs: FsCallback[] = [];
       const doneIds: number[] = [];
       const doneCbs: FsCallback[] = [];
       const doneOk: boolean[] = [];
-      for (let i = 0; i < fsIds.length; i++) {
-        const st = wvFsStatus(h, fsIds[i]) + 0;
-        if (st === FS_PENDING) {
-          keptIds.push(fsIds[i]);
-          keptCbs.push(fsCbs[i]);
+      for (let i = 0; i < jobIds.length; i++) {
+        const st = wvJobStatus(h, jobIds[i]) + 0;
+        if (st === JOB_PENDING) {
+          keptIds.push(jobIds[i]);
+          keptCbs.push(jobCbs[i]);
         } else {
-          doneIds.push(fsIds[i]);
-          doneCbs.push(fsCbs[i]);
-          doneOk.push(st === FS_OK);
+          doneIds.push(jobIds[i]);
+          doneCbs.push(jobCbs[i]);
+          doneOk.push(st === JOB_OK);
         }
       }
-      fsIds = keptIds;
-      fsCbs = keptCbs;
+      jobIds = keptIds;
+      jobCbs = keptCbs;
       for (let i = 0; i < doneIds.length; i++) {
         // On failure the payload IS the error message, so one take serves both
         // outcomes. The sink runs synchronously inside wvFsTake (the callback
         // is lifetime:"call"), so `payload` is set by the time it returns.
         let payload = "";
-        wvFsTake(h, doneIds[i], (text) => {
+        wvJobTake(h, doneIds[i], (text) => {
           payload = text;
         });
-        wvFsFree(h, doneIds[i]);
+        wvJobFree(h, doneIds[i]);
         if (doneOk[i]) {
           doneCbs[i](null, payload);
         } else {
@@ -226,6 +291,55 @@ export function createApp(cfg: WindowConfig): JanelaApp {
       }
     }
     idle();
+  };
+
+  // Filters cross as "Name|ext,ext|Name|ext" — the shim needs no JSON parser
+  // for what is always a short, flat list.
+  const encodeFilters = (filters: DialogFilter[] | undefined): string => {
+    if (filters === undefined || filters.length === 0) return "";
+    const parts: string[] = [];
+    for (let i = 0; i < filters.length; i++) {
+      parts.push(filters[i].name);
+      parts.push(filters[i].extensions.join(","));
+    }
+    return parts.join("|");
+  };
+
+  // Both dialog kinds share one path: start the job, then let the same drain
+  // that serves file I/O deliver the answer on a later turn.
+  const startDialog = (
+    kind: number,
+    flags: number,
+    title: string | undefined,
+    defaultPath: string | undefined,
+    defaultName: string | undefined,
+    filters: DialogFilter[] | undefined,
+    cb: (paths: string[] | null, err?: string) => void,
+  ): void => {
+    const id = wvDialog(
+      h,
+      kind,
+      flags,
+      title === undefined ? "" : title,
+      defaultPath === undefined ? "" : defaultPath,
+      defaultName === undefined ? "" : defaultName,
+      encodeFilters(filters),
+    ) + 0;
+    if (id < 0) {
+      taskFns.push(() => cb(null, "EAGAIN: could not open a dialog"));
+      wake();
+      return;
+    }
+    jobIds.push(id);
+    jobCbs.push((err, text) => {
+      if (err !== null) {
+        cb(null, err);
+        return;
+      }
+      // "null" is a cancel; anything else is a JSON array of paths.
+      cb(JSON.parse(text) as string[] | null);
+    });
+    wake();
   };
 
   const app: JanelaApp = {
@@ -260,8 +374,8 @@ export function createApp(cfg: WindowConfig): JanelaApp {
         app.defer(() => cb("EAGAIN: could not start a read of '" + path + "'", ""));
         return;
       }
-      fsIds.push(id);
-      fsCbs.push(cb);
+      jobIds.push(id);
+      jobCbs.push(cb);
       wake();
     },
 
@@ -271,11 +385,42 @@ export function createApp(cfg: WindowConfig): JanelaApp {
         app.defer(() => cb("EAGAIN: could not start a write of '" + path + "'"));
         return;
       }
-      fsIds.push(id);
+      jobIds.push(id);
       // The write payload is empty on success; the shared callback shape just
       // ignores the text argument.
-      fsCbs.push((err, _text) => cb(err));
+      jobCbs.push((err, _text) => cb(err));
       wake();
+    },
+
+    openFileDialog: (options, cb) => {
+      let flags = 0;
+      if (options.multiple === true) flags = flags + DLG_MULTIPLE;
+      if (options.directory === true) flags = flags + DLG_DIRECTORY;
+      startDialog(DLG_OPEN, flags, options.title, options.defaultPath, "",
+        options.filters, (paths, err) => cb(paths, err));
+    },
+
+    saveFileDialog: (options, cb) => {
+      startDialog(DLG_SAVE, 0, options.title, options.defaultPath,
+        options.defaultName, options.filters, (paths, err) => {
+          if (paths === null) {
+            cb(null, err);
+            return;
+          }
+          cb(paths.length > 0 ? paths[0] : null, err);
+        });
+    },
+
+    setTitle: (title) => {
+      wvSetTitle(h, title);
+    },
+
+    setSize: (width, height, hint) => {
+      wvSetSize(h, width, height, hint === undefined ? 0 : hint);
+    },
+
+    setFullscreen: (on) => {
+      wvSetFullscreen(h, on ? 1 : 0);
     },
 
     emit: (event, payload) => {
