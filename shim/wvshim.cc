@@ -98,11 +98,16 @@ void trampoline(const char *id, const char *req, void *arg) {
   // settle the promise with a stale value.
   if (a->deferred) {
     a->deferred = false;
+    a->cur_id.clear();
     return;
   }
 
   webview_return(a->w, a->cur_id.c_str(), status,
                  a->reply.empty() ? "null" : a->reply.c_str());
+  // wv_defer() treats a non-empty cur_id as "an invoke is in flight". Clearing
+  // it here means a defer from anywhere else — a tick, say — fails with -1
+  // instead of stealing this already-answered call's id.
+  a->cur_id.clear();
 }
 
 // Runs on the UI thread (posted by the ticker via webview_dispatch), so the
