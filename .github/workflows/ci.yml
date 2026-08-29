@@ -17,9 +17,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: pnpm
       - name: Install webview build dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -40,9 +42,9 @@ jobs:
           $bin = (Get-ChildItem "$env:RUNNER_TEMP\llvm-mingw" -Directory | Select-Object -First 1).FullName + '\bin'
           $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           & "$bin\clang" -dumpmachine
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
       - name: Scaffold a smoke project
-        run: node bin/janela.mjs init smoke
+        run: node packages/janela/bin/janela.mjs init smoke
       - name: Make the smoke page self-terminating
         shell: bash
         run: |
@@ -57,7 +59,7 @@ jobs:
           EOF
       - name: Build the smoke app
         working-directory: smoke
-        run: node ../bin/janela.mjs build
+        run: node ../packages/janela/bin/janela.mjs build
       # macOS runners have no reliable window session for WKWebView, so the
       # macOS leg is build-only. Linux runs under Xvfb and Windows runs
       # directly — WebView2 comes up headless on the runner image.

@@ -1,5 +1,5 @@
 .janela/
 node_modules/
+node_modules
 *.log
 .DS_Store
-node_modules
