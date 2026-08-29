@@ -385,6 +385,8 @@ function ffiManifest(shimLib) {
       system_libraries: [
         "c++", "pthread",
         "ole32", "oleaut32", "shlwapi", "shell32", "user32", "version", "gdi32",
+        // GetOpenFileNameW / GetSaveFileNameW for the native file dialogs.
+        "comdlg32",
       ],
     };
   }
