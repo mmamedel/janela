@@ -8,7 +8,7 @@
     "jn": "bin/janela.mjs"
   },
   "dependencies": {
-    "scriptc": "0.0.32"
+    "scriptc": "0.0.35"
   },
   "license": "MIT",
   "author": "Mateus Lage",
@@ -30,7 +30,7 @@
     "scriptc"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=24"
   },
   "files": [
     "bin/",

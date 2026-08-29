@@ -69,10 +69,10 @@ Backend API (`src-host/main.ts`):
 import type { JanelaApp } from "./janela";
 
 export function setup(app: JanelaApp): void {
-  app.command("add", (argsJson) => {          // args in / result out as JSON text
-    const a = JSON.parse(argsJson) as { a: number; b: number };
-    app.emit("added", JSON.stringify(a.a + a.b));  // push an event to the page
-    return JSON.stringify(a.a + a.b);
+  app.command("add", (args) => {              // values in, values out
+    const a = args as { a: number; b: number };
+    app.emit("added", a.a + a.b);             // push an event to the page
+    return a.a + a.b;
   });
   // app.quit() closes the window and returns from run()
 }
@@ -85,19 +85,19 @@ the window. Register it with `commandAsync` and answer whenever you are ready;
 the page keeps using the same `await janela.invoke(...)`.
 
 ```ts
-app.commandAsync("wait", (argsJson, resolve, reject) => {
-  const a = JSON.parse(argsJson) as { ms: number };
-  app.sleep(a.ms, () => resolve(JSON.stringify("done")));   // resolve later
+app.commandAsync("wait", (args, resolve, reject) => {
+  const a = args as { ms: number };
+  app.sleep(a.ms, () => resolve("done"));   // resolve later
 });
 
 // Work that cannot just wait: slice it, yielding to the UI between slices.
-app.commandAsync("countTo", (argsJson, resolve) => {
-  const a = JSON.parse(argsJson) as { n: number };
+app.commandAsync("countTo", (args, resolve) => {
+  const a = args as { n: number };
   let i = 0;
   const step = (): void => {
     const end = Math.min(i + 2_000_000, a.n);
     for (; i < end; i++) { /* ... */ }
-    if (i < a.n) app.defer(step); else resolve(JSON.stringify(i));
+    if (i < a.n) app.defer(step); else resolve(i);
   };
   app.defer(step);
 });
@@ -105,8 +105,8 @@ app.commandAsync("countTo", (argsJson, resolve) => {
 
 - `app.defer(fn)` — run `fn` on the next turn of the host loop.
 - `app.sleep(ms, fn)` — run `fn` after at least `ms`.
-- `resolve(json)` / `reject(json)` settle the page's promise; `reject` makes
-  `await janela.invoke(...)` throw. Settling twice is ignored.
+- `resolve(value)` / `reject(reason)` settle the page's promise; `reject`
+  makes `await janela.invoke(...)` throw. Settling twice is ignored.
 
 ## File I/O
 
@@ -116,11 +116,11 @@ async pair instead: the syscall runs on a worker thread inside the shim, and
 only the result crosses back to your (single-threaded) TypeScript.
 
 ```ts
-app.commandAsync("readFile", (argsJson, resolve) => {
-  const a = JSON.parse(argsJson) as { path: string };
+app.commandAsync("readFile", (args, resolve) => {
+  const a = args as { path: string };
   app.readFileAsync(a.path, (err, text) => {
-    if (err !== null) { resolve(JSON.stringify({ ok: false, error: err })); return; }
-    resolve(JSON.stringify({ ok: true, text }));
+    if (err !== null) { resolve({ ok: false, error: err }); return; }
+    resolve({ ok: true, text });
   });
 });
 
@@ -152,6 +152,33 @@ The backend is ordinary TypeScript with scriptc's stdlib — including a
 `node:fs` subset — so "read a file" or "call an API" is just code in a
 command handler, no plugin layer needed.
 
+## Migrating from 0.1.x
+
+Commands used to take and return **JSON text**; they now take and return
+**values**, with the runtime handling serialisation. The page-side API
+(`janela.invoke` / `janela.listen`) is unchanged.
+
+```ts
+// 0.1.x
+app.command("add", (argsJson) => {
+  const a = JSON.parse(argsJson) as { a: number; b: number };
+  app.emit("added", JSON.stringify(a.a + a.b));
+  return JSON.stringify(a.a + a.b);
+});
+
+// 0.2.x
+app.command("add", (args) => {
+  const a = args as { a: number; b: number };
+  app.emit("added", a.a + a.b);
+  return a.a + a.b;
+});
+```
+
+Mechanically: drop the `JSON.parse(argsJson)` (cast `args` instead), drop
+every `JSON.stringify` around a result, `resolve`/`reject`/`emit` payload, and
+return nothing at all where you used to return `"null"`. Requires Node 24 to
+build (scriptc 0.0.35's floor).
+
 ## What the CLI hides
 
 `janela build` assembles `.janela/build/` (runtime + your `main.ts` +
@@ -161,12 +188,12 @@ scriptc. On macOS the frameworks are linked as SDK `.tbd` stubs (scriptc has
 no `-framework` support) and the binary is wrapped into an ad-hoc-signed
 `.app` bundle.
 
-## Constraints inherited from scriptc 0.0.32
+## Constraints inherited from scriptc
 
-- Command args/results cross the boundary as **JSON text** — handlers
-  `JSON.parse` in and `JSON.stringify` out. The runtime keeps the byte channel
-  ASCII by `\uXXXX`-escaping non-ASCII (scriptc strings can't hold lone
-  surrogates, and `JSON.parse` is the reliable reassembly point).
+- Command args and results are ordinary values; the runtime serialises them at
+  the boundary, so anything that survives `JSON.stringify`/`JSON.parse` round
+  trips (including full Unicode). `args` is typed `unknown` — cast it to the
+  shape you expect.
 - Never use a bare FFI call as a complete variable initializer or assignment
   RHS — it is silently miscompiled. Wrap it in any expression (`+ 0`). Plain
   TypeScript is unaffected; only the runtime does FFI, so app code rarely

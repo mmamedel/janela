@@ -17,18 +17,18 @@ importers:
   packages/janela:
     dependencies:
       scriptc:
-        specifier: 0.0.32
-        version: 0.0.32
+        specifier: 0.0.35
+        version: 0.0.35
 
   website: {}
 
 packages:
 
-  '@scriptc/compiler@0.0.32':
-    resolution: {integrity: sha512-DnPy5g4OXj5SNE+L9Q1Qb+9nSyFceULj7d5JKTXVh+DBJXZMQwJW/bfVPk+cLFKDKbIFX78MXHcALdm3tfuJfg==}
+  '@scriptc/compiler@0.0.35':
+    resolution: {integrity: sha512-OLTmyGpFPJAAVn0RfRBoXuCjpaTfpBC1wt6XdO/SzqMab/DaRjCIJY9vv5b1VspP6zLZP2WEYWZPgP8vHKAJPg==}
 
-  '@scriptc/runtime@0.0.32':
-    resolution: {integrity: sha512-Hm3/Jq8nTglaPGIJdRl3b4RPOxBZHG+IuH8SK+QtUYXb8iAJtMTpCR3N1yai0YFU/i1rgrPH/ZLlFQDQXPDIew==}
+  '@scriptc/runtime@0.0.35':
+    resolution: {integrity: sha512-kjtKfneGr9YGxx631jOPJ1XVh0X6h5LM+rwQmhF6loI9oA+zW7rlYmoF+VkTXLdkre+bu9LptIIgdxKPdAquPA==}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
@@ -150,9 +150,9 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  scriptc@0.0.32:
-    resolution: {integrity: sha512-LvG+zoij7ZqnMecsLL3hYRq8cMjMHgBM0fgWw6bKUVzXVsQ7V/qLRSPlB/TLBhVNTyAk5ks16LyIUSZw+9uLMg==}
-    engines: {node: '>=20'}
+  scriptc@0.0.35:
+    resolution: {integrity: sha512-46Td/02HJZNLuosdYDiUSQ+auKwGmQ03+odD6Pg+J7D+eAV7sOYQvjZu9M+3ePyYfL3hFQa6wWiGexV/Bd0r+w==}
+    engines: {node: '>=24'}
     hasBin: true
 
   typescript@5.9.3:
@@ -167,13 +167,13 @@ packages:
 
 snapshots:
 
-  '@scriptc/compiler@0.0.32':
+  '@scriptc/compiler@0.0.35':
     dependencies:
-      '@scriptc/runtime': 0.0.32
+      '@scriptc/runtime': 0.0.35
       typescript: 7.0.2
       typescript5: typescript@5.9.3
 
-  '@scriptc/runtime@0.0.32': {}
+  '@scriptc/runtime@0.0.35': {}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true
@@ -235,9 +235,9 @@ snapshots:
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
 
-  scriptc@0.0.32:
+  scriptc@0.0.35:
     dependencies:
-      '@scriptc/compiler': 0.0.32
+      '@scriptc/compiler': 0.0.35
 
   typescript@5.9.3: {}
 
