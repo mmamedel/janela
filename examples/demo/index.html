@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font: 16px -apple-system, sans-serif; padding: 2rem; }
+      input[type="number"] { width: 5em; }
+      #events { color: #666; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <h1>demo</h1>
+    <p>
+      <input id="a" type="number" value="2" /> +
+      <input id="b" type="number" value="40" />
+      <button id="add">add</button>
+      <button id="quit">Quit</button>
+    </p>
+    <pre id="out">booting…</pre>
+    <ul id="events"></ul>
+
+    <h2>fs.readFile</h2>
+    <p>
+      <input id="path" type="text" value="/etc/hosts" style="width: 24em" />
+      <button id="read">read</button>
+      <span id="fileinfo"></span>
+    </p>
+    <pre id="filecontent" style="max-height: 12em; overflow: auto; background: #f5f5f5; padding: 0.5em"></pre>
+
+    <script>
+      // `janela.invoke(name, args)` and `janela.listen(event, cb)` are injected by
+      // janela before the page loads — the Tauri-shaped frontend API.
+      window.onload = async () => {
+        const out = document.getElementById("out");
+        const events = document.getElementById("events");
+
+        janela.listen("added", (sum) => {
+          const li = document.createElement("li");
+          li.textContent = "event 'added' from host: " + sum;
+          events.prepend(li);
+        });
+
+        out.textContent = await janela.invoke("greet", { name: "demo" });
+        await janela.invoke("log", "page loaded");
+
+        document.getElementById("add").onclick = async () => {
+          const a = Number(document.getElementById("a").value);
+          const b = Number(document.getElementById("b").value);
+          const sum = await janela.invoke("add", { a, b });
+          out.textContent = `add(${a}, ${b}) -> ${sum}`;
+        };
+        document.getElementById("quit").onclick = () => janela.invoke("quit");
+
+        document.getElementById("read").onclick = async () => {
+          const path = document.getElementById("path").value;
+          const info = document.getElementById("fileinfo");
+          const content = document.getElementById("filecontent");
+          const r = await janela.invoke("readFile", { path });
+          if (r.ok) {
+            info.textContent = r.size + " bytes" + (r.truncated ? " (preview truncated)" : "");
+            content.textContent = r.content;
+          } else {
+            info.textContent = "";
+            content.textContent = "error: " + r.error;
+          }
+        };
+      };
+    </script>
+  </body>
+</html>

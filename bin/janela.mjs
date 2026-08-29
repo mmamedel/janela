@@ -1,0 +1,271 @@
+#!/usr/bin/env node
+// janela — the CLI (the tauri-cli analogue).
+//
+//   janela init <name>   scaffold a new project
+//   janela build         compile the project to a native binary (+ .app on macOS)
+//   janela dev           build, then run the binary with logs in the terminal
+//
+// A project is: index.html (frontend), src-host/main.ts (commands),
+// janela.conf.json (window + bundle config). Everything else — the C shim over
+// webview.h, the vendored webview, the scriptc runtime library, the FFI
+// manifest — lives in this package and is assembled into .janela/ at build time.
+
+import { spawnSync } from "node:child_process";
+import {
+  cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync,
+} from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const KIT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(join(KIT, "package.json"));
+
+function fail(msg) {
+  console.error(`janela: ${msg}`);
+  process.exit(1);
+}
+
+function run(argv, opts = {}) {
+  const r = spawnSync(argv[0], argv.slice(1), { stdio: "inherit", ...opts });
+  if (r.status !== 0) fail(`command failed (${r.status ?? r.error}): ${argv.join(" ")}`);
+}
+
+function capture(argv) {
+  const r = spawnSync(argv[0], argv.slice(1), { encoding: "utf8" });
+  if (r.status !== 0) fail(`command failed: ${argv.join(" ")}`);
+  return r.stdout.trim();
+}
+
+function scriptcBin() {
+  const pkg = require.resolve("scriptc/package.json");
+  const meta = JSON.parse(readFileSync(pkg, "utf8"));
+  const rel = typeof meta.bin === "string" ? meta.bin : meta.bin.scriptc;
+  return join(dirname(pkg), rel);
+}
+
+function loadConf(root) {
+  const p = join(root, "janela.conf.json");
+  if (!existsSync(p)) fail("no janela.conf.json here — run from a project root (or `janela init <name>`)");
+  const c = JSON.parse(readFileSync(p, "utf8"));
+  for (const k of ["name", "identifier", "window"]) {
+    if (!c[k]) fail(`janela.conf.json is missing '${k}'`);
+  }
+  return c;
+}
+
+// ---- shim ----------------------------------------------------------------
+
+function buildShim(cacheDir) {
+  const src = join(KIT, "shim", "wvshim.cc");
+  const obj = join(cacheDir, "wvshim.o");
+  const lib = join(cacheDir, "libwvshim.a");
+  if (existsSync(lib) && statSync(lib).mtimeMs > statSync(src).mtimeMs) return lib;
+
+  console.log("janela: compiling webview shim");
+  const inc = `-I${join(KIT, "vendor-webview", "core", "include")}`;
+  if (process.platform === "darwin") {
+    run(["clang++", "-c", src, "-o", obj, "-std=c++17", "-O2", inc]);
+  } else {
+    const cflags = capture(["pkg-config", "--cflags", "gtk+-3.0", "webkit2gtk-4.1"]).split(/\s+/).filter(Boolean);
+    run(["g++", "-c", src, "-o", obj, "-std=c++17", "-O2", inc, ...cflags]);
+  }
+  run(["ar", "rcs", lib, obj]);
+  return lib;
+}
+
+// ---- FFI manifest ---------------------------------------------------------
+
+const STR = (name, symbol) => ({ name, symbol, params: ["i32", "string"], returns: "i32" });
+
+function ffiManifest(shimLib) {
+  const functions = [
+    { name: "wvCreate", symbol: "wv_create", params: ["i32"], returns: "i32" },
+    STR("wvSetTitle", "wv_set_title"),
+    { name: "wvSetSize", symbol: "wv_set_size", params: ["i32", "i32", "i32", "i32"], returns: "i32" },
+    STR("wvSetHtml", "wv_set_html"),
+    STR("wvInit", "wv_init"),
+    STR("wvEval", "wv_eval"),
+    STR("wvBind", "wv_bind"),
+    { name: "wvReqLen", symbol: "wv_req_len", params: ["i32"], returns: "i32" },
+    { name: "wvReqByte", symbol: "wv_req_byte", params: ["i32", "i32"], returns: "i32" },
+    { name: "wvReplyReset", symbol: "wv_reply_reset", params: ["i32"], returns: "i32" },
+    { name: "wvReplyPush", symbol: "wv_reply_push", params: ["i32", "i32"], returns: "i32" },
+    {
+      name: "wvRun", symbol: "wv_run",
+      params: [
+        "i32",
+        { callback: { id: "run", params: ["u32", "u32", { context: "run" }], returns: "i32", lifetime: "call" } },
+        { context: "run" },
+      ],
+      returns: "i32",
+    },
+    { name: "wvTerminate", symbol: "wv_terminate", params: ["i32"], returns: "i32" },
+  ];
+
+  if (process.platform === "darwin") {
+    // scriptc has no -framework support, but `libraries` entries are passed to
+    // the link as plain input files and ld64 accepts .tbd stubs.
+    const sdk = capture(["xcrun", "--sdk", "macosx", "--show-sdk-path"]);
+    return {
+      ffi_format: 2,
+      functions,
+      libraries: [
+        shimLib,
+        join(sdk, "System/Library/Frameworks/WebKit.framework/WebKit.tbd"),
+        join(sdk, "System/Library/Frameworks/Cocoa.framework/Cocoa.tbd"),
+      ],
+      system_libraries: ["c++"],
+    };
+  }
+  return {
+    ffi_format: 2,
+    functions,
+    libraries: [shimLib],
+    system_libraries: [
+      "stdc++", "webkit2gtk-4.1", "javascriptcoregtk-4.1", "gtk-3", "gdk-3",
+      "soup-3.0", "gio-2.0", "gobject-2.0", "glib-2.0", "gmodule-2.0",
+      "pango-1.0", "pangocairo-1.0", "harfbuzz", "atk-1.0", "cairo",
+      "cairo-gobject", "gdk_pixbuf-2.0", "z", "pthread",
+    ],
+  };
+}
+
+// ---- build ----------------------------------------------------------------
+
+function build(root) {
+  const conf = loadConf(root);
+  const buildDir = join(root, ".janela", "build");
+  const cacheDir = join(root, ".janela", "cache");
+  const outDir = join(root, ".janela", "out");
+  for (const d of [buildDir, cacheDir, outDir]) mkdirSync(d, { recursive: true });
+
+  const shimLib = buildShim(cacheDir);
+
+  // Assemble the compile unit: runtime + user's commands + generated modules.
+  cpSync(join(KIT, "runtime", "janela.ts"), join(buildDir, "janela.ts"));
+  const mainSrc = join(root, "src-host", "main.ts");
+  if (!existsSync(mainSrc)) fail("missing src-host/main.ts");
+  cpSync(mainSrc, join(buildDir, "main.ts"));
+
+  const htmlSrc = join(root, "index.html");
+  if (!existsSync(htmlSrc)) fail("missing index.html");
+  const html = readFileSync(htmlSrc, "utf8");
+  writeFileSync(
+    join(buildDir, "frontend.ts"),
+    `// Generated by janela from index.html — do not edit.\nexport const INDEX_HTML: string = ${JSON.stringify(html)};\n`,
+  );
+
+  const w = conf.window;
+  writeFileSync(
+    join(buildDir, "config.ts"),
+    `// Generated by janela from janela.conf.json — do not edit.\n` +
+      `export const WINDOW = { title: ${JSON.stringify(String(w.title ?? conf.name))}, ` +
+      `width: ${Number(w.width ?? 800)}, height: ${Number(w.height ?? 600)} };\n`,
+  );
+
+  writeFileSync(
+    join(buildDir, "entry.ts"),
+    `// Generated by janela — do not edit.\n` +
+      `import { createApp } from "./janela";\n` +
+      `import { WINDOW } from "./config";\n` +
+      `import { INDEX_HTML } from "./frontend";\n` +
+      `import { setup } from "./main";\n\n` +
+      `const app = createApp(WINDOW);\n` +
+      `setup(app);\n` +
+      `const rc = app.run(INDEX_HTML) + 0;\n` +
+      `console.log("[janela] run returned", rc);\n`,
+  );
+
+  writeFileSync(join(buildDir, "janela.ffi.json"), JSON.stringify(ffiManifest(shimLib), null, 2) + "\n");
+
+  console.log("janela: compiling TypeScript to a native binary");
+  const bin = join(outDir, conf.name);
+  run(["node", scriptcBin(), "build", "entry.ts", "--ffi", "janela.ffi.json", "-o", bin], { cwd: buildDir });
+
+  if (process.platform === "darwin") {
+    const bundle = join(outDir, `${conf.name}.app`);
+    mkdirSync(join(bundle, "Contents", "MacOS"), { recursive: true });
+    cpSync(bin, join(bundle, "Contents", "MacOS", conf.name));
+    writeFileSync(
+      join(bundle, "Contents", "Info.plist"),
+      `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>${conf.name}</string>
+  <key>CFBundleDisplayName</key><string>${conf.name}</string>
+  <key>CFBundleIdentifier</key><string>${conf.identifier}</string>
+  <key>CFBundleExecutable</key><string>${conf.name}</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleVersion</key><string>${conf.version ?? "0.1.0"}</string>
+  <key>CFBundleShortVersionString</key><string>${conf.version ?? "0.1.0"}</string>
+  <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+`,
+    );
+    spawnSync("codesign", ["--force", "--sign", "-", bundle]);
+    console.log(`janela: built ${relative(root, bin)} and ${relative(root, bundle)}`);
+  } else {
+    console.log(`janela: built ${relative(root, bin)}`);
+  }
+  return bin;
+}
+
+// ---- init -----------------------------------------------------------------
+
+function init(name) {
+  if (!name || !/^[a-z][a-z0-9-]*$/.test(name)) fail("usage: janela init <name> (lowercase, digits, dashes)");
+  const dir = resolve(process.cwd(), name);
+  if (existsSync(dir)) fail(`${name}/ already exists`);
+  mkdirSync(join(dir, "src-host"), { recursive: true });
+
+  // Installed from the registry (this file lives under node_modules) →
+  // depend on the published version; a source checkout → a file: link.
+  const kitPkg = JSON.parse(readFileSync(join(KIT, "package.json"), "utf8"));
+  const janelaDep = KIT.includes(`${sep}node_modules${sep}`)
+    ? `^${kitPkg.version}`
+    : `file:${relative(dir, KIT) || "."}`;
+
+  const t = (f) => readFileSync(join(KIT, "templates", f), "utf8").replaceAll("__NAME__", name);
+  writeFileSync(join(dir, "index.html"), t("index.html"));
+  writeFileSync(join(dir, "src-host", "main.ts"), t("main.ts"));
+  writeFileSync(join(dir, "janela.conf.json"), t("janela.conf.json"));
+  writeFileSync(join(dir, ".gitignore"), ".janela/\nnode_modules/\n");
+  writeFileSync(
+    join(dir, "package.json"),
+    JSON.stringify(
+      {
+        name,
+        private: true,
+        scripts: { dev: "janela dev", build: "janela build" },
+        devDependencies: { janela: janelaDep },
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+  console.log(`janela: created ${name}/ — next: cd ${name} && janela dev`);
+}
+
+// ---- main -----------------------------------------------------------------
+
+const [cmd, arg] = process.argv.slice(2);
+switch (cmd) {
+  case "init":
+    init(arg);
+    break;
+  case "build":
+    build(process.cwd());
+    break;
+  case "dev": {
+    const bin = build(process.cwd());
+    console.log("janela: running (close the window or Ctrl-C to stop)");
+    run([bin]);
+    break;
+  }
+  default:
+    console.log("usage: janela init <name> | janela build | janela dev");
+    process.exit(cmd ? 1 : 0);
+}

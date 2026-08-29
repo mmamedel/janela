@@ -1,0 +1,11 @@
+{
+  "name": "demo",
+  "private": true,
+  "scripts": {
+    "dev": "janela dev",
+    "build": "janela build"
+  },
+  "devDependencies": {
+    "janela": "file:../.."
+  }
+}
