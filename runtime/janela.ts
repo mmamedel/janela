@@ -22,6 +22,13 @@ declare function wvReplyReset(h: number): number;
 declare function wvReplyPush(h: number, b: number): number;
 declare function wvRun(h: number, cb: (bindIndex: number, seq: number) => number): number;
 declare function wvTerminate(h: number): number;
+declare function wvDefer(h: number): number;
+declare function wvResolve(h: number, id: number, status: number): number;
+declare function wvTickStart(h: number, intervalMs: number): number;
+declare function wvTickStop(h: number): number;
+
+// Bind index the shim uses for a timer tick rather than a page invoke.
+const TICK_BIND = 4294967295;
 
 // Injected into every page before it loads (webview_init).
 const BOOTSTRAP =
@@ -45,6 +52,18 @@ const BOOTSTRAP =
 // scriptc across the FFI boundary — return an error envelope instead.
 export type CommandHandler = (argsJson: string) => string;
 
+/**
+ * An async command: return immediately, answer later. `resolve`/`reject` take
+ * JSON text and settle the page's `await janela.invoke(...)` promise whenever
+ * they are called — from a later defer()/sleep() turn, or from another
+ * command. The window stays responsive for as long as the call is pending.
+ */
+export type AsyncCommandHandler = (
+  argsJson: string,
+  resolve: (json: string) => void,
+  reject: (json: string) => void,
+) => void;
+
 export interface WindowConfig {
   title: string;
   width: number;
@@ -57,6 +76,13 @@ export interface JanelaApp {
   handlers: CommandHandler[];
   /** Register a named command, callable from the page as janela.invoke(name, args). */
   command: (name: string, h: CommandHandler) => void;
+  /** Register a command that answers later; see AsyncCommandHandler. */
+  commandAsync: (name: string, h: AsyncCommandHandler) => void;
+  /** Run fn on the next turn of the host loop — the way to slice long work. */
+  defer: (fn: () => void) => void;
+  /** Run fn after at least ms. The host loop's timer; scriptc's setTimeout
+   *  cannot fire while the window is open (its loop is parked inside run()). */
+  sleep: (ms: number, fn: () => void) => void;
   /** Fire an event into the page; payloadJson must be valid JSON text. */
   emit: (event: string, payloadJson: string) => void;
   /** Close the window and make run() return. */
@@ -144,6 +170,60 @@ export function createApp(cfg: WindowConfig): JanelaApp {
   wvSetSize(h, cfg.width, cfg.height, 0);
   wvInit(h, BOOTSTRAP);
 
+  // ---- the host loop -------------------------------------------------------
+  // scriptc's event loop is parked for as long as the program sits inside the
+  // wvRun() FFI call, so setTimeout/await never fire while the window is open.
+  // These queues are drained instead by TICK_BIND callbacks that the shim's
+  // ticker posts to the UI thread, and the ticker only runs while there is
+  // work — an idle app costs nothing.
+  const asyncNames: string[] = [];
+  const asyncHandlers: AsyncCommandHandler[] = [];
+  let taskFns: (() => void)[] = [];
+  let timerFns: (() => void)[] = [];
+  let timerDue: number[] = [];
+  let ticking = false;
+
+  const wake = (): void => {
+    if (ticking) return;
+    ticking = true;
+    wvTickStart(h, 8);
+  };
+
+  const idle = (): void => {
+    if (!ticking) return;
+    if (taskFns.length > 0 || timerFns.length > 0) return;
+    ticking = false;
+    wvTickStop(h);
+  };
+
+  // One turn of the loop: every task queued so far, plus every due timer.
+  // Tasks queued *by* this turn wait for the next one, so a defer() chain
+  // yields to the UI between slices instead of starving it.
+  const turn = (): void => {
+    const tasks = taskFns;
+    taskFns = [];
+    for (let i = 0; i < tasks.length; i++) tasks[i]();
+
+    if (timerFns.length > 0) {
+      const now = Date.now() + 0;
+      const keptFns: (() => void)[] = [];
+      const keptDue: number[] = [];
+      const fire: (() => void)[] = [];
+      for (let i = 0; i < timerFns.length; i++) {
+        if (timerDue[i] <= now) {
+          fire.push(timerFns[i]);
+        } else {
+          keptFns.push(timerFns[i]);
+          keptDue.push(timerDue[i]);
+        }
+      }
+      timerFns = keptFns;
+      timerDue = keptDue;
+      for (let i = 0; i < fire.length; i++) fire[i]();
+    }
+    idle();
+  };
+
   const app: JanelaApp = {
     handle: h,
     names: [],
@@ -152,6 +232,22 @@ export function createApp(cfg: WindowConfig): JanelaApp {
     command: (name, handler) => {
       app.names.push(name);
       app.handlers.push(handler);
+    },
+
+    commandAsync: (name, handler) => {
+      asyncNames.push(name);
+      asyncHandlers.push(handler);
+    },
+
+    defer: (fn) => {
+      taskFns.push(fn);
+      wake();
+    },
+
+    sleep: (ms, fn) => {
+      timerFns.push(fn);
+      timerDue.push(Date.now() + (ms > 0 ? ms : 0));
+      wake();
     },
 
     emit: (event, payloadJson) => {
@@ -170,6 +266,12 @@ export function createApp(cfg: WindowConfig): JanelaApp {
       wvSetHtml(h, html);
 
       const rc = wvRun(h, (bindIndex, _seq) => {
+        // A tick is not an invoke: nothing is waiting on a reply, so the
+        // shim never calls webview_return for it.
+        if (bindIndex === TICK_BIND) {
+          turn();
+          return 0;
+        }
         if (bindIndex !== INVOKE) {
           writeReply(h, '"unknown binding"');
           return 1;
@@ -180,6 +282,29 @@ export function createApp(cfg: WindowConfig): JanelaApp {
         for (let i = 0; i < app.names.length; i++) {
           if (app.names[i] === cmd) {
             writeReply(h, app.handlers[i](argsJson));
+            return 0;
+          }
+        }
+        for (let i = 0; i < asyncNames.length; i++) {
+          if (asyncNames[i] === cmd) {
+            // Park the page's promise: the shim holds this call's id and
+            // answers it when resolve/reject reaches wvResolve, whenever
+            // that is. Meanwhile the loop is free to serve other calls.
+            const id = wvDefer(h) + 0;
+            if (id < 0) {
+              writeReply(h, JSON.stringify("cannot defer command: " + cmd));
+              return 1;
+            }
+            const settle = (status: number): ((json: string) => void) => {
+              let done = false;
+              return (json: string) => {
+                if (done) return; // a promise settles once
+                done = true;
+                writeReply(h, json);
+                wvResolve(h, id, status);
+              };
+            };
+            asyncHandlers[i](argsJson, settle(0), settle(1));
             return 0;
           }
         }

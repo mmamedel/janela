@@ -30,6 +30,15 @@ export function setup(app: JanelaApp): void {
     return "null";
   });
 
+  // An async command: answers later, without freezing the window. The page
+  // still just does `await janela.invoke("wait", { ms: 1000 })`.
+  app.commandAsync("wait", (argsJson, resolve) => {
+    const a = JSON.parse(argsJson) as { ms: number };
+    app.sleep(a.ms, () => {
+      resolve(JSON.stringify("waited " + a.ms + "ms without blocking the UI"));
+    });
+  });
+
   app.command("quit", (_argsJson) => {
     app.quit();
     return "null";

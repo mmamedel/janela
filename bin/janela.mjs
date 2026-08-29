@@ -180,6 +180,11 @@ function ffiManifest(shimLib) {
       returns: "i32",
     },
     { name: "wvTerminate", symbol: "wv_terminate", params: ["i32"], returns: "i32" },
+    // async: deferred returns + the UI-thread pump behind app.defer/sleep
+    { name: "wvDefer", symbol: "wv_defer", params: ["i32"], returns: "i32" },
+    { name: "wvResolve", symbol: "wv_resolve", params: ["i32", "i32", "i32"], returns: "i32" },
+    { name: "wvTickStart", symbol: "wv_tick_start", params: ["i32", "i32"], returns: "i32" },
+    { name: "wvTickStop", symbol: "wv_tick_stop", params: ["i32"], returns: "i32" },
   ];
 
   if (process.platform === "win32") {
