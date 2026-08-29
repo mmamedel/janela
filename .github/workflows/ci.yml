@@ -59,6 +59,10 @@ jobs:
         id: build
         continue-on-error: ${{ runner.os == 'Windows' }}
         working-directory: smoke
+        # CCC_OVERRIDE_OPTIONS injects -v into every clang invocation, so the
+        # link line and lld's real diagnostics reach scriptc's error report.
+        env:
+          CCC_OVERRIDE_OPTIONS: ${{ runner.os == 'Windows' && '+-v' || '' }}
         run: node ../bin/janela.mjs build
       # TEMPORARY: scriptc reports only clang's summary line when the link
       # fails, so reproduce the C++ runtime link by hand to see the real error.
