@@ -25,6 +25,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev xvfb
+      # scriptc's Windows runtime is MinGW-shaped, so the Windows leg builds
+      # through zig's bundled mingw-w64 toolchain rather than MSVC.
+      - name: Install zig (Windows)
+        if: runner.os == 'Windows'
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.13.0
       - run: npm ci
       - name: Scaffold a smoke project
         run: node bin/janela.mjs init smoke

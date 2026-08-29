@@ -54,6 +54,31 @@ function loadConf(root) {
   return c;
 }
 
+// ---- Windows toolchain ------------------------------------------------------
+
+// scriptc's win32 lane is MinGW-shaped: its runtime uses POSIX types (ssize_t)
+// that the MSVC CRT does not define, so a default `clang` on Windows — which
+// targets MSVC — cannot compile it. zig bundles mingw-w64 headers and CRT and
+// is a single portable binary, so it is the toolchain janela asks for on
+// Windows, for both the shim and scriptc's own link.
+const WIN_TARGET = "x86_64-windows-gnu";
+
+function zigOrFail() {
+  const probe = spawnSync("zig", ["version"], { encoding: "utf8" });
+  if (probe.status !== 0) {
+    fail(
+      "Windows builds need `zig` on PATH (scriptc's Windows runtime is MinGW-based " +
+        "and the MSVC toolchain cannot compile it). Install from https://ziglang.org/download/",
+    );
+  }
+  return probe.stdout.trim();
+}
+
+// Env that puts scriptc on the same MinGW target as the shim.
+function winScriptcEnv() {
+  return { ...process.env, SCRIPTC_CC: "zigcc", SCRIPTC_TARGET: WIN_TARGET };
+}
+
 // ---- WebView2 SDK (Windows only) -------------------------------------------
 
 // webview.h's Win32 backend includes <WebView2.h>, which ships in Microsoft's
@@ -104,11 +129,13 @@ function buildShim(cacheDir) {
   console.log("janela: compiling webview shim");
   const inc = `-I${join(KIT, "vendor-webview", "core", "include")}`;
   if (win) {
-    // clang (MSVC target) honours the backend's #pragma comment(lib, ...)
-    // directives, so most Win32 imports resolve without explicit flags.
+    console.log(`janela: using zig ${zigOrFail()} for the ${WIN_TARGET} target`);
     run([
-      "clang++", "-c", src, "-o", obj, "-std=c++17", "-O2", inc,
+      "zig", "c++", "-target", WIN_TARGET,
+      "-c", src, "-o", obj, "-std=c++17", "-O2", inc,
+      // WebView2.h from the nuget SDK, plus mingw's missing EventToken.h.
       `-I${webview2Include(cacheDir)}`,
+      `-I${join(KIT, "vendor-webview", "compatibility", "mingw", "include")}`,
       "-DWIN32_LEAN_AND_MEAN", "-D_WIN32_WINNT=0x0601",
     ]);
     return lib;
@@ -153,15 +180,17 @@ function ffiManifest(shimLib) {
   ];
 
   if (process.platform === "win32") {
-    // The backend's #pragma comment(lib, ...) directives cover ole32/shell32/
-    // shlwapi/user32/version/advapi32; these are named explicitly so the link
-    // does not depend on directive support alone. scriptc's own win32 lane
-    // already adds advapi32/iphlpapi/ws2_32, so they are omitted here.
+    // MinGW ignores MSVC's #pragma comment(lib, ...), so the Win32 imports the
+    // WebView2 backend needs are named explicitly. scriptc's own win32 lane
+    // already adds advapi32/iphlpapi/ws2_32, so those are omitted here.
+    // `c++` pulls zig's bundled libc++ for the shim's std::string/exceptions.
     return {
       ffi_format: 2,
       functions,
       libraries: [shimLib],
-      system_libraries: ["ole32", "oleaut32", "shlwapi", "shell32", "user32", "version", "gdi32"],
+      system_libraries: [
+        "c++", "ole32", "oleaut32", "shlwapi", "shell32", "user32", "version", "gdi32",
+      ],
     };
   }
 
@@ -244,7 +273,12 @@ function build(root) {
   console.log("janela: compiling TypeScript to a native binary");
   // An explicit --out is used verbatim, so the PE suffix is ours to add.
   const bin = join(outDir, process.platform === "win32" ? `${conf.name}.exe` : conf.name);
-  run(["node", scriptcBin(), "build", "entry.ts", "--ffi", "janela.ffi.json", "-o", bin], { cwd: buildDir });
+  run(
+    ["node", scriptcBin(), "build", "entry.ts", "--ffi", "janela.ffi.json", "-o", bin],
+    process.platform === "win32"
+      ? { cwd: buildDir, env: winScriptcEnv() }
+      : { cwd: buildDir },
+  );
 
   // Symbol/debug metadata is ~16% of the binary and apps don't need it.
   // (On arm64 macOS, strip re-signs ad-hoc automatically.) PE builds keep
