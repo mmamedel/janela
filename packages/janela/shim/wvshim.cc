@@ -1,16 +1,17 @@
-// wvshim.cc — a C-ABI shim over webview.h shaped to scriptc's FFI format 3.
+// wvshim.cc — a C-ABI shim over webview.h shaped to scriptc's FFI format 4.
 //
-// Two constraints still drive the design:
-//   1. scriptc has no pointer/u64 type, so webview_t can never cross the
-//      boundary. We keep a handle table and hand out int32 indices.
-//   2. Callbacks are lifetime:"call" only in this format. webview_bind wants a
-//      retained callback, which is not expressible. Instead the TS callback is
-//      handed to wv_run(), which blocks for the whole app lifetime — so "call
-//      scope" and "app lifetime" coincide, and bind dispatch happens inside it.
+// One constraint still drives the design: scriptc has no pointer/u64 type, so
+// webview_t can never cross the boundary. We keep a handle table and hand out
+// int32 indices.
 //
-// What format 3 removed: callback params may now be `string`/`bytes`, so a
-// payload crosses into TS as one argument instead of one FFI call per byte.
-// Payloads coming the other way ride `string` params on ordinary functions.
+// What the newer formats removed:
+//   * format 3 — callback params may be `string`/`bytes`, so a payload crosses
+//     into TS as one argument instead of one FFI call per byte. Payloads going
+//     the other way ride `string` params on ordinary functions.
+//   * format 4 — callbacks may be `retained`, so the invoke and tick handlers
+//     are registered once and live for the app's lifetime. wv_run() is a plain
+//     blocking call again; it no longer has to carry a callback whose "call
+//     scope" was standing in for "app lifetime".
 
 #include "webview.h"
 
@@ -44,10 +45,12 @@ struct App {
   bool used = false;
   std::vector<Bind> binds;
 
-  // Callback supplied by TS for the duration of wv_run(). The request rides in
-  // as a (ptr, len) string param rather than being drained byte-at-a-time.
-  int32_t (*cb)(uint32_t, const uint8_t *, size_t, void *) = nullptr;
-  void *cb_ctx = nullptr;
+  // Retained TS handlers, registered once and valid until the app exits. The
+  // request rides in as a (ptr, len) string param.
+  int32_t (*on_invoke)(const uint8_t *, size_t, void *) = nullptr;
+  void *on_invoke_ctx = nullptr;
+  void (*on_tick)(void *) = nullptr;
+  void *on_tick_ctx = nullptr;
 
   // Staging for the in-flight request.
   std::string req;      // JSON args array from JS
@@ -62,10 +65,6 @@ struct App {
   std::atomic<bool> ticking{false};
   std::atomic<int32_t> tick_ms{16};
 };
-
-// Bind index handed to the TS callback for a timer tick rather than an
-// invoke. Real bind indices are small sequential integers.
-const uint32_t TICK_BIND = 0xffffffffu;
 
 // Fixed-size table: handles are indices, never pointers.
 App g_apps[8];
@@ -195,14 +194,12 @@ void fs_join_all() {
   }
 }
 
-// The single C trampoline registered with webview_bind for every binding.
-// `arg` encodes the app index and bind index.
+// The single C trampoline registered with webview_bind. `arg` is the app
+// index; every binding routes to the one retained invoke handler.
 void trampoline(const char *id, const char *req, void *arg) {
-  uintptr_t packed = reinterpret_cast<uintptr_t>(arg);
-  App *a = &g_apps[packed >> 32];
-  uint32_t bind_index = static_cast<uint32_t>(packed & 0xffffffffu);
+  App *a = &g_apps[reinterpret_cast<uintptr_t>(arg)];
 
-  if (!a->cb) return;  // no TS handler installed
+  if (!a->on_invoke) return;  // no TS handler installed
 
   a->req = req ? req : "";
   a->cur_id = id ? id : "";
@@ -212,9 +209,9 @@ void trampoline(const char *id, const char *req, void *arg) {
 
   // Re-entrancy: this call lands back in TS, which calls wv_reply() back into
   // this shim before returning.
-  int32_t status = a->cb(bind_index,
-                         reinterpret_cast<const uint8_t *>(a->req.data()),
-                         a->req.size(), a->cb_ctx);
+  int32_t status = a->on_invoke(
+      reinterpret_cast<const uint8_t *>(a->req.data()), a->req.size(),
+      a->on_invoke_ctx);
 
   // An async handler called wv_defer(): the call id now lives in the pending
   // table and wv_resolve() will answer the page later. Returning now would
@@ -237,10 +234,9 @@ void trampoline(const char *id, const char *req, void *arg) {
 // TS it calls stays single-threaded — scriptc's runtime is NOT thread-safe.
 void tick_on_ui_thread(webview_t, void *arg) {
   App *a = &g_apps[reinterpret_cast<uintptr_t>(arg)];
-  if (!a->used || !a->cb) return;  // app quit between dispatch and delivery
+  if (!a->used || !a->on_tick) return;  // app quit between dispatch and delivery
   a->seq++;
-  // A tick carries no request payload.
-  a->cb(TICK_BIND, reinterpret_cast<const uint8_t *>(""), 0, a->cb_ctx);
+  a->on_tick(a->on_tick_ctx);
 }
 
 }  // namespace
@@ -255,8 +251,10 @@ int32_t wv_create(int32_t debug) {
     // Field-wise reset: App holds a thread and atomics, so it is not
     // copy-assignable from a temporary.
     g_apps[i].binds.clear();
-    g_apps[i].cb = nullptr;
-    g_apps[i].cb_ctx = nullptr;
+    g_apps[i].on_invoke = nullptr;
+    g_apps[i].on_invoke_ctx = nullptr;
+    g_apps[i].on_tick = nullptr;
+    g_apps[i].on_tick_ctx = nullptr;
     g_apps[i].req.clear();
     g_apps[i].cur_id.clear();
     g_apps[i].reply.clear();
@@ -313,11 +311,10 @@ int32_t wv_eval(int32_t h, const uint8_t *p, size_t n) {
 int32_t wv_bind(int32_t h, const uint8_t *p, size_t n) {
   App *a = app_at(h);
   if (!a) return -1;
-  uint32_t idx = static_cast<uint32_t>(a->binds.size());
+  size_t idx = a->binds.size();
   a->binds.push_back(Bind{to_str(p, n)});
-  uintptr_t packed = (static_cast<uintptr_t>(h) << 32) | idx;
   int rc = webview_bind(a->w, a->binds[idx].name.c_str(), trampoline,
-                        reinterpret_cast<void *>(packed));
+                        reinterpret_cast<void *>(static_cast<uintptr_t>(h)));
   if (rc != WEBVIEW_ERROR_OK) return -1;
   return static_cast<int32_t>(idx);
 }
@@ -373,7 +370,7 @@ int32_t wv_resolve(int32_t h, int32_t id, int32_t status) {
   return 0;
 }
 
-// Start pumping TS with TICK_BIND callbacks every interval_ms. The thread
+// Start pumping the retained tick handler every interval_ms. The thread
 // itself only sleeps and posts; all TS execution happens on the UI thread.
 int32_t wv_tick_start(int32_t h, int32_t interval_ms) {
   App *a = app_at(h);
@@ -463,21 +460,37 @@ int32_t wv_fs_free(int32_t h, int32_t id) {
   return 0;
 }
 
-// Blocks for the app's lifetime; dispatches bind calls into `cb`.
-int32_t wv_run(int32_t h,
-               int32_t (*cb)(uint32_t, const uint8_t *, size_t, void *),
-               void *cb_ctx) {
+// Register the retained handler for page invokes. Valid until the app exits.
+int32_t wv_on_invoke(int32_t h,
+                     int32_t (*cb)(const uint8_t *, size_t, void *),
+                     void *ctx) {
   App *a = app_at(h);
   if (!a) return -1;
-  a->cb = cb;
-  a->cb_ctx = cb_ctx;
+  a->on_invoke = cb;
+  a->on_invoke_ctx = ctx;
+  return 0;
+}
+
+// Register the retained handler the ticker pumps on the UI thread.
+int32_t wv_on_tick(int32_t h, void (*cb)(void *), void *ctx) {
+  App *a = app_at(h);
+  if (!a) return -1;
+  a->on_tick = cb;
+  a->on_tick_ctx = ctx;
+  return 0;
+}
+
+// Blocks for the app's lifetime, dispatching into the retained handlers.
+int32_t wv_run(int32_t h) {
+  App *a = app_at(h);
+  if (!a) return -1;
   int rc = webview_run(a->w);
-  // The ticker must not outlive the callback it drives.
+  // Nothing may call into TS once run() has returned.
   a->ticking.store(false);
   if (a->ticker.joinable()) a->ticker.join();
   fs_join_all();  // nor may an in-flight read outlive the app
-  a->cb = nullptr;  // callback must not outlive the call, per lifetime:"call"
-  a->cb_ctx = nullptr;
+  a->on_invoke = nullptr;
+  a->on_tick = nullptr;
   return rc;
 }
 

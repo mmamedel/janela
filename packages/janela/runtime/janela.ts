@@ -17,7 +17,9 @@ declare function wvInit(h: number, js: string): number;
 declare function wvEval(h: number, js: string): number;
 declare function wvBind(h: number, name: string): number;
 declare function wvReply(h: number, body: string): number;
-declare function wvRun(h: number, cb: (bindIndex: number, req: string) => number): number;
+declare function wvOnInvoke(h: number, cb: (req: string) => number): number;
+declare function wvOnTick(h: number, cb: () => void): number;
+declare function wvRun(h: number): number;
 declare function wvTerminate(h: number): number;
 declare function wvDefer(h: number): number;
 declare function wvResolve(h: number, id: number, status: number): number;
@@ -31,9 +33,6 @@ declare function wvFsFree(h: number, id: number): number;
 
 const FS_PENDING = 0;
 const FS_OK = 1;
-
-// Bind index the shim uses for a timer tick rather than a page invoke.
-const TICK_BIND = 4294967295;
 
 // Injected into every page before it loads (webview_init).
 const BOOTSTRAP =
@@ -126,9 +125,9 @@ export function createApp(cfg: WindowConfig): JanelaApp {
   // ---- the host loop -------------------------------------------------------
   // scriptc's event loop is parked for as long as the program sits inside the
   // wvRun() FFI call, so setTimeout/await never fire while the window is open.
-  // These queues are drained instead by TICK_BIND callbacks that the shim's
-  // ticker posts to the UI thread, and the ticker only runs while there is
-  // work — an idle app costs nothing.
+  // These queues are drained instead by the retained tick handler that the
+  // shim's ticker posts to the UI thread, and the ticker only runs while there
+  // is work — an idle app costs nothing.
   const asyncNames: string[] = [];
   const asyncHandlers: AsyncCommandHandler[] = [];
   let taskFns: (() => void)[] = [];
@@ -279,20 +278,10 @@ export function createApp(cfg: WindowConfig): JanelaApp {
     },
 
     run: (html) => {
-      const INVOKE = wvBind(h, "__invoke") + 0;
-      wvSetHtml(h, html);
-
-      const rc = wvRun(h, (bindIndex, req) => {
-        // A tick is not an invoke: nothing is waiting on a reply, so the
-        // shim never calls webview_return for it.
-        if (bindIndex === TICK_BIND) {
-          turn();
-          return 0;
-        }
-        if (bindIndex !== INVOKE) {
-          wvReply(h, '"unknown binding"');
-          return 1;
-        }
+      // Both handlers are retained: registered once here, called by the shim
+      // for as long as the window is open.
+      wvOnTick(h, turn);
+      wvOnInvoke(h, (req) => {
         const env = JSON.parse(req) as string[];
         const cmd = env[0];
         const argsJson = env[1];
@@ -327,7 +316,11 @@ export function createApp(cfg: WindowConfig): JanelaApp {
         }
         wvReply(h, JSON.stringify("unknown command: " + cmd));
         return 1; // rejects the frontend promise
-      }) + 0;
+      });
+
+      wvBind(h, "__invoke");
+      wvSetHtml(h, html);
+      const rc = wvRun(h) + 0;
       return rc;
     },
   };
