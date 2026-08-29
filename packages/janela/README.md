@@ -54,9 +54,15 @@ containing `WebView2.h`. No `WebView2Loader.dll` is needed — webview.h has its
 own loader — and end users need only the **WebView2 runtime**, which is
 preinstalled on current Windows 10/11 (it ships with Edge).
 
-Two caveats today: the binary is a console-subsystem app, so a console window
-appears behind the UI (handy for `janela dev`, wrong for shipping), and there
-is no installer step — you get a bare `.exe`, not an MSI.
+`janela build` produces a **GUI-subsystem** `.exe`, so no console window
+appears behind the UI — which also means `console.log` from a command has
+nowhere to go. `janela dev` keeps the console subsystem, so logs are there
+while you work. (scriptc exposes no way to pass `-mwindows` to the linker, so
+janela rewrites the PE `Subsystem` field after linking; see
+[docs/native-shell.md](../../docs/native-shell.md).)
+
+One caveat today: there is no installer step — you get a bare `.exe`, not an
+MSI.
 
 [llvm-mingw]: https://github.com/mstorsjo/llvm-mingw/releases
 
@@ -148,9 +154,9 @@ Errors arrive as values, never throws — `err` carries a Node-shaped message
 (`ENOENT: no such file or directory, open '/x'`). UTF-8 round-trips exactly,
 astral characters included.
 
-The payload still crosses the FFI boundary one byte per call (format 2), which
-costs about **115 ms per MB on the UI thread** — fine for config files and
-documents, wrong for streaming large media. See
+The payload crosses in a single call (format 3), and the drain that follows it
+costs about **10 ms per MB on the UI thread** — fine for config files and
+documents, still worth chunking for very large media. See
 [docs/async.md](../../docs/async.md) for the measurements.
 
 **Use `app.sleep`, not `setTimeout`.** scriptc's own event loop is parked for
@@ -168,6 +174,37 @@ without yielding still freezes the window. Slice long work with `defer`.
 The backend is ordinary TypeScript with scriptc's stdlib — including a
 `node:fs` subset — so "read a file" or "call an API" is just code in a
 command handler, no plugin layer needed.
+
+## Native dialogs and window control
+
+```ts
+app.commandAsync("openFile", (_args, resolve) => {
+  app.openFileDialog(
+    { title: "Pick a file", filters: [{ name: "Text", extensions: ["txt", "md"] }] },
+    (paths, err) => {
+      if (paths === null) { resolve({ cancelled: true }); return; }   // cancel
+      app.readFileAsync(paths[0], (rerr, text) => resolve({ path: paths[0], text }));
+    },
+  );
+});
+
+app.saveFileDialog({ defaultName: "untitled.txt" }, (path) => { /* … */ });
+
+app.setTitle("new title");
+app.setSize(720, 480, 0);
+app.setFullscreen(true);
+```
+
+A cancel is `null`, not an error. Options: `title`, `defaultPath`, `filters`,
+plus `multiple` and `directory` for open, and `defaultName` for save.
+`directory: true` is not supported on Windows and reports `ENOTSUP`.
+
+Use `commandAsync` for dialogs — the user may take as long as they like, and
+the window keeps serving other calls meanwhile. The modal itself runs on a
+later UI-thread turn rather than inside the call that requests it, because a
+nested modal loop would otherwise re-enter the host loop underneath a live TS
+frame; [docs/native-shell.md](../../docs/native-shell.md) has the details, the
+per-platform table, and the Windows GUI-subsystem note.
 
 ## Migrating from 0.1.x
 
@@ -223,12 +260,12 @@ no `-framework` support) and the binary is wrapped into an ad-hoc-signed
 
 ## Status
 
-Early proof of concept, macOS (arm64) and Linux (WebKitGTK). The design
-notes and scriptc findings behind it are in
-[docs/findings.md](docs/findings.md). Not yet: Windows, async commands
-that run in parallel (host code is single-threaded; `commandAsync` interleaves
-instead), native dialogs/tray/menus, multi-window,
-icons/installers/notarization.
+Early proof of concept, on macOS (arm64), Linux (WebKitGTK) and Windows
+(WebView2). The design notes and scriptc findings behind it are in
+[docs/findings.md](../../docs/findings.md). Not yet: async commands that run in
+parallel (host code is single-threaded; `commandAsync` interleaves instead),
+tray icons and menus, multi-window, directory picking on Windows,
+`app.center()`, and icons/installers/notarization.
 
 ## Releasing
 
