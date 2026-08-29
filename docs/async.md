@@ -82,3 +82,62 @@ Verified ordering with a 400 ms async command in flight:
 The upstream change that would lift this: thread-safe scriptc runtime objects
 (or a documented per-thread runtime), which would let the shim run handlers on
 a pool and marshal results back through `webview_dispatch`.
+
+## Non-blocking file I/O
+
+Parking a promise does not make a blocking syscall stop blocking. `readFileSync`
+inside a `commandAsync` handler still freezes the window for the duration of
+the read — the loop cannot turn while the host is inside the syscall, exactly
+as it cannot turn while it is inside `wv_run`.
+
+Node solves this with libuv's thread pool; janela solves it the same way, in
+the shim:
+
+- `wv_fs_read` / `wv_fs_write` start a `std::thread` that performs the syscall
+  into a job buffer and flips an atomic status. The worker touches only its own
+  job and **never calls into TS** — scriptc's runtime is not thread-safe, so
+  that invariant is what keeps this sound.
+- The host loop polls finished jobs on its tick and drains the bytes on the UI
+  thread, where TS is safe to run.
+- On failure the job buffer holds the error message instead of the contents, so
+  success and failure share one drain path. Errors surface as values
+  (`ENOENT: no such file or directory, open '/x'`), never as throws.
+
+```ts
+app.commandAsync("readFile", (argsJson, resolve) => {
+  const a = JSON.parse(argsJson) as { path: string };
+  app.readFileAsync(a.path, (err, text) => {
+    resolve(JSON.stringify(err !== null ? { ok: false, error: err } : { ok: true, text }));
+  });
+});
+```
+
+Verified: a `ping` command answered at **t+0 ms** while a 1 MB read was still
+in flight, and the read completed at t+129 ms. Quitting with two reads in
+flight exits 0 — the shim joins its workers at shutdown.
+
+### The cost is the drain, not the read
+
+Format-2 FFI has no `bytes` return, so the payload crosses one byte per call
+and is rebuilt in TS. Measured on macOS arm64 (M-series, warm page cache):
+
+| File | Total |
+|---|---|
+| 1 MB | 120 ms |
+| 10 MB | 1,170 ms |
+
+That is ~8.5 MB/s, and it is spent **on the UI thread**, inside one tick. So
+the syscall no longer blocks the window, but materializing a very large file
+still does, for roughly 115 ms per MB. Read config files and documents freely;
+do not stream video through it.
+
+**A quadratic trap found while measuring this.** Building the result with
+`s = s + c` in a loop is O(n²) in scriptc 0.0.32 — 200k single-character
+appends cost 449 ms versus **2 ms** for `parts.push(c)` + `join("")`. That one
+change took a 1 MB read from 11,888 ms to 120 ms (99×). `drainJob` and
+`readRequest` both build with push+join for this reason; anything in this
+runtime that accumulates a string in a loop must do the same.
+
+The pending upgrade to scriptc 0.0.35 (FFI formats 3–5: `bytes` params,
+`cstring`, retained callbacks) should remove the byte-at-a-time drain
+altogether, which is why no packing micro-optimisation was attempted here.

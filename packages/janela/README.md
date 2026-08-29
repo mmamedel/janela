@@ -108,6 +108,34 @@ app.commandAsync("countTo", (argsJson, resolve) => {
 - `resolve(json)` / `reject(json)` settle the page's promise; `reject` makes
   `await janela.invoke(...)` throw. Settling twice is ignored.
 
+## File I/O
+
+`node:fs` works in a handler, but `readFileSync` **blocks the window** for as
+long as the syscall runs — parking a promise does not change that. Use the
+async pair instead: the syscall runs on a worker thread inside the shim, and
+only the result crosses back to your (single-threaded) TypeScript.
+
+```ts
+app.commandAsync("readFile", (argsJson, resolve) => {
+  const a = JSON.parse(argsJson) as { path: string };
+  app.readFileAsync(a.path, (err, text) => {
+    if (err !== null) { resolve(JSON.stringify({ ok: false, error: err })); return; }
+    resolve(JSON.stringify({ ok: true, text }));
+  });
+});
+
+app.writeFileAsync("out.txt", "contents", (err) => { /* err is null on success */ });
+```
+
+Errors arrive as values, never throws — `err` carries a Node-shaped message
+(`ENOENT: no such file or directory, open '/x'`). UTF-8 round-trips exactly,
+astral characters included.
+
+The payload still crosses the FFI boundary one byte per call (format 2), which
+costs about **115 ms per MB on the UI thread** — fine for config files and
+documents, wrong for streaming large media. See
+[docs/async.md](../../docs/async.md) for the measurements.
+
 **Use `app.sleep`, not `setTimeout`.** scriptc's own event loop is parked for
 as long as the program sits inside the `run()` FFI call, so `setTimeout`,
 `queueMicrotask` and `await` in host code never fire while the window is open

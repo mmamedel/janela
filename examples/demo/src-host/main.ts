@@ -8,31 +8,32 @@
 // complete variable initializer — wrap it in any expression (`+ 0`). Plain
 // TypeScript like everything in this file is unaffected.
 
-import { readFileSync, statSync } from "node:fs";
 import type { JanelaApp } from "./janela";
 
 // Cap what we ship to the page — this is a viewer, not an editor.
 const MAX_PREVIEW = 64 * 1024;
 
 export function setup(app: JanelaApp): void {
-  app.command("readFile", (argsJson) => {
+  // readFileAsync, not node:fs readFileSync: the syscall runs on a shim worker
+  // thread, so the window keeps painting and other commands keep answering
+  // even while a large file is being read.
+  app.commandAsync("readFile", (argsJson, resolve) => {
     const a = JSON.parse(argsJson) as { path: string };
-    try {
-      const st = statSync(a.path);
-      if (!st.isFile()) {
-        return JSON.stringify({ ok: false, error: a.path + " is not a regular file" });
+    app.readFileAsync(a.path, (err, text) => {
+      if (err !== null) {
+        resolve(JSON.stringify({ ok: false, error: err }));
+        return;
       }
-      const text = readFileSync(a.path, "utf8");
       const truncated = text.length > MAX_PREVIEW;
-      return JSON.stringify({
-        ok: true,
-        size: st.size,
-        truncated,
-        content: truncated ? text.slice(0, MAX_PREVIEW) : text,
-      });
-    } catch (e) {
-      return JSON.stringify({ ok: false, error: (e as Error).message });
-    }
+      resolve(
+        JSON.stringify({
+          ok: true,
+          size: text.length,
+          truncated,
+          content: truncated ? text.slice(0, MAX_PREVIEW) : text,
+        }),
+      );
+    });
   });
 
   app.command("add", (argsJson) => {

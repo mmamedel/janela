@@ -17,6 +17,10 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -72,6 +76,121 @@ App *app_at(int32_t h) {
 // scriptc passes strings as (ptr, len) and does NOT NUL-terminate.
 std::string to_str(const uint8_t *p, size_t n) {
   return std::string(reinterpret_cast<const char *>(p), n);
+}
+
+// ---- file I/O jobs ---------------------------------------------------------
+//
+// The whole point of this subsystem is that the blocking syscall happens HERE,
+// on a worker thread, and never on the UI thread. A worker touches only its
+// own job and never calls into TS — scriptc's runtime is not thread-safe, so
+// results cross back on the UI thread, drained by the tick loop.
+
+const int32_t FS_PENDING = 0;
+const int32_t FS_OK = 1;
+const int32_t FS_ERROR = 2;
+
+struct FsJob {
+  // Written by the worker before `status` flips; read by the UI thread only
+  // after it observes a terminal status. The release/acquire pair on `status`
+  // is what publishes `data`, so no lock is needed for the payload itself.
+  std::atomic<int32_t> status{FS_PENDING};
+  std::string data;  // file contents on success, the error message on failure
+  std::thread worker;
+  bool used = false;
+};
+
+// Jobs are addressed by index and held behind unique_ptr so the vector may
+// grow without invalidating a worker's pointer to its own job.
+std::mutex g_fs_mu;
+std::vector<std::unique_ptr<FsJob>> g_fs_jobs;
+
+FsJob *fs_job_at(int32_t id) {
+  std::lock_guard<std::mutex> lock(g_fs_mu);
+  if (id < 0 || static_cast<size_t>(id) >= g_fs_jobs.size()) return nullptr;
+  FsJob *j = g_fs_jobs[id].get();
+  return j->used ? j : nullptr;
+}
+
+// Reuses a finished slot when one is free, so a long-running app that reads
+// many files does not grow the table without bound.
+int32_t fs_new_job() {
+  std::lock_guard<std::mutex> lock(g_fs_mu);
+  for (size_t i = 0; i < g_fs_jobs.size(); i++) {
+    if (g_fs_jobs[i]->used) continue;
+    if (g_fs_jobs[i]->worker.joinable()) g_fs_jobs[i]->worker.join();
+    g_fs_jobs[i]->status.store(FS_PENDING);
+    g_fs_jobs[i]->data.clear();
+    g_fs_jobs[i]->used = true;
+    return static_cast<int32_t>(i);
+  }
+  g_fs_jobs.push_back(std::unique_ptr<FsJob>(new FsJob()));
+  g_fs_jobs.back()->used = true;
+  return static_cast<int32_t>(g_fs_jobs.size() - 1);
+}
+
+// Node-shaped messages: janela apps already surface node:fs errors from
+// synchronous handlers, so the async path should read the same.
+std::string fs_error_message(const std::string &path, const char *op) {
+  std::error_code ec;
+  auto st = std::filesystem::status(path, ec);
+  if (st.type() == std::filesystem::file_type::not_found) {
+    return "ENOENT: no such file or directory, " + std::string(op) + " '" +
+           path + "'";
+  }
+  if (st.type() == std::filesystem::file_type::directory) {
+    return "EISDIR: illegal operation on a directory, " + std::string(op) +
+           " '" + path + "'";
+  }
+  return "EIO: failed to " + std::string(op) + " '" + path + "'";
+}
+
+void fs_finish(FsJob *j, int32_t status, std::string payload) {
+  j->data = std::move(payload);
+  j->status.store(status, std::memory_order_release);
+}
+
+void fs_read_worker(FsJob *j, std::string path) {
+  std::error_code ec;
+  if (std::filesystem::is_directory(path, ec)) {
+    fs_finish(j, FS_ERROR, fs_error_message(path, "read"));
+    return;
+  }
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    fs_finish(j, FS_ERROR, fs_error_message(path, "open"));
+    return;
+  }
+  std::string buf((std::istreambuf_iterator<char>(in)),
+                  std::istreambuf_iterator<char>());
+  if (in.bad()) {
+    fs_finish(j, FS_ERROR, fs_error_message(path, "read"));
+    return;
+  }
+  fs_finish(j, FS_OK, std::move(buf));
+}
+
+void fs_write_worker(FsJob *j, std::string path, std::string data) {
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  if (!out) {
+    fs_finish(j, FS_ERROR, fs_error_message(path, "open"));
+    return;
+  }
+  out.write(data.data(), static_cast<std::streamsize>(data.size()));
+  out.flush();
+  if (!out) {
+    fs_finish(j, FS_ERROR, fs_error_message(path, "write"));
+    return;
+  }
+  fs_finish(j, FS_OK, std::string());
+}
+
+// Join every worker. Called at shutdown so no thread outlives the process's
+// orderly exit (and so nothing writes into a job after main returns).
+void fs_join_all() {
+  std::lock_guard<std::mutex> lock(g_fs_mu);
+  for (size_t i = 0; i < g_fs_jobs.size(); i++) {
+    if (g_fs_jobs[i]->worker.joinable()) g_fs_jobs[i]->worker.join();
+  }
 }
 
 // The single C trampoline registered with webview_bind for every binding.
@@ -295,6 +414,72 @@ int32_t wv_tick_stop(int32_t h) {
   return 0;
 }
 
+// ---- async file I/O ---------------------------------------------------------
+//
+// wv_fs_read/wv_fs_write start a worker thread and return immediately with a
+// job id. TS polls wv_fs_status() from its tick loop and drains the payload
+// with wv_fs_byte() once the job is terminal. On failure the payload is the
+// error message, so success and failure share one drain path.
+
+int32_t wv_fs_read(int32_t h, const uint8_t *p, size_t n) {
+  if (!app_at(h)) return -1;
+  int32_t id = fs_new_job();
+  FsJob *j = fs_job_at(id);
+  if (!j) return -1;
+  j->worker = std::thread(fs_read_worker, j, to_str(p, n));
+  return id;
+}
+
+int32_t wv_fs_write(int32_t h, const uint8_t *p, size_t n, const uint8_t *dp,
+                    size_t dn) {
+  if (!app_at(h)) return -1;
+  int32_t id = fs_new_job();
+  FsJob *j = fs_job_at(id);
+  if (!j) return -1;
+  j->worker = std::thread(fs_write_worker, j, to_str(p, n), to_str(dp, dn));
+  return id;
+}
+
+// 0 = still running, 1 = done, 2 = failed, -1 = no such job.
+int32_t wv_fs_status(int32_t h, int32_t id) {
+  if (!app_at(h)) return -1;
+  FsJob *j = fs_job_at(id);
+  if (!j) return -1;
+  return j->status.load(std::memory_order_acquire);
+}
+
+int32_t wv_fs_len(int32_t h, int32_t id) {
+  if (!app_at(h)) return -1;
+  FsJob *j = fs_job_at(id);
+  if (!j) return -1;
+  if (j->status.load(std::memory_order_acquire) == FS_PENDING) return -1;
+  return static_cast<int32_t>(j->data.size());
+}
+
+int32_t wv_fs_byte(int32_t h, int32_t id, int32_t i) {
+  if (!app_at(h)) return -1;
+  FsJob *j = fs_job_at(id);
+  if (!j) return -1;
+  if (j->status.load(std::memory_order_acquire) == FS_PENDING) return -1;
+  if (i < 0 || static_cast<size_t>(i) >= j->data.size()) return -1;
+  return static_cast<uint8_t>(j->data[i]);
+}
+
+// Release the slot for reuse. Refuses while the worker is still running, so a
+// job's buffer can never be recycled out from under its own thread.
+int32_t wv_fs_free(int32_t h, int32_t id) {
+  if (!app_at(h)) return -1;
+  FsJob *j = fs_job_at(id);
+  if (!j) return -1;
+  if (j->status.load(std::memory_order_acquire) == FS_PENDING) return -1;
+  std::lock_guard<std::mutex> lock(g_fs_mu);
+  if (j->worker.joinable()) j->worker.join();
+  j->data.clear();
+  j->data.shrink_to_fit();
+  j->used = false;
+  return 0;
+}
+
 // Blocks for the app's lifetime; dispatches bind calls into `cb`.
 int32_t wv_run(int32_t h, int32_t (*cb)(uint32_t, uint32_t, void *),
                void *cb_ctx) {
@@ -306,6 +491,7 @@ int32_t wv_run(int32_t h, int32_t (*cb)(uint32_t, uint32_t, void *),
   // The ticker must not outlive the callback it drives.
   a->ticking.store(false);
   if (a->ticker.joinable()) a->ticker.join();
+  fs_join_all();  // nor may an in-flight read outlive the app
   a->cb = nullptr;  // callback must not outlive the call, per lifetime:"call"
   a->cb_ctx = nullptr;
   return rc;
