@@ -186,13 +186,21 @@ function ffiManifest(shimLib) {
     // MinGW ignores MSVC's #pragma comment(lib, ...), so the Win32 imports the
     // WebView2 backend needs are named explicitly. scriptc's own win32 lane
     // already adds advapi32/iphlpapi/ws2_32, so those are omitted here.
-    // `c++` pulls zig's bundled libc++ for the shim's std::string/exceptions.
+    // `c++` pulls libc++ for the shim's std::string/exceptions.
+    //
+    // `pthread` (mingw's libwinpthread) is here to work around an upstream
+    // scriptc bug: its runtime calls clock_gettime/nanosleep, which mingw
+    // declares in <time.h> but implements in winpthreads, and scriptc's win32
+    // link never adds it. Without this the link dies with
+    // "undefined symbol: clock_gettime" — reproducible with a plain
+    // `scriptc build hello.ts` on Windows, no FFI involved.
     return {
       ffi_format: 2,
       functions,
       libraries: [shimLib],
       system_libraries: [
-        "c++", "ole32", "oleaut32", "shlwapi", "shell32", "user32", "version", "gdi32",
+        "c++", "pthread",
+        "ole32", "oleaut32", "shlwapi", "shell32", "user32", "version", "gdi32",
       ],
     };
   }

@@ -70,12 +70,9 @@ jobs:
         if: runner.os == 'Windows' && steps.build.outcome == 'failure'
         shell: bash
         run: |
-          # The shim links fine standalone (verified), so isolate scriptc:
-          # does it link a plain hello-world with no FFI at all?
-          echo 'console.log("hello from scriptc");' > hello.ts
-          set -x
-          node node_modules/scriptc/dist/main.js build hello.ts -o hello.exe 2>&1 | tail -40 || true
-          ls -l hello.exe && ./hello.exe || echo "NO scriptc hello-world on Windows"
+          CLANGDIR=$(dirname "$(which clang)")
+          echo "--- pthread libs available ---"
+          ls "$CLANGDIR/../x86_64-w64-mingw32/lib/" | grep -iE "pthread" || echo "NONE"
       - name: Fail if the Windows build failed
         if: runner.os == 'Windows' && steps.build.outcome == 'failure'
         run: exit 1
