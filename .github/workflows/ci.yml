@@ -56,8 +56,44 @@ jobs:
           </script></body></html>
           EOF
       - name: Build the smoke app
+        id: build
+        continue-on-error: ${{ runner.os == 'Windows' }}
         working-directory: smoke
         run: node ../bin/janela.mjs build
+      # TEMPORARY: scriptc reports only clang's summary line when the link
+      # fails, so reproduce the C++ runtime link by hand to see the real error.
+      - name: Diagnose the Windows link
+        if: runner.os == 'Windows' && steps.build.outcome == 'failure'
+        shell: bash
+        run: |
+          set -x
+          clang -dumpmachine
+          CLANGDIR=$(dirname "$(which clang)")
+          ls "$CLANGDIR/../x86_64-w64-mingw32/lib/" | grep -iE "^lib(c\+\+|unwind|c\+\+abi)" || true
+          cat > tiny.cc <<'EOF'
+          #include <string>
+          extern "C" int shim_probe(const char *s) {
+            std::string v(s);
+            if (v.empty()) throw std::string("boom");
+            return (int)v.size();
+          }
+          EOF
+          cat > tinymain.c <<'EOF'
+          int shim_probe(const char *s);
+          int main(void) { return shim_probe("hi") == 2 ? 0 : 1; }
+          EOF
+          clang++ -c tiny.cc -o tiny.obj -std=c++17
+          clang -c tinymain.c -o tinymain.obj
+          echo "--- link with -lc++ only ---"
+          clang tinymain.obj tiny.obj -lc++ -o probe1.exe 2>&1 | tail -20 || true
+          echo "--- link with -lc++ -lunwind ---"
+          clang tinymain.obj tiny.obj -lc++ -lunwind -o probe2.exe 2>&1 | tail -20 || true
+          echo "--- link via clang++ (reference) ---"
+          clang++ tinymain.obj tiny.obj -o probe3.exe 2>&1 | tail -20 || true
+          ls -l probe*.exe || true
+      - name: Fail if the Windows build failed
+        if: runner.os == 'Windows' && steps.build.outcome == 'failure'
+        run: exit 1
       # macOS runners have no reliable window session for WKWebView, so the
       # macOS leg is build-only; the binary is exercised on Linux under Xvfb.
       - name: Run the smoke app headless (must exit 0)
