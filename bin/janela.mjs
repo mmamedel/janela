@@ -183,6 +183,10 @@ function build(root) {
   const bin = join(outDir, conf.name);
   run(["node", scriptcBin(), "build", "entry.ts", "--ffi", "janela.ffi.json", "-o", bin], { cwd: buildDir });
 
+  // Symbol/debug metadata is ~16% of the binary and apps don't need it.
+  // (On arm64 macOS, strip re-signs ad-hoc automatically.)
+  run(["strip", bin]);
+
   if (process.platform === "darwin") {
     const bundle = join(outDir, `${conf.name}.app`);
     mkdirSync(join(bundle, "Contents", "MacOS"), { recursive: true });
