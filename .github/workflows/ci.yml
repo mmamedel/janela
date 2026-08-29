@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -29,6 +29,7 @@ jobs:
       - name: Scaffold a smoke project
         run: node bin/janela.mjs init smoke
       - name: Make the smoke page self-terminating
+        shell: bash
         run: |
           cat > smoke/index.html <<'EOF'
           <!doctype html><html><body>
@@ -48,3 +49,16 @@ jobs:
         if: runner.os == 'Linux'
         working-directory: smoke
         run: xvfb-run -a ./.janela/out/smoke
+      - name: Confirm the Windows .exe was produced
+        if: runner.os == 'Windows'
+        working-directory: smoke
+        shell: bash
+        run: test -f ./.janela/out/smoke.exe && ls -l ./.janela/out/smoke.exe
+      # Evidence-gathering only: whether a WebView2 window can come up on a
+      # headless Windows runner is unknown, so a failure here must not fail CI.
+      - name: Try running the Windows app (non-blocking)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        working-directory: smoke
+        shell: bash
+        run: timeout 90 ./.janela/out/smoke.exe; echo "exit=$?"

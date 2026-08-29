@@ -19,8 +19,28 @@ janela build              # .janela/out/my-app  (+ my-app.app on macOS)
 ```
 
 Requirements: Node 18+, a C++ compiler (Xcode CLT on macOS; g++ +
-`libwebkit2gtk-4.1-dev` on Linux). A worked example lives in
-[`examples/demo`](examples/demo) — commands, events, and a file reader.
+`libwebkit2gtk-4.1-dev` on Linux; see [Windows](#windows) below). A worked
+example lives in [`examples/demo`](examples/demo) — commands, events, and a
+file reader.
+
+## Windows
+
+`janela build` produces `.janela/out/<name>.exe` using the WebView2 backend.
+You need **clang** (LLVM, which targets the installed MSVC toolchain) and
+**Visual Studio Build Tools**; `clang` must be on `PATH`.
+
+webview.h's Win32 backend includes `WebView2.h`, which Microsoft ships in a
+nuget package rather than in the Windows SDK, so the first build downloads
+`Microsoft.Web.WebView2` into `.janela/cache/` automatically. To build offline
+or pin your own copy, point `JANELA_WEBVIEW2_INCLUDE` at a directory
+containing `WebView2.h`.
+
+End users of your app need the **WebView2 runtime**, which is preinstalled on
+current Windows 10/11 (it ships with Edge).
+
+Two Windows caveats today: the binary is a console subsystem app, so a console
+window appears behind the UI (fine for `janela dev`, not for shipping), and
+there is no installer/packaging step — you get a bare `.exe`, not an MSI.
 
 ## A project
 

@@ -54,16 +54,65 @@ function loadConf(root) {
   return c;
 }
 
+// ---- WebView2 SDK (Windows only) -------------------------------------------
+
+// webview.h's Win32 backend includes <WebView2.h>, which ships in Microsoft's
+// nuget package rather than the Windows SDK. Fetch it once into the build
+// cache (a .nupkg is a zip) unless the caller points at their own copy.
+const WEBVIEW2_VERSION = "1.0.2903.40";
+
+function webview2Include(cacheDir) {
+  const override = process.env.JANELA_WEBVIEW2_INCLUDE;
+  if (override) {
+    if (!existsSync(join(override, "WebView2.h"))) {
+      fail(`JANELA_WEBVIEW2_INCLUDE=${override} does not contain WebView2.h`);
+    }
+    return override;
+  }
+
+  const sdkDir = join(cacheDir, `webview2-${WEBVIEW2_VERSION}`);
+  const incDir = join(sdkDir, "build", "native", "include");
+  if (existsSync(join(incDir, "WebView2.h"))) return incDir;
+
+  console.log(`janela: fetching WebView2 SDK ${WEBVIEW2_VERSION}`);
+  const zip = join(cacheDir, `webview2-${WEBVIEW2_VERSION}.zip`);
+  const url = `https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/${WEBVIEW2_VERSION}`;
+  run([
+    "powershell", "-NoProfile", "-NonInteractive", "-Command",
+    `$ErrorActionPreference='Stop';` +
+      `[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;` +
+      `Invoke-WebRequest -Uri '${url}' -OutFile '${zip}';` +
+      `Expand-Archive -Path '${zip}' -DestinationPath '${sdkDir}' -Force`,
+  ]);
+  if (!existsSync(join(incDir, "WebView2.h"))) {
+    fail(`WebView2 SDK unpacked to ${sdkDir} but no build/native/include/WebView2.h`);
+  }
+  return incDir;
+}
+
 // ---- shim ----------------------------------------------------------------
 
 function buildShim(cacheDir) {
   const src = join(KIT, "shim", "wvshim.cc");
-  const obj = join(cacheDir, "wvshim.o");
-  const lib = join(cacheDir, "libwvshim.a");
+  const win = process.platform === "win32";
+  // On Windows the object file is handed to the link directly: `ar` is not
+  // part of an MSVC toolchain, and a lone object needs no archive index.
+  const obj = join(cacheDir, win ? "wvshim.obj" : "wvshim.o");
+  const lib = win ? obj : join(cacheDir, "libwvshim.a");
   if (existsSync(lib) && statSync(lib).mtimeMs > statSync(src).mtimeMs) return lib;
 
   console.log("janela: compiling webview shim");
   const inc = `-I${join(KIT, "vendor-webview", "core", "include")}`;
+  if (win) {
+    // clang (MSVC target) honours the backend's #pragma comment(lib, ...)
+    // directives, so most Win32 imports resolve without explicit flags.
+    run([
+      "clang++", "-c", src, "-o", obj, "-std=c++17", "-O2", inc,
+      `-I${webview2Include(cacheDir)}`,
+      "-DWIN32_LEAN_AND_MEAN", "-D_WIN32_WINNT=0x0601",
+    ]);
+    return lib;
+  }
   if (process.platform === "darwin") {
     run(["clang++", "-c", src, "-o", obj, "-std=c++17", "-O2", inc]);
   } else {
@@ -102,6 +151,19 @@ function ffiManifest(shimLib) {
     },
     { name: "wvTerminate", symbol: "wv_terminate", params: ["i32"], returns: "i32" },
   ];
+
+  if (process.platform === "win32") {
+    // The backend's #pragma comment(lib, ...) directives cover ole32/shell32/
+    // shlwapi/user32/version/advapi32; these are named explicitly so the link
+    // does not depend on directive support alone. scriptc's own win32 lane
+    // already adds advapi32/iphlpapi/ws2_32, so they are omitted here.
+    return {
+      ffi_format: 2,
+      functions,
+      libraries: [shimLib],
+      system_libraries: ["ole32", "oleaut32", "shlwapi", "shell32", "user32", "version", "gdi32"],
+    };
+  }
 
   if (process.platform === "darwin") {
     // scriptc has no -framework support, but `libraries` entries are passed to
@@ -180,12 +242,14 @@ function build(root) {
   writeFileSync(join(buildDir, "janela.ffi.json"), JSON.stringify(ffiManifest(shimLib), null, 2) + "\n");
 
   console.log("janela: compiling TypeScript to a native binary");
-  const bin = join(outDir, conf.name);
+  // An explicit --out is used verbatim, so the PE suffix is ours to add.
+  const bin = join(outDir, process.platform === "win32" ? `${conf.name}.exe` : conf.name);
   run(["node", scriptcBin(), "build", "entry.ts", "--ffi", "janela.ffi.json", "-o", bin], { cwd: buildDir });
 
   // Symbol/debug metadata is ~16% of the binary and apps don't need it.
-  // (On arm64 macOS, strip re-signs ad-hoc automatically.)
-  run(["strip", bin]);
+  // (On arm64 macOS, strip re-signs ad-hoc automatically.) PE builds keep
+  // their debug info in a side-by-side .pdb, so there is nothing to strip.
+  if (process.platform !== "win32") run(["strip", bin]);
 
   if (process.platform === "darwin") {
     const bundle = join(outDir, `${conf.name}.app`);
