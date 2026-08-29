@@ -2,12 +2,13 @@
 //
 // The Tauri-shaped surface: one `__invoke` binding carries every command as a
 // (name, argsJson) envelope, dispatched to handlers registered on the app
-// object. Backend→frontend events ride wv_eval into the injected bootstrap.
+// object. Handlers see decoded values — the runtime owns JSON at the boundary.
+// Backend→frontend events ride wv_eval into the injected bootstrap.
 //
 // NOTE ON STYLE: every FFI call whose result initializes a variable is written
-// `f(...) + 0`. scriptc 0.0.32 miscompiles a bare FFI call used as a complete
-// initializer/assignment RHS (see FINDINGS.md); any enclosing expression is
-// the workaround.
+// `f(...) + 0`. scriptc miscompiles a bare FFI call used as a complete
+// initializer/assignment RHS — still true in 0.0.35, and reported upstream as
+// vercel-labs/scriptc#21. Any enclosing expression is the workaround.
 
 declare function wvCreate(debug: number): number;
 declare function wvSetTitle(h: number, title: string): number;
@@ -51,21 +52,25 @@ const BOOTSTRAP =
   "  for (var i = 0; i < cbs.length; i++) cbs[i](payload);" +
   "};";
 
-// Handlers receive the invoke args as JSON text and must return JSON text
-// (what the frontend promise resolves with). Throwing is not supported by
-// scriptc across the FFI boundary — return an error envelope instead.
-export type CommandHandler = (argsJson: string) => string;
+// Handlers take the invoked arguments as a value and return a value; the
+// runtime owns JSON at the boundary. `args` is whatever the page passed to
+// janela.invoke(name, args) — cast it to the shape you expect. The return
+// value is what the page's promise resolves with.
+//
+// Throwing is not supported by scriptc across the FFI boundary. Use
+// commandAsync's `reject` to fail a call, or return an error value.
+export type CommandHandler = (args: unknown) => unknown;
 
 /**
  * An async command: return immediately, answer later. `resolve`/`reject` take
- * JSON text and settle the page's `await janela.invoke(...)` promise whenever
+ * a value and settle the page's `await janela.invoke(...)` promise whenever
  * they are called — from a later defer()/sleep() turn, or from another
  * command. The window stays responsive for as long as the call is pending.
  */
 export type AsyncCommandHandler = (
-  argsJson: string,
-  resolve: (json: string) => void,
-  reject: (json: string) => void,
+  args: unknown,
+  resolve: (value: unknown) => void,
+  reject: (reason: unknown) => void,
 ) => void;
 
 /**
@@ -108,12 +113,19 @@ export interface JanelaApp {
     data: string,
     cb: (err: string | null) => void,
   ) => void;
-  /** Fire an event into the page; payloadJson must be valid JSON text. */
-  emit: (event: string, payloadJson: string) => void;
+  /** Fire an event into the page; the payload is delivered as a value. */
+  emit: (event: string, payload: unknown) => void;
   /** Close the window and make run() return. */
   quit: () => void;
   /** Show the page and block until the window closes. Returns the run status. */
   run: (html: string) => number;
+}
+
+// JSON.stringify yields undefined for undefined; the wire always needs a
+// value, and a command that returns nothing should read as null in the page.
+function encode(value: unknown): string {
+  if (value === undefined) return "null";
+  return JSON.stringify(value);
 }
 
 export function createApp(cfg: WindowConfig): JanelaApp {
@@ -266,10 +278,10 @@ export function createApp(cfg: WindowConfig): JanelaApp {
       wake();
     },
 
-    emit: (event, payloadJson) => {
+    emit: (event, payload) => {
       wvEval(
         h,
-        "window.__wvEmit(" + JSON.stringify(event) + "," + payloadJson + ");",
+        "window.__wvEmit(" + JSON.stringify(event) + "," + encode(payload) + ");",
       );
     },
 
@@ -284,10 +296,10 @@ export function createApp(cfg: WindowConfig): JanelaApp {
       wvOnInvoke(h, (req) => {
         const env = JSON.parse(req) as string[];
         const cmd = env[0];
-        const argsJson = env[1];
+        const args = JSON.parse(env[1]) as unknown;
         for (let i = 0; i < app.names.length; i++) {
           if (app.names[i] === cmd) {
-            wvReply(h, app.handlers[i](argsJson));
+            wvReply(h, encode(app.handlers[i](args)));
             return 0;
           }
         }
@@ -298,23 +310,23 @@ export function createApp(cfg: WindowConfig): JanelaApp {
             // that is. Meanwhile the loop is free to serve other calls.
             const id = wvDefer(h) + 0;
             if (id < 0) {
-              wvReply(h, JSON.stringify("cannot defer command: " + cmd));
+              wvReply(h, encode("cannot defer command: " + cmd));
               return 1;
             }
-            const settle = (status: number): ((json: string) => void) => {
+            const settle = (status: number): ((value: unknown) => void) => {
               let done = false;
-              return (json: string) => {
+              return (value: unknown) => {
                 if (done) return; // a promise settles once
                 done = true;
-                wvReply(h, json);
+                wvReply(h, encode(value));
                 wvResolve(h, id, status);
               };
             };
-            asyncHandlers[i](argsJson, settle(0), settle(1));
+            asyncHandlers[i](args, settle(0), settle(1));
             return 0;
           }
         }
-        wvReply(h, JSON.stringify("unknown command: " + cmd));
+        wvReply(h, encode("unknown command: " + cmd));
         return 1; // rejects the frontend promise
       });
 

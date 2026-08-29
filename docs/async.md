@@ -1,6 +1,6 @@
 # Async commands: what the platform actually allows
 
-Measured against scriptc 0.0.32 + webview.h, 2026-08-29. Every claim here was
+Measured against scriptc 0.0.32 + webview.h, 2026-08-29 (the design still holds on 0.0.35). Every claim here was
 verified with a probe binary, not inferred from documentation.
 
 ## The blocking finding
@@ -104,10 +104,10 @@ the shim:
   (`ENOENT: no such file or directory, open '/x'`), never as throws.
 
 ```ts
-app.commandAsync("readFile", (argsJson, resolve) => {
-  const a = JSON.parse(argsJson) as { path: string };
+app.commandAsync("readFile", (args, resolve) => {
+  const a = args as { path: string };
   app.readFileAsync(a.path, (err, text) => {
-    resolve(JSON.stringify(err !== null ? { ok: false, error: err } : { ok: true, text }));
+    resolve(err !== null ? { ok: false, error: err } : { ok: true, text });
   });
 });
 ```
@@ -132,7 +132,7 @@ still does, for roughly 115 ms per MB. Read config files and documents freely;
 do not stream video through it.
 
 **A quadratic trap found while measuring this.** Building the result with
-`s = s + c` in a loop is O(n²) in scriptc 0.0.32 — 200k single-character
+`s = s + c` in a loop is O(n²) in scriptc (0.0.32 and 0.0.35 alike) — 200k single-character
 appends cost 449 ms versus **2 ms** for `parts.push(c)` + `join("")`. That one
 change took a 1 MB read from 11,888 ms to 120 ms (99×). `drainJob` and
 `readRequest` both build with push+join for this reason; anything in this

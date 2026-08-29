@@ -246,21 +246,22 @@
     <div class="code-cols">
       <div class="codecard">
         <div class="bar"><span class="dots"><i></i><i></i><i></i></span>src-host/main.ts <span>— compiled to native</span></div>
-        <pre><code><span class="k">import</span> { readFileSync } <span class="k">from</span> <span class="s">"node:fs"</span>;
-<span class="k">import type</span> { JanelaApp } <span class="k">from</span> <span class="s">"./janela"</span>;
+        <pre><code><span class="k">import type</span> { JanelaApp } <span class="k">from</span> <span class="s">"./janela"</span>;
 
 <span class="k">export function</span> <span class="f">setup</span>(app: JanelaApp): <span class="k">void</span> {
-  app.<span class="f">command</span>(<span class="s">"add"</span>, (argsJson) =&gt; {
-    <span class="k">const</span> a = JSON.<span class="f">parse</span>(argsJson) <span class="k">as</span> { a: <span class="k">number</span>; b: <span class="k">number</span> };
+  app.<span class="f">command</span>(<span class="s">"add"</span>, (args) =&gt; {
+    <span class="k">const</span> a = args <span class="k">as</span> { a: <span class="k">number</span>; b: <span class="k">number</span> };
     <span class="c">// push an event to the page</span>
-    app.<span class="f">emit</span>(<span class="s">"added"</span>, JSON.<span class="f">stringify</span>(a.a + a.b));
-    <span class="k">return</span> JSON.<span class="f">stringify</span>(a.a + a.b);
+    app.<span class="f">emit</span>(<span class="s">"added"</span>, a.a + a.b);
+    <span class="k">return</span> a.a + a.b;
   });
 
-  app.<span class="f">command</span>(<span class="s">"readFile"</span>, (argsJson) =&gt; {
-    <span class="k">const</span> a = JSON.<span class="f">parse</span>(argsJson) <span class="k">as</span> { path: <span class="k">string</span> };
-    <span class="c">// plain node:fs — no plugin layer needed</span>
-    <span class="k">return</span> JSON.<span class="f">stringify</span>(<span class="f">readFileSync</span>(a.path, <span class="s">"utf8"</span>));
+  <span class="c">// off-thread read: the window keeps painting</span>
+  app.<span class="f">commandAsync</span>(<span class="s">"readFile"</span>, (args, resolve) =&gt; {
+    <span class="k">const</span> a = args <span class="k">as</span> { path: <span class="k">string</span> };
+    app.<span class="f">readFileAsync</span>(a.path, (err, text) =&gt; {
+      <span class="f">resolve</span>(err !== <span class="k">null</span> ? { ok: <span class="k">false</span>, err } : { ok: <span class="k">true</span>, text });
+    });
   });
 }</code></pre>
       </div>
