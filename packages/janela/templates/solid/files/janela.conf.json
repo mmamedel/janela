@@ -1,0 +1,10 @@
+{
+  "name": "__NAME__",
+  "identifier": "dev.janela.__NAME__",
+  "version": "0.1.0",
+  "window": {
+    "title": "__NAME__",
+    "width": 640,
+    "height": 420
+  }
+}

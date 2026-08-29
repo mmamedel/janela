@@ -10,10 +10,11 @@
 // webview.h, the vendored webview, the scriptc runtime library, the FFI
 // manifest — lives in this package and is assembled into .janela/ at build time.
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
-  cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync,
+  cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync,
 } from "node:fs";
+import { createServer } from "node:net";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -52,6 +53,149 @@ function loadConf(root) {
     if (!c[k]) fail(`janela.conf.json is missing '${k}'`);
   }
   return c;
+}
+
+// ---- frontend: plain HTML, or a Vite app -----------------------------------
+//
+// A project is in "Vite mode" when it has a vite config at its root; otherwise
+// index.html is inlined verbatim, exactly as janela has always done.
+//
+// There is no file server behind the window: the shim hands the webview one
+// HTML document (webview_set_html). So a Vite build is flattened into that one
+// document — JS inlined as a module script, CSS as a <style>, everything else
+// as a data: URI. The alternative designs (embedding the dist tree and serving
+// it from a localhost HTTP server in the shim, or registering a custom URI
+// scheme per platform) each cost a platform-specific implementation in C++ and
+// buy nothing until an app outgrows a single document.
+
+const VITE_CONFIGS = [
+  "vite.config.js", "vite.config.ts", "vite.config.mjs",
+  "vite.config.mts", "vite.config.cjs", "vite.config.cts",
+];
+
+function viteConfigPath(root) {
+  for (const f of VITE_CONFIGS) {
+    const p = join(root, f);
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
+function viteBin(root) {
+  const p = join(root, "node_modules", ".bin", process.platform === "win32" ? "vite.cmd" : "vite");
+  if (!existsSync(p)) {
+    fail(
+      "this project has a vite config but no local vite — run your package manager's " +
+        "install first (npm install / pnpm install)",
+    );
+  }
+  return p;
+}
+
+const MIME = {
+  ".css": "text/css", ".js": "text/javascript", ".json": "application/json",
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+  ".gif": "image/gif", ".webp": "image/webp", ".avif": "image/avif",
+  ".svg": "image/svg+xml", ".ico": "image/x-icon",
+  ".woff": "font/woff", ".woff2": "font/woff2", ".ttf": "font/ttf", ".otf": "font/otf",
+  ".mp3": "audio/mpeg", ".mp4": "video/mp4", ".webm": "video/webm",
+};
+
+function mimeFor(p) {
+  const dot = p.lastIndexOf(".");
+  return (dot < 0 ? null : MIME[p.slice(dot).toLowerCase()]) ?? "application/octet-stream";
+}
+
+// A dist-relative reference ("/assets/x.js", "./assets/x.js") → absolute path,
+// or null when it points outside the build (a CDN URL, a data: URI, an anchor).
+function distAsset(distDir, ref) {
+  if (!ref || /^(https?:|data:|blob:|#|mailto:)/i.test(ref)) return null;
+  const clean = ref.split("?")[0].split("#")[0].replace(/^\.?\//, "");
+  if (!clean) return null;
+  const p = join(distDir, clean);
+  return existsSync(p) && statSync(p).isFile() ? p : null;
+}
+
+function dataUri(file) {
+  return `data:${mimeFor(file)};base64,${readFileSync(file).toString("base64")}`;
+}
+
+function attr(tag, name) {
+  const m = tag.match(new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, "i"));
+  return m ? m[1] : null;
+}
+
+// url(...) inside CSS → data: URIs, so a stylesheet's images and fonts survive
+// the flattening too.
+function inlineCssUrls(css, distDir, cssFile) {
+  return css.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi, (whole, _q, ref) => {
+    const rel = ref.startsWith("/")
+      ? distAsset(distDir, ref)
+      : distAsset(distDir, relative(distDir, join(dirname(cssFile), ref)));
+    return rel ? `url("${dataUri(rel)}")` : whole;
+  });
+}
+
+// Flatten dist/ into one self-contained HTML document.
+function inlineDist(distDir) {
+  const htmlPath = join(distDir, "index.html");
+  if (!existsSync(htmlPath)) fail(`vite build produced no ${relative(process.cwd(), htmlPath)}`);
+  let html = readFileSync(htmlPath, "utf8");
+
+  // Preloads only matter when there are separate files to fetch.
+  html = html.replace(/<link\b[^>]*\brel\s*=\s*["'](?:modulepreload|preload|prefetch)["'][^>]*>\s*/gi, "");
+
+  html = html.replace(/<script\b([^>]*)><\/script>/gi, (whole, attrs) => {
+    const file = distAsset(distDir, attr(attrs, "src"));
+    if (!file) return whole;
+    const type = /\btype\s*=\s*["']module["']/i.test(attrs) ? ' type="module"' : "";
+    // A literal </script> inside the code would close this tag early.
+    const js = readFileSync(file, "utf8").replace(/<\/script/gi, "<\\/script");
+    return `<script${type}>${js}</script>`;
+  });
+
+  html = html.replace(/<link\b([^>]*)>/gi, (whole, attrs) => {
+    const href = attr(attrs, "href");
+    const file = distAsset(distDir, href);
+    if (!file) return whole;
+    if (/\brel\s*=\s*["']stylesheet["']/i.test(attrs)) {
+      const css = inlineCssUrls(readFileSync(file, "utf8"), distDir, file).replace(/<\/style/gi, "<\\/style");
+      return `<style>${css}</style>`;
+    }
+    return whole.replace(href, dataUri(file));
+  });
+
+  // Anything still pointing at a file in dist (favicons, <img>, <source>).
+  html = html.replace(/\b(src|href)\s*=\s*["']([^"']+)["']/gi, (whole, name, ref) => {
+    const file = distAsset(distDir, ref);
+    return file ? `${name}="${dataUri(file)}"` : whole;
+  });
+
+  return html;
+}
+
+// The document handed to the webview. In dev mode it is a stub that hands the
+// window over to the Vite server: location.replace leaves no history entry, and
+// the janela bootstrap is injected per-document (webview_init), so the served
+// page gets window.janela exactly like an inlined one.
+function frontendHtml(root, conf, devUrl) {
+  if (devUrl) {
+    return `<!doctype html><html><head><meta charset="utf-8"><title>${conf.name}</title></head>` +
+      `<body><script>location.replace(${JSON.stringify(devUrl)});</script></body></html>`;
+  }
+
+  if (viteConfigPath(root)) {
+    console.log("janela: building the frontend with vite");
+    run([viteBin(root), "build"], { cwd: root });
+    const distDir = resolve(root, conf.frontend?.dist ?? "dist");
+    const html = inlineDist(distDir);
+    console.log(`janela: frontend inlined (${(Buffer.byteLength(html) / 1024).toFixed(0)} kB)`);
+    return html;
+  }
+
+  const htmlSrc = join(root, "index.html");
+  if (!existsSync(htmlSrc)) fail("missing index.html");
+  return readFileSync(htmlSrc, "utf8");
 }
 
 // ---- Windows toolchain ------------------------------------------------------
@@ -264,7 +408,7 @@ function ffiManifest(shimLib) {
 
 // ---- build ----------------------------------------------------------------
 
-function build(root) {
+function build(root, devUrl = null) {
   const conf = loadConf(root);
   const buildDir = join(root, ".janela", "build");
   const cacheDir = join(root, ".janela", "cache");
@@ -279,12 +423,10 @@ function build(root) {
   if (!existsSync(mainSrc)) fail("missing src-host/main.ts");
   cpSync(mainSrc, join(buildDir, "main.ts"));
 
-  const htmlSrc = join(root, "index.html");
-  if (!existsSync(htmlSrc)) fail("missing index.html");
-  const html = readFileSync(htmlSrc, "utf8");
+  const html = frontendHtml(root, conf, devUrl);
   writeFileSync(
     join(buildDir, "frontend.ts"),
-    `// Generated by janela from index.html — do not edit.\nexport const INDEX_HTML: string = ${JSON.stringify(html)};\n`,
+    `// Generated by janela — do not edit.\nexport const INDEX_HTML: string = ${JSON.stringify(html)};\n`,
   );
 
   const w = conf.window;
@@ -354,8 +496,25 @@ function build(root) {
 
 // ---- init -----------------------------------------------------------------
 
-function init(name) {
-  if (!name || !/^[a-z][a-z0-9-]*$/.test(name)) fail("usage: janela init <name> (lowercase, digits, dashes)");
+const TEMPLATES = ["vanilla", "vue", "react", "svelte", "solid"];
+
+// Copy a template tree, substituting the project name in text files.
+function copyTemplate(from, to, name) {
+  for (const entry of readdirSync(from, { withFileTypes: true })) {
+    const src = join(from, entry.name);
+    const dst = join(to, entry.name);
+    if (entry.isDirectory()) {
+      mkdirSync(dst, { recursive: true });
+      copyTemplate(src, dst, name);
+    } else {
+      writeFileSync(dst, readFileSync(src, "utf8").replaceAll("__NAME__", name));
+    }
+  }
+}
+
+function init(name, template) {
+  if (!name || !/^[a-z][a-z0-9-]*$/.test(name)) fail("usage: janela init <name> [--template <t>] (lowercase, digits, dashes)");
+  if (!TEMPLATES.includes(template)) fail(`unknown template '${template}' (${TEMPLATES.join(", ")})`);
   const dir = resolve(process.cwd(), name);
   if (existsSync(dir)) fail(`${name}/ already exists`);
   mkdirSync(join(dir, "src-host"), { recursive: true });
@@ -367,44 +526,129 @@ function init(name) {
     ? `^${kitPkg.version}`
     : `file:${relative(dir, KIT) || "."}`;
 
-  const t = (f) => readFileSync(join(KIT, "templates", f), "utf8").replaceAll("__NAME__", name);
-  writeFileSync(join(dir, "index.html"), t("index.html"));
-  writeFileSync(join(dir, "src-host", "main.ts"), t("main.ts"));
-  writeFileSync(join(dir, "janela.conf.json"), t("janela.conf.json"));
-  writeFileSync(join(dir, ".gitignore"), ".janela/\nnode_modules/\n");
-  writeFileSync(
-    join(dir, "package.json"),
-    JSON.stringify(
-      {
-        name,
-        private: true,
-        scripts: { dev: "janela dev", build: "janela build" },
-        devDependencies: { janela: janelaDep },
-      },
-      null,
-      2,
-    ) + "\n",
-  );
-  console.log(`janela: created ${name}/ — next: cd ${name} && janela dev`);
+  const pkg = {
+    name,
+    private: true,
+    scripts: { dev: "janela dev", build: "janela build" },
+    devDependencies: { janela: janelaDep },
+  };
+
+  if (template === "vanilla") {
+    // The zero-dependency shape janela has always scaffolded: no frontend
+    // toolchain, no npm install needed before the first build.
+    const t = (f) => readFileSync(join(KIT, "templates", f), "utf8").replaceAll("__NAME__", name);
+    writeFileSync(join(dir, "index.html"), t("index.html"));
+    writeFileSync(join(dir, "src-host", "main.ts"), t("main.ts"));
+    writeFileSync(join(dir, "janela.conf.json"), t("janela.conf.json"));
+  } else {
+    const tdir = join(KIT, "templates", template);
+    copyTemplate(join(tdir, "files"), dir, name);
+    const extra = JSON.parse(readFileSync(join(tdir, "deps.json"), "utf8"));
+    pkg.type = "module";
+    Object.assign(pkg.devDependencies, extra.devDependencies ?? {});
+    if (extra.dependencies) pkg.dependencies = extra.dependencies;
+  }
+
+  writeFileSync(join(dir, ".gitignore"), ".janela/\nnode_modules/\ndist/\n");
+  writeFileSync(join(dir, "package.json"), JSON.stringify(pkg, null, 2) + "\n");
+
+  const install = template === "vanilla" ? "" : "npm install && ";
+  console.log(`janela: created ${name}/ (${template}) — next: cd ${name} && ${install}janela dev`);
+}
+
+// ---- dev --------------------------------------------------------------------
+
+function freePort() {
+  return new Promise((ok, no) => {
+    const s = createServer();
+    s.on("error", no);
+    s.listen(0, "127.0.0.1", () => {
+      const { port } = s.address();
+      s.close(() => ok(port));
+    });
+  });
+}
+
+async function waitForServer(url, child, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) fail(`the vite dev server exited (code ${child.exitCode})`);
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(1000) });
+      if (r.ok || r.status === 404) return;
+    } catch {
+      // not listening yet
+    }
+    await new Promise((ok) => setTimeout(ok, 150));
+  }
+  fail(`the vite dev server did not answer at ${url} within ${timeoutMs / 1000}s`);
+}
+
+async function dev(root) {
+  let vite = null;
+  let devUrl = null;
+
+  if (viteConfigPath(root)) {
+    const port = await freePort();
+    devUrl = `http://localhost:${port}/`;
+    console.log(`janela: starting the vite dev server on ${devUrl}`);
+    vite = spawn(viteBin(root), ["--port", String(port), "--strictPort"], {
+      cwd: root,
+      stdio: "inherit",
+      // Windows resolves .cmd shims through the shell.
+      shell: process.platform === "win32",
+    });
+    const stop = () => { if (vite && vite.exitCode === null) vite.kill(); };
+    process.on("exit", stop);
+    process.on("SIGINT", () => { stop(); process.exit(130); });
+    await waitForServer(devUrl, vite);
+  }
+
+  const bin = build(root, devUrl);
+  console.log("janela: running (close the window or Ctrl-C to stop)");
+  // The frontend hot-reloads through vite; host changes need another `dev`.
+  run([bin]);
+  if (vite && vite.exitCode === null) vite.kill();
 }
 
 // ---- main -----------------------------------------------------------------
 
-const [cmd, arg] = process.argv.slice(2);
+const argv = process.argv.slice(2);
+const cmd = argv[0];
+
+function flag(name, fallback) {
+  const eq = argv.find((a) => a.startsWith(`--${name}=`));
+  if (eq) return eq.slice(name.length + 3);
+  const i = argv.indexOf(`--${name}`);
+  if (i >= 0 && argv[i + 1] && !argv[i + 1].startsWith("--")) return argv[i + 1];
+  return fallback;
+}
+
+// Everything after the subcommand that is neither a flag nor a flag's value.
+function positionals() {
+  const out = [];
+  for (let i = 1; i < argv.length; i++) {
+    const a = argv[i];
+    if (!a.startsWith("--")) { out.push(a); continue; }
+    if (!a.includes("=") && argv[i + 1] && !argv[i + 1].startsWith("--")) i++;
+  }
+  return out;
+}
+
 switch (cmd) {
   case "init":
-    init(arg);
+    init(positionals()[0], flag("template", "vanilla"));
     break;
   case "build":
     build(process.cwd());
     break;
-  case "dev": {
-    const bin = build(process.cwd());
-    console.log("janela: running (close the window or Ctrl-C to stop)");
-    run([bin]);
+  case "dev":
+    await dev(process.cwd());
     break;
-  }
   default:
-    console.log("usage: janela init <name> | janela build | janela dev");
+    console.log(
+      "usage: janela init <name> [--template vanilla|vue|react|svelte|solid]\n" +
+        "       janela build | janela dev",
+    );
     process.exit(cmd ? 1 : 0);
 }

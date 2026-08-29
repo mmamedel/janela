@@ -75,3 +75,35 @@ jobs:
           test -f ./.janela/out/smoke.exe
           ls -l ./.janela/out/smoke.exe
           ./.janela/out/smoke.exe
+      # --- vite frontend: one framework template must build AND run end to
+      # end, proving the vite build really is flattened into the binary and
+      # that janela.invoke reaches the host from inside a component. Linux
+      # only: this exercises the vite pipeline, not the platform backends,
+      # which the smoke steps above already cover on all three.
+      - name: Build and run a Vite (Vue) app
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          node packages/janela/bin/janela.mjs init vueci --template vue
+          cd vueci
+          npm install --no-audit --no-fund
+          cat > src/App.vue <<'EOF'
+          <script setup>
+          import { nextTick, onMounted, ref } from "vue";
+          const greeting = ref("…");
+          onMounted(async () => {
+            greeting.value = await janela.invoke("greet", { name: "vueci" });
+            // Vue patches the DOM asynchronously; without this the assertion
+            // below would read the placeholder and pass for the wrong reason.
+            await nextTick();
+            await janela.invoke("log", "vue rendered: " + document.querySelector("h1").textContent);
+            await janela.invoke("quit");
+          });
+          </script>
+          <template><h1>{{ greeting }}</h1></template>
+          EOF
+          node ../packages/janela/bin/janela.mjs build
+          xvfb-run -a ./.janela/out/vueci | tee run.log
+          # The component must have rendered the host's reply, not the "…"
+          # placeholder — otherwise the round trip silently did nothing.
+          grep -q "vue rendered: Hello, vueci — from the native TS binary" run.log
