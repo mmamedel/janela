@@ -25,13 +25,21 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev xvfb
-      # scriptc's Windows runtime is MinGW-shaped, so the Windows leg builds
-      # through zig's bundled mingw-w64 toolchain rather than MSVC.
-      - name: Install zig (Windows)
+      # scriptc's Windows runtime needs a full mingw-w64 (ssize_t, nanosleep,
+      # clock_gettime), so the Windows leg uses llvm-mingw's clang rather than
+      # the runner's MSVC-targeting one. Prepended to PATH so it wins.
+      - name: Install llvm-mingw (Windows)
         if: runner.os == 'Windows'
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.13.0
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = '20240619'
+          $zip = "$env:RUNNER_TEMP\llvm-mingw.zip"
+          Invoke-WebRequest -Uri "https://github.com/mstorsjo/llvm-mingw/releases/download/$tag/llvm-mingw-$tag-ucrt-x86_64.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath "$env:RUNNER_TEMP\llvm-mingw" -Force
+          $bin = (Get-ChildItem "$env:RUNNER_TEMP\llvm-mingw" -Directory | Select-Object -First 1).FullName + '\bin'
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & "$bin\clang" -dumpmachine
       - run: npm ci
       - name: Scaffold a smoke project
         run: node bin/janela.mjs init smoke

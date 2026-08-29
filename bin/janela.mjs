@@ -56,27 +56,31 @@ function loadConf(root) {
 
 // ---- Windows toolchain ------------------------------------------------------
 
-// scriptc's win32 lane is MinGW-shaped: its runtime uses POSIX types (ssize_t)
-// that the MSVC CRT does not define, so a default `clang` on Windows — which
-// targets MSVC — cannot compile it. zig bundles mingw-w64 headers and CRT and
-// is a single portable binary, so it is the toolchain janela asks for on
-// Windows, for both the shim and scriptc's own link.
-const WIN_TARGET = "x86_64-windows-gnu";
-
-function zigOrFail() {
-  const probe = spawnSync("zig", ["version"], { encoding: "utf8" });
+// scriptc's win32 lane is MinGW-shaped twice over: its runtime uses POSIX
+// types the MSVC CRT lacks (ssize_t), and its event loop calls POSIX time
+// APIs that only a full mingw-w64 provides ("the idle sleep is nanosleep
+// (mingw-w64 ships it, over Sleep)" — scr_async.c). So Windows builds need a
+// clang whose DEFAULT target is mingw: llvm-mingw, MSYS2's clang64, or
+// WinLibs. A stock MSVC-targeting clang cannot compile scriptc's runtime, and
+// zig's bundled mingw omits winpthreads, so it cannot either.
+function winCcOrFail() {
+  const probe = spawnSync("clang", ["-dumpmachine"], { encoding: "utf8" });
   if (probe.status !== 0) {
     fail(
-      "Windows builds need `zig` on PATH (scriptc's Windows runtime is MinGW-based " +
-        "and the MSVC toolchain cannot compile it). Install from https://ziglang.org/download/",
+      "Windows builds need a MinGW-targeting clang on PATH. Install llvm-mingw " +
+        "(https://github.com/mstorsjo/llvm-mingw/releases) or MSYS2's clang64 toolchain.",
     );
   }
-  return probe.stdout.trim();
-}
-
-// Env that puts scriptc on the same MinGW target as the shim.
-function winScriptcEnv() {
-  return { ...process.env, SCRIPTC_CC: "zigcc", SCRIPTC_TARGET: WIN_TARGET };
+  const triple = probe.stdout.trim();
+  if (!/mingw|windows-gnu/i.test(triple)) {
+    fail(
+      `clang on PATH targets '${triple}', but scriptc's Windows runtime only builds with ` +
+        "MinGW (it uses ssize_t/nanosleep/clock_gettime, which the MSVC CRT lacks). " +
+        "Put a MinGW-targeting clang first on PATH — llvm-mingw " +
+        "(https://github.com/mstorsjo/llvm-mingw/releases) or MSYS2's clang64.",
+    );
+  }
+  return triple;
 }
 
 // ---- WebView2 SDK (Windows only) -------------------------------------------
@@ -129,10 +133,9 @@ function buildShim(cacheDir) {
   console.log("janela: compiling webview shim");
   const inc = `-I${join(KIT, "vendor-webview", "core", "include")}`;
   if (win) {
-    console.log(`janela: using zig ${zigOrFail()} for the ${WIN_TARGET} target`);
+    console.log(`janela: building for ${winCcOrFail()}`);
     run([
-      "zig", "c++", "-target", WIN_TARGET,
-      "-c", src, "-o", obj, "-std=c++17", "-O2", inc,
+      "clang++", "-c", src, "-o", obj, "-std=c++17", "-O2", inc,
       // WebView2.h from the nuget SDK, plus mingw's missing EventToken.h.
       `-I${webview2Include(cacheDir)}`,
       `-I${join(KIT, "vendor-webview", "compatibility", "mingw", "include")}`,
@@ -273,12 +276,9 @@ function build(root) {
   console.log("janela: compiling TypeScript to a native binary");
   // An explicit --out is used verbatim, so the PE suffix is ours to add.
   const bin = join(outDir, process.platform === "win32" ? `${conf.name}.exe` : conf.name);
-  run(
-    ["node", scriptcBin(), "build", "entry.ts", "--ffi", "janela.ffi.json", "-o", bin],
-    process.platform === "win32"
-      ? { cwd: buildDir, env: winScriptcEnv() }
-      : { cwd: buildDir },
-  );
+  // No SCRIPTC_CC/SCRIPTC_TARGET on Windows: scriptc's default driver is
+  // plain `clang`, which is exactly the MinGW-targeting clang checked above.
+  run(["node", scriptcBin(), "build", "entry.ts", "--ffi", "janela.ffi.json", "-o", bin], { cwd: buildDir });
 
   // Symbol/debug metadata is ~16% of the binary and apps don't need it.
   // (On arm64 macOS, strip re-signs ad-hoc automatically.) PE builds keep
