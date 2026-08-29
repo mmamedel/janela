@@ -53,6 +53,48 @@ export function setup(app: JanelaApp): void {
 }
 ```
 
+## Async commands
+
+A command that has to wait — or to chew through real work — should not freeze
+the window. Register it with `commandAsync` and answer whenever you are ready;
+the page keeps using the same `await janela.invoke(...)`.
+
+```ts
+app.commandAsync("wait", (argsJson, resolve, reject) => {
+  const a = JSON.parse(argsJson) as { ms: number };
+  app.sleep(a.ms, () => resolve(JSON.stringify("done")));   // resolve later
+});
+
+// Work that cannot just wait: slice it, yielding to the UI between slices.
+app.commandAsync("countTo", (argsJson, resolve) => {
+  const a = JSON.parse(argsJson) as { n: number };
+  let i = 0;
+  const step = (): void => {
+    const end = Math.min(i + 2_000_000, a.n);
+    for (; i < end; i++) { /* ... */ }
+    if (i < a.n) app.defer(step); else resolve(JSON.stringify(i));
+  };
+  app.defer(step);
+});
+```
+
+- `app.defer(fn)` — run `fn` on the next turn of the host loop.
+- `app.sleep(ms, fn)` — run `fn` after at least `ms`.
+- `resolve(json)` / `reject(json)` settle the page's promise; `reject` makes
+  `await janela.invoke(...)` throw. Settling twice is ignored.
+
+**Use `app.sleep`, not `setTimeout`.** scriptc's own event loop is parked for
+as long as the program sits inside the `run()` FFI call, so `setTimeout`,
+`queueMicrotask` and `await` in host code never fire while the window is open
+(they all run after it closes). janela supplies its own loop instead: a native
+ticker posts work to the UI thread via `webview_dispatch`, and it only runs
+while something is queued, so an idle app costs nothing.
+
+**Still single-threaded.** scriptc's runtime is not thread-safe (concurrent
+calls from several threads abort the process), so host code always runs on the
+UI thread. Async here means *interleaved*, not parallel: a handler that blocks
+without yielding still freezes the window. Slice long work with `defer`.
+
 The backend is ordinary TypeScript with scriptc's stdlib — including a
 `node:fs` subset — so "read a file" or "call an API" is just code in a
 command handler, no plugin layer needed.
@@ -76,8 +118,9 @@ no `-framework` support) and the binary is wrapped into an ad-hoc-signed
   RHS — it is silently miscompiled. Wrap it in any expression (`+ 0`). Plain
   TypeScript is unaffected; only the runtime does FFI, so app code rarely
   meets this.
-- One window per app for now; the run loop is single-threaded, so a slow
-  command blocks the UI (same as a blocking Tauri command handler).
+- One window per app for now. Host code is single-threaded: a synchronous
+  command blocks the UI while it runs — use `commandAsync` + `defer`/`sleep`
+  (see "Async commands") for anything slow.
 - `console.log` from commands goes to stdout — visible under `janela dev`,
   not when launched from Finder.
 
@@ -86,7 +129,8 @@ no `-framework` support) and the binary is wrapped into an ad-hoc-signed
 Early proof of concept, macOS (arm64) and Linux (WebKitGTK). The design
 notes and scriptc findings behind it are in
 [docs/findings.md](docs/findings.md). Not yet: Windows, async commands
-(the run loop is single-threaded), native dialogs/tray/menus, multi-window,
+that run in parallel (host code is single-threaded; `commandAsync` interleaves
+instead), native dialogs/tray/menus, multi-window,
 icons/installers/notarization.
 
 ## Releasing
