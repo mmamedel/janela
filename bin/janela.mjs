@@ -54,16 +54,95 @@ function loadConf(root) {
   return c;
 }
 
+// ---- Windows toolchain ------------------------------------------------------
+
+// scriptc's win32 lane is MinGW-shaped twice over: its runtime uses POSIX
+// types the MSVC CRT lacks (ssize_t), and its event loop calls POSIX time
+// APIs that only a full mingw-w64 provides ("the idle sleep is nanosleep
+// (mingw-w64 ships it, over Sleep)" — scr_async.c). So Windows builds need a
+// clang whose DEFAULT target is mingw: llvm-mingw, MSYS2's clang64, or
+// WinLibs. A stock MSVC-targeting clang cannot compile scriptc's runtime, and
+// zig's bundled mingw omits winpthreads, so it cannot either.
+function winCcOrFail() {
+  const probe = spawnSync("clang", ["-dumpmachine"], { encoding: "utf8" });
+  if (probe.status !== 0) {
+    fail(
+      "Windows builds need a MinGW-targeting clang on PATH. Install llvm-mingw " +
+        "(https://github.com/mstorsjo/llvm-mingw/releases) or MSYS2's clang64 toolchain.",
+    );
+  }
+  const triple = probe.stdout.trim();
+  if (!/mingw|windows-gnu/i.test(triple)) {
+    fail(
+      `clang on PATH targets '${triple}', but scriptc's Windows runtime only builds with ` +
+        "MinGW (it uses ssize_t/nanosleep/clock_gettime, which the MSVC CRT lacks). " +
+        "Put a MinGW-targeting clang first on PATH — llvm-mingw " +
+        "(https://github.com/mstorsjo/llvm-mingw/releases) or MSYS2's clang64.",
+    );
+  }
+  return triple;
+}
+
+// ---- WebView2 SDK (Windows only) -------------------------------------------
+
+// webview.h's Win32 backend includes <WebView2.h>, which ships in Microsoft's
+// nuget package rather than the Windows SDK. Fetch it once into the build
+// cache (a .nupkg is a zip) unless the caller points at their own copy.
+const WEBVIEW2_VERSION = "1.0.2903.40";
+
+function webview2Include(cacheDir) {
+  const override = process.env.JANELA_WEBVIEW2_INCLUDE;
+  if (override) {
+    if (!existsSync(join(override, "WebView2.h"))) {
+      fail(`JANELA_WEBVIEW2_INCLUDE=${override} does not contain WebView2.h`);
+    }
+    return override;
+  }
+
+  const sdkDir = join(cacheDir, `webview2-${WEBVIEW2_VERSION}`);
+  const incDir = join(sdkDir, "build", "native", "include");
+  if (existsSync(join(incDir, "WebView2.h"))) return incDir;
+
+  console.log(`janela: fetching WebView2 SDK ${WEBVIEW2_VERSION}`);
+  const zip = join(cacheDir, `webview2-${WEBVIEW2_VERSION}.zip`);
+  const url = `https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/${WEBVIEW2_VERSION}`;
+  run([
+    "powershell", "-NoProfile", "-NonInteractive", "-Command",
+    `$ErrorActionPreference='Stop';` +
+      `[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;` +
+      `Invoke-WebRequest -Uri '${url}' -OutFile '${zip}';` +
+      `Expand-Archive -Path '${zip}' -DestinationPath '${sdkDir}' -Force`,
+  ]);
+  if (!existsSync(join(incDir, "WebView2.h"))) {
+    fail(`WebView2 SDK unpacked to ${sdkDir} but no build/native/include/WebView2.h`);
+  }
+  return incDir;
+}
+
 // ---- shim ----------------------------------------------------------------
 
 function buildShim(cacheDir) {
   const src = join(KIT, "shim", "wvshim.cc");
-  const obj = join(cacheDir, "wvshim.o");
-  const lib = join(cacheDir, "libwvshim.a");
+  const win = process.platform === "win32";
+  // On Windows the object file is handed to the link directly: `ar` is not
+  // part of an MSVC toolchain, and a lone object needs no archive index.
+  const obj = join(cacheDir, win ? "wvshim.obj" : "wvshim.o");
+  const lib = win ? obj : join(cacheDir, "libwvshim.a");
   if (existsSync(lib) && statSync(lib).mtimeMs > statSync(src).mtimeMs) return lib;
 
   console.log("janela: compiling webview shim");
   const inc = `-I${join(KIT, "vendor-webview", "core", "include")}`;
+  if (win) {
+    console.log(`janela: building for ${winCcOrFail()}`);
+    run([
+      "clang++", "-c", src, "-o", obj, "-std=c++17", "-O2", inc,
+      // WebView2.h from the nuget SDK, plus mingw's missing EventToken.h.
+      `-I${webview2Include(cacheDir)}`,
+      `-I${join(KIT, "vendor-webview", "compatibility", "mingw", "include")}`,
+      "-DWIN32_LEAN_AND_MEAN", "-D_WIN32_WINNT=0x0601",
+    ]);
+    return lib;
+  }
   if (process.platform === "darwin") {
     run(["clang++", "-c", src, "-o", obj, "-std=c++17", "-O2", inc]);
   } else {
@@ -107,6 +186,29 @@ function ffiManifest(shimLib) {
     { name: "wvTickStart", symbol: "wv_tick_start", params: ["i32", "i32"], returns: "i32" },
     { name: "wvTickStop", symbol: "wv_tick_stop", params: ["i32"], returns: "i32" },
   ];
+
+  if (process.platform === "win32") {
+    // MinGW ignores MSVC's #pragma comment(lib, ...), so the Win32 imports the
+    // WebView2 backend needs are named explicitly. scriptc's own win32 lane
+    // already adds advapi32/iphlpapi/ws2_32, so those are omitted here.
+    // `c++` pulls libc++ for the shim's std::string/exceptions.
+    //
+    // `pthread` (mingw's libwinpthread) is here to work around an upstream
+    // scriptc bug: its runtime calls clock_gettime/nanosleep, which mingw
+    // declares in <time.h> but implements in winpthreads, and scriptc's win32
+    // link never adds it. Without this the link dies with
+    // "undefined symbol: clock_gettime" — reproducible with a plain
+    // `scriptc build hello.ts` on Windows, no FFI involved.
+    return {
+      ffi_format: 2,
+      functions,
+      libraries: [shimLib],
+      system_libraries: [
+        "c++", "pthread",
+        "ole32", "oleaut32", "shlwapi", "shell32", "user32", "version", "gdi32",
+      ],
+    };
+  }
 
   if (process.platform === "darwin") {
     // scriptc has no -framework support, but `libraries` entries are passed to
@@ -185,11 +287,15 @@ function build(root) {
   writeFileSync(join(buildDir, "janela.ffi.json"), JSON.stringify(ffiManifest(shimLib), null, 2) + "\n");
 
   console.log("janela: compiling TypeScript to a native binary");
-  const bin = join(outDir, conf.name);
+  // An explicit --out is used verbatim, so the PE suffix is ours to add.
+  const bin = join(outDir, process.platform === "win32" ? `${conf.name}.exe` : conf.name);
+  // No SCRIPTC_CC/SCRIPTC_TARGET on Windows: scriptc's default driver is
+  // plain `clang`, which is exactly the MinGW-targeting clang checked above.
   run(["node", scriptcBin(), "build", "entry.ts", "--ffi", "janela.ffi.json", "-o", bin], { cwd: buildDir });
 
   // Symbol/debug metadata is ~16% of the binary and apps don't need it.
-  // (On arm64 macOS, strip re-signs ad-hoc automatically.)
+  // (On arm64 macOS, strip re-signs ad-hoc automatically. MinGW keeps DWARF
+  // inside the .exe rather than a side-by-side .pdb, so Windows benefits too.)
   run(["strip", bin]);
 
   if (process.platform === "darwin") {

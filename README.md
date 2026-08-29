@@ -19,8 +19,33 @@ janela build              # .janela/out/my-app  (+ my-app.app on macOS)
 ```
 
 Requirements: Node 18+, a C++ compiler (Xcode CLT on macOS; g++ +
-`libwebkit2gtk-4.1-dev` on Linux). A worked example lives in
-[`examples/demo`](examples/demo) — commands, events, and a file reader.
+`libwebkit2gtk-4.1-dev` on Linux; see [Windows](#windows) below). A worked
+example lives in [`examples/demo`](examples/demo) — commands, events, and a
+file reader.
+
+## Windows
+
+`janela build` produces `.janela/out/<name>.exe` using the WebView2 backend.
+
+**You need a MinGW-targeting clang on `PATH`** — [llvm-mingw][llvm-mingw],
+MSYS2's `clang64` toolchain, or WinLibs. MSVC does **not** work: scriptc's
+runtime uses POSIX types and calls (`ssize_t`, `nanosleep`, `clock_gettime`)
+that the MSVC CRT does not provide. janela checks `clang -dumpmachine` and
+tells you if the wrong one is first on `PATH`.
+
+webview.h's Win32 backend includes `WebView2.h`, which Microsoft ships in a
+nuget package rather than in the Windows SDK, so the first build downloads
+`Microsoft.Web.WebView2` into `.janela/cache/` automatically. To build offline
+or pin your own copy, point `JANELA_WEBVIEW2_INCLUDE` at a directory
+containing `WebView2.h`. No `WebView2Loader.dll` is needed — webview.h has its
+own loader — and end users need only the **WebView2 runtime**, which is
+preinstalled on current Windows 10/11 (it ships with Edge).
+
+Two caveats today: the binary is a console-subsystem app, so a console window
+appears behind the UI (handy for `janela dev`, wrong for shipping), and there
+is no installer step — you get a bare `.exe`, not an MSI.
+
+[llvm-mingw]: https://github.com/mstorsjo/llvm-mingw/releases
 
 ## A project
 
