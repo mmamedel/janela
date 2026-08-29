@@ -70,17 +70,12 @@ jobs:
         if: runner.os == 'Windows' && steps.build.outcome == 'failure'
         shell: bash
         run: |
-          # libc++ links fine (verified earlier); link the REAL shim object
-          # against a tiny main to surface the actual undefined symbols.
-          cat > wvmain.c <<'EOF'
-          int wv_create(int);
-          int main(void) { return wv_create(0) >= 0 ? 0 : 1; }
-          EOF
-          SHIM=$(ls smoke/.janela/cache/wvshim.obj)
-          echo "shim object: $SHIM"
+          # The shim links fine standalone (verified), so isolate scriptc:
+          # does it link a plain hello-world with no FFI at all?
+          echo 'console.log("hello from scriptc");' > hello.ts
           set -x
-          clang wvmain.c "$SHIM" -lc++ -lole32 -loleaut32 -lshlwapi -lshell32 \
-            -luser32 -lversion -lgdi32 -ladvapi32 -o wvprobe.exe 2>&1 | head -60 || true
+          node node_modules/scriptc/dist/main.js build hello.ts -o hello.exe 2>&1 | tail -40 || true
+          ls -l hello.exe && ./hello.exe || echo "NO scriptc hello-world on Windows"
       - name: Fail if the Windows build failed
         if: runner.os == 'Windows' && steps.build.outcome == 'failure'
         run: exit 1
