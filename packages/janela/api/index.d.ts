@@ -6,7 +6,7 @@
  * parse.
  */
 
-import type { JanelaApp } from "../runtime/janela";
+import type { JanelaAppImpl } from "../runtime/janela";
 import type { CommandShapes, Commands, Events } from "../runtime/types";
 
 /** Removes a subscription created by `listen` / `client.on`. */
@@ -65,18 +65,22 @@ export interface Contract {
 /**
  * The command table declared by a contract.
  *
- * Reads the contract off a `JanelaApp<C, E>` — what a host's `App` type is
- * from 0.7.0 — and falls back to the 0.5.x/0.6.x `{ commands, events }`
- * wrapper, so a project written against either shape keeps checking.
+ * Reads the contract off the app type — what a host's `App` is from 0.7.0 —
+ * and falls back to the 0.5.x/0.6.x `{ commands, events }` wrapper, so a
+ * project written against either shape keeps checking.
+ *
+ * The inference targets the class rather than the `JanelaApp` alias: the
+ * alias applies `Norm<C>`, which cannot be inferred backwards, and the
+ * normalised table is what indexing wants in any case.
  */
-export type CommandsOf<A> = A extends JanelaApp<infer M, infer _E>
+export type CommandsOf<A> = A extends JanelaAppImpl<infer M, infer _E>
   ? M
   : A extends { commands: Commands<infer M> }
     ? M
     : never;
 
 /** The event table declared by a contract; see CommandsOf for the two shapes. */
-export type EventsOf<A> = A extends JanelaApp<infer _M, infer E>
+export type EventsOf<A> = A extends JanelaAppImpl<infer _M, infer E>
   ? E
   : A extends { events: Events<infer E> }
     ? E

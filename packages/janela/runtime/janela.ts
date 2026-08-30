@@ -83,11 +83,16 @@ const BOOTSTRAP =
 // user's editor can see them). Re-exported here because the compiled build
 // resolves them through this module — see the specifier rewrite in the CLI.
 export type {
+  ArgsOf,
   AsyncCommandHandler,
   CommandHandler,
   CommandShape,
   CommandShapes,
+  CommandSpec,
+  CommandSpecs,
   Commands,
+  Norm,
+  ResultOf,
   DialogFilter,
   Events,
   FsCallback,
@@ -105,7 +110,9 @@ import type {
   AsyncCommandHandler,
   CommandHandler,
   CommandShapes,
+  CommandSpecs,
   Commands,
+  Norm,
   DialogFilter,
   Events,
   FsCallback,
@@ -156,7 +163,7 @@ const TICK_DRAIN_MS = 4;
  * interface (being signature-only) never is. A class receiver works even as a
  * plain function parameter, which is what `setup(app)` is.
  */
-export class JanelaApp<
+export class JanelaAppImpl<
   C extends CommandShapes = CommandShapes,
   E = Record<string, unknown>,
 > {
@@ -571,11 +578,34 @@ export class JanelaApp<
   }
 }
 
+/**
+ * A running janela app, typed by the contract it serves.
+ *
+ * This is an alias rather than the class itself so that a contract may be
+ * written as plain function types: `Norm` converts it to the record form the
+ * class indexes, at a point where the table is still concrete. Writing the
+ * record form directly keeps working — `Norm` is idempotent.
+ *
+ * ```ts
+ * export type AppCommands = { add: (args: { a: number; b: number }) => number };
+ * export type AppEvents = { added: number };
+ * export type App = JanelaApp<AppCommands, AppEvents>;
+ *
+ * export function setup(app: App): void {
+ *   app.command("add", (args) => args.a + args.b);   // args inferred, result checked
+ * }
+ * ```
+ */
+export type JanelaApp<
+  C extends CommandSpecs = CommandShapes,
+  E = Record<string, unknown>,
+> = JanelaAppImpl<Norm<C>, E>;
+
 export function createApp<
   C extends CommandShapes = CommandShapes,
   E = Record<string, unknown>,
->(cfg: WindowConfig): JanelaApp<C, E> {
-  return new JanelaApp<C, E>(cfg);
+>(cfg: WindowConfig): JanelaAppImpl<C, E> {
+  return new JanelaAppImpl<C, E>(cfg);
 }
 
 // ---------------------------------------------------------------------------
@@ -586,7 +616,7 @@ export function createApp<
 
 /** @deprecated Use `app.command(name, handler)` on a contract-typed app. */
 export function on<M extends CommandShapes, K extends keyof M & string>(
-  app: JanelaApp,
+  app: JanelaAppImpl,
   _commands: Commands<M>,
   name: K,
   handler: (args: M[K]["args"]) => M[K]["result"],
@@ -596,7 +626,7 @@ export function on<M extends CommandShapes, K extends keyof M & string>(
 
 /** @deprecated Use `app.commandAsync(name, handler)` on a contract-typed app. */
 export function onAsync<M extends CommandShapes, K extends keyof M & string>(
-  app: JanelaApp,
+  app: JanelaAppImpl,
   _commands: Commands<M>,
   name: K,
   handler: (
@@ -615,7 +645,7 @@ export function onAsync<M extends CommandShapes, K extends keyof M & string>(
 
 /** @deprecated Use `app.emit(event, payload)` on a contract-typed app. */
 export function emit<E, K extends keyof E & string>(
-  app: JanelaApp,
+  app: JanelaAppImpl,
   _events: Events<E>,
   name: K,
   payload: E[K],
