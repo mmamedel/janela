@@ -23,33 +23,21 @@
  * SOFTWARE.
  */
 
-#ifndef WEBVIEW_PLATFORM_DARWIN_COCOA_NSSIZE_HH
-#define WEBVIEW_PLATFORM_DARWIN_COCOA_NSSIZE_HH
+#ifndef WEBVIEW_PLATFORM_DARWIN_UIKIT_UIKIT_HH
+#define WEBVIEW_PLATFORM_DARWIN_UIKIT_UIKIT_HH
 
 #if defined(__cplusplus) && !defined(WEBVIEW_HEADER)
 
 #include "../../../../macros.h"
 
-#if defined(WEBVIEW_PLATFORM_DARWIN) &&                                       \
-    (defined(WEBVIEW_COCOA) || defined(WEBVIEW_UIKIT))
+#if defined(WEBVIEW_PLATFORM_DARWIN) && defined(WEBVIEW_UIKIT)
 
-#include <CoreGraphics/CoreGraphics.h>
+#include "UIApplication.hh"
+#include "UIScreen.hh"
+#include "UIView.hh"
+#include "UIViewController.hh"
+#include "UIWindow.hh"
 
-namespace webview {
-namespace detail {
-namespace cocoa {
-
-using NSSize = CGSize;
-
-constexpr inline NSSize NSSizeMake(CGFloat w, CGFloat h) {
-  return CGSizeMake(w, h);
-}
-
-} // namespace cocoa
-} // namespace detail
-} // namespace webview
-
-#endif // defined(WEBVIEW_PLATFORM_DARWIN) &&
-       // (defined(WEBVIEW_COCOA) || defined(WEBVIEW_UIKIT))
+#endif // defined(WEBVIEW_PLATFORM_DARWIN) && defined(WEBVIEW_UIKIT)
 #endif // defined(__cplusplus) && !defined(WEBVIEW_HEADER)
-#endif // WEBVIEW_PLATFORM_DARWIN_COCOA_NSSIZE_HH
+#endif // WEBVIEW_PLATFORM_DARWIN_UIKIT_UIKIT_HH

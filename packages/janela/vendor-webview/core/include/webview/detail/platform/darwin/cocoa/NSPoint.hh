@@ -30,7 +30,8 @@
 
 #include "../../../../macros.h"
 
-#if defined(WEBVIEW_PLATFORM_DARWIN) && defined(WEBVIEW_COCOA)
+#if defined(WEBVIEW_PLATFORM_DARWIN) &&                                       \
+    (defined(WEBVIEW_COCOA) || defined(WEBVIEW_UIKIT))
 
 #include <CoreGraphics/CoreGraphics.h>
 
@@ -48,6 +49,7 @@ constexpr inline NSPoint NSPointMake(CGFloat x, CGFloat y) {
 } // namespace detail
 } // namespace webview
 
-#endif // defined(WEBVIEW_PLATFORM_DARWIN) && defined(WEBVIEW_COCOA)
+#endif // defined(WEBVIEW_PLATFORM_DARWIN) &&
+       // (defined(WEBVIEW_COCOA) || defined(WEBVIEW_UIKIT))
 #endif // defined(__cplusplus) && !defined(WEBVIEW_HEADER)
 #endif // WEBVIEW_PLATFORM_DARWIN_COCOA_NSPOINT_HH

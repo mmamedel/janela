@@ -30,7 +30,8 @@
 
 #include "../../../../macros.h"
 
-#if defined(WEBVIEW_PLATFORM_DARWIN) && defined(WEBVIEW_COCOA)
+#if defined(WEBVIEW_PLATFORM_DARWIN) &&                                       \
+    (defined(WEBVIEW_COCOA) || defined(WEBVIEW_UIKIT))
 
 #include "../objc/objc.hh"
 
@@ -103,6 +104,7 @@ inline void WKWebView_set_inspectable(id self, bool inspectable) {
 } // namespace detail
 } // namespace webview
 
-#endif // defined(WEBVIEW_PLATFORM_DARWIN) && defined(WEBVIEW_COCOA)
+#endif // defined(WEBVIEW_PLATFORM_DARWIN) &&
+       // (defined(WEBVIEW_COCOA) || defined(WEBVIEW_UIKIT))
 #endif // defined(__cplusplus) && !defined(WEBVIEW_HEADER)
 #endif // WEBVIEW_PLATFORM_DARWIN_WEBKIT_WKWEBVIEW_HH

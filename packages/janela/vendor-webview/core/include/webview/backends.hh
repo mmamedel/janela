@@ -30,6 +30,7 @@
 
 #include "detail/backends/cocoa_webkit.hh"
 #include "detail/backends/gtk_webkitgtk.hh"
+#include "detail/backends/uikit_webkit.hh"
 #include "detail/backends/win32_edge.hh"
 
 namespace webview {

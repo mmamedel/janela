@@ -30,7 +30,8 @@
 
 #include "../../../../macros.h"
 
-#if defined(WEBVIEW_PLATFORM_DARWIN) && defined(WEBVIEW_COCOA)
+#if defined(WEBVIEW_PLATFORM_DARWIN) &&                                       \
+    (defined(WEBVIEW_COCOA) || defined(WEBVIEW_UIKIT))
 
 #include <objc/NSObjCRuntime.h>
 
@@ -44,6 +45,7 @@ using NSTimeInterval = double;
 } // namespace detail
 } // namespace webview
 
-#endif // defined(WEBVIEW_PLATFORM_DARWIN) && defined(WEBVIEW_COCOA)
+#endif // defined(WEBVIEW_PLATFORM_DARWIN) &&
+       // (defined(WEBVIEW_COCOA) || defined(WEBVIEW_UIKIT))
 #endif // defined(__cplusplus) && !defined(WEBVIEW_HEADER)
 #endif // WEBVIEW_PLATFORM_DARWIN_COCOA_TYPES_HH

@@ -23,33 +23,48 @@
  * SOFTWARE.
  */
 
-#ifndef WEBVIEW_PLATFORM_DARWIN_COCOA_NSSIZE_HH
-#define WEBVIEW_PLATFORM_DARWIN_COCOA_NSSIZE_HH
+#ifndef WEBVIEW_PLATFORM_DARWIN_UIKIT_UIVIEWCONTROLLER_HH
+#define WEBVIEW_PLATFORM_DARWIN_UIKIT_UIVIEWCONTROLLER_HH
 
 #if defined(__cplusplus) && !defined(WEBVIEW_HEADER)
 
 #include "../../../../macros.h"
 
-#if defined(WEBVIEW_PLATFORM_DARWIN) &&                                       \
-    (defined(WEBVIEW_COCOA) || defined(WEBVIEW_UIKIT))
+#if defined(WEBVIEW_PLATFORM_DARWIN) && defined(WEBVIEW_UIKIT)
 
-#include <CoreGraphics/CoreGraphics.h>
+#include "../cocoa/NSString.hh"
+#include "../objc/objc.hh"
 
 namespace webview {
 namespace detail {
-namespace cocoa {
+namespace uikit {
 
-using NSSize = CGSize;
-
-constexpr inline NSSize NSSizeMake(CGFloat w, CGFloat h) {
-  return CGSizeMake(w, h);
+inline id UIViewController_new() {
+  return objc::msg_send<id>(
+      objc::msg_send<id>(objc::get_class("UIViewController"),
+                         objc::selector("alloc")),
+      objc::selector("init"));
 }
 
-} // namespace cocoa
+inline id UIViewController_get_view(id self) {
+  return objc::msg_send<id>(self, objc::selector("view"));
+}
+
+inline void UIViewController_set_view(id self, id view) {
+  objc::msg_send<void>(self, objc::selector("setView:"), view);
+}
+
+/// Not shown anywhere by default on iOS; set so that embedders which place
+/// the controller inside a navigation stack get a sensible title.
+inline void UIViewController_set_title(id self, const std::string &title) {
+  objc::msg_send<void>(self, objc::selector("setTitle:"),
+                       cocoa::NSString_stringWithUTF8String(title));
+}
+
+} // namespace uikit
 } // namespace detail
 } // namespace webview
 
-#endif // defined(WEBVIEW_PLATFORM_DARWIN) &&
-       // (defined(WEBVIEW_COCOA) || defined(WEBVIEW_UIKIT))
+#endif // defined(WEBVIEW_PLATFORM_DARWIN) && defined(WEBVIEW_UIKIT)
 #endif // defined(__cplusplus) && !defined(WEBVIEW_HEADER)
-#endif // WEBVIEW_PLATFORM_DARWIN_COCOA_NSSIZE_HH
+#endif // WEBVIEW_PLATFORM_DARWIN_UIKIT_UIVIEWCONTROLLER_HH

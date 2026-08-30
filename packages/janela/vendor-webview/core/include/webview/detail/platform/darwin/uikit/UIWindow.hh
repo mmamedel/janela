@@ -23,33 +23,45 @@
  * SOFTWARE.
  */
 
-#ifndef WEBVIEW_PLATFORM_DARWIN_COCOA_NSSIZE_HH
-#define WEBVIEW_PLATFORM_DARWIN_COCOA_NSSIZE_HH
+#ifndef WEBVIEW_PLATFORM_DARWIN_UIKIT_UIWINDOW_HH
+#define WEBVIEW_PLATFORM_DARWIN_UIKIT_UIWINDOW_HH
 
 #if defined(__cplusplus) && !defined(WEBVIEW_HEADER)
 
 #include "../../../../macros.h"
 
-#if defined(WEBVIEW_PLATFORM_DARWIN) &&                                       \
-    (defined(WEBVIEW_COCOA) || defined(WEBVIEW_UIKIT))
+#if defined(WEBVIEW_PLATFORM_DARWIN) && defined(WEBVIEW_UIKIT)
 
-#include <CoreGraphics/CoreGraphics.h>
+#include "../cocoa/NSRect.hh"
+#include "../objc/objc.hh"
 
 namespace webview {
 namespace detail {
-namespace cocoa {
+namespace uikit {
 
-using NSSize = CGSize;
-
-constexpr inline NSSize NSSizeMake(CGFloat w, CGFloat h) {
-  return CGSizeMake(w, h);
+inline id UIWindow_withFrame(cocoa::NSRect frame) {
+  return objc::msg_send<id>(
+      objc::msg_send<id>(objc::get_class("UIWindow"), objc::selector("alloc")),
+      objc::selector("initWithFrame:"), frame);
 }
 
-} // namespace cocoa
+inline void UIWindow_set_rootViewController(id self, id controller) {
+  objc::msg_send<void>(self, objc::selector("setRootViewController:"),
+                       controller);
+}
+
+inline id UIWindow_get_rootViewController(id self) {
+  return objc::msg_send<id>(self, objc::selector("rootViewController"));
+}
+
+inline void UIWindow_makeKeyAndVisible(id self) {
+  objc::msg_send<void>(self, objc::selector("makeKeyAndVisible"));
+}
+
+} // namespace uikit
 } // namespace detail
 } // namespace webview
 
-#endif // defined(WEBVIEW_PLATFORM_DARWIN) &&
-       // (defined(WEBVIEW_COCOA) || defined(WEBVIEW_UIKIT))
+#endif // defined(WEBVIEW_PLATFORM_DARWIN) && defined(WEBVIEW_UIKIT)
 #endif // defined(__cplusplus) && !defined(WEBVIEW_HEADER)
-#endif // WEBVIEW_PLATFORM_DARWIN_COCOA_NSSIZE_HH
+#endif // WEBVIEW_PLATFORM_DARWIN_UIKIT_UIWINDOW_HH

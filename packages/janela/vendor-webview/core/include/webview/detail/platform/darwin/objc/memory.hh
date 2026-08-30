@@ -34,7 +34,10 @@
 
 #include "invoke.hh"
 
-#include <objc/objc-runtime.h>
+// <objc/objc-runtime.h> is an umbrella that only exists in the macOS SDK;
+// these two are present on every Apple platform.
+#include <objc/message.h>
+#include <objc/runtime.h>
 
 namespace webview {
 namespace detail {

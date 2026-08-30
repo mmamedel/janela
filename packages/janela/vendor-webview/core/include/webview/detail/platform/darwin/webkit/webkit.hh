@@ -30,7 +30,8 @@
 
 #include "../../../../macros.h"
 
-#if defined(WEBVIEW_PLATFORM_DARWIN) && defined(WEBVIEW_COCOA)
+#if defined(WEBVIEW_PLATFORM_DARWIN) &&                                       \
+    (defined(WEBVIEW_COCOA) || defined(WEBVIEW_UIKIT))
 
 // IWYU pragma: begin_exports
 #include "WKOpenPanelParameters.hh"
@@ -41,6 +42,7 @@
 #include "WKWebViewConfiguration.hh"
 // IWYU pragma: end_exports
 
-#endif // defined(WEBVIEW_PLATFORM_DARWIN) && defined(WEBVIEW_COCOA)
+#endif // defined(WEBVIEW_PLATFORM_DARWIN) &&
+       // (defined(WEBVIEW_COCOA) || defined(WEBVIEW_UIKIT))
 #endif // defined(__cplusplus) && !defined(WEBVIEW_HEADER)
 #endif // WEBVIEW_PLATFORM_DARWIN_WEBKIT_HH

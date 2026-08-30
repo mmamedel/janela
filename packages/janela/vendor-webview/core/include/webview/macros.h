@@ -82,6 +82,13 @@
 
 #if defined(__APPLE__)
 #define WEBVIEW_PLATFORM_DARWIN
+#include <TargetConditionals.h>
+// Apple's platforms split between AppKit (macOS) and UIKit (iOS and its
+// derivatives). Both use WKWebView, but the surrounding application, window
+// and view classes differ, so each gets its own backend.
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+#define WEBVIEW_PLATFORM_DARWIN_UIKIT
+#endif
 #elif defined(__unix__)
 #define WEBVIEW_PLATFORM_LINUX
 #elif defined(_WIN32)
@@ -90,8 +97,11 @@
 #error "Unable to detect current platform"
 #endif
 
-#if !defined(WEBVIEW_GTK) && !defined(WEBVIEW_COCOA) && !defined(WEBVIEW_EDGE)
-#if defined(WEBVIEW_PLATFORM_DARWIN)
+#if !defined(WEBVIEW_GTK) && !defined(WEBVIEW_COCOA) &&                        \
+    !defined(WEBVIEW_UIKIT) && !defined(WEBVIEW_EDGE)
+#if defined(WEBVIEW_PLATFORM_DARWIN_UIKIT)
+#define WEBVIEW_UIKIT
+#elif defined(WEBVIEW_PLATFORM_DARWIN)
 #define WEBVIEW_COCOA
 #elif defined(WEBVIEW_PLATFORM_LINUX)
 #define WEBVIEW_GTK

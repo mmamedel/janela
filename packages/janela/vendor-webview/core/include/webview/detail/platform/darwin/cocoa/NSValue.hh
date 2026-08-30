@@ -30,7 +30,8 @@
 
 #include "../../../../macros.h"
 
-#if defined(WEBVIEW_PLATFORM_DARWIN) && defined(WEBVIEW_COCOA)
+#if defined(WEBVIEW_PLATFORM_DARWIN) &&                                       \
+    (defined(WEBVIEW_COCOA) || defined(WEBVIEW_UIKIT))
 
 #include "../objc/objc.hh"
 
@@ -51,6 +52,7 @@ inline void NSValue_getValue(id self, void *value, NSUInteger size) {
 } // namespace detail
 } // namespace webview
 
-#endif // defined(WEBVIEW_PLATFORM_DARWIN) && defined(WEBVIEW_COCOA)
+#endif // defined(WEBVIEW_PLATFORM_DARWIN) &&
+       // (defined(WEBVIEW_COCOA) || defined(WEBVIEW_UIKIT))
 #endif // defined(__cplusplus) && !defined(WEBVIEW_HEADER)
 #endif // WEBVIEW_PLATFORM_DARWIN_COCOA_NSVALUE_HH
