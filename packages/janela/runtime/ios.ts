@@ -17,8 +17,9 @@
 //     completion and returns, so nothing needs pumping.
 //
 // The result is much smaller: a command registry and a dispatch function.
-// Everything that needed the loop is desktop-only, and says so when called
-// rather than failing silently — see the stubs at the bottom.
+// Everything that needed the loop is not available on iOS *yet* — it reports
+// when called rather than failing silently, and every such path goes through
+// one guard so that restoring parity is a single edit. See the stubs below.
 
 import type {
   AsyncCommandHandler,
@@ -43,21 +44,48 @@ function encode(value: unknown): string {
   return JSON.stringify(value);
 }
 
-/** How an unsupported call reports itself. Never aborts: see NOTE below. */
-function unsupported(api: string, why: string): string {
+// ---------------------------------------------------------------------------
+// The one place iOS says "not yet"
+// ---------------------------------------------------------------------------
+//
+// Everything below funnels through `pending()`. Nothing else in this file
+// decides what is or is not available, so the day a capability lands on iOS
+// its stub becomes a real implementation and this comment shrinks.
+//
+// The scheduling family — commandAsync, defer, sleep — is the near-term one.
+// It is absent today only because a library build links no event loop
+// (SC4005), not because iOS cannot do it: UIKit schedules perfectly well, and
+// routing timers through the shell (host schedules, library is re-entered when
+// they fire) would give full parity. `scheduling()` marks exactly the calls
+// that a shell-scheduling change replaces, so that change edits one path.
+//
+// FAILING LOUDLY WITHOUT KILLING THE APP: an uncaught throw in library mode
+// reaches the panic sink and then ABORTS the process (SC4013). So a stub must
+// never throw from setup() — registering an async command at startup would
+// kill the app before its first frame. Stubs that hand back a callback report
+// through it; fire-and-forget stubs log; and commandAsync registers a command
+// that throws only when the page calls it, where dispatch()'s try/catch turns
+// it into a rejected promise.
+
+/** The single message every not-yet-on-iOS path reports. */
+function pending(api: string, why: string): string {
   return (
-    "janela: app." + api + " is desktop-only — " + why + ". " +
-    "See docs/ios.md for what iOS supports today."
+    "janela: app." + api + " is not available on iOS yet — " + why + ". " +
+    "Parity is planned; see docs/ios.md."
   );
 }
 
-// NOTE ON FAILING LOUDLY WITHOUT KILLING THE APP:
-// an uncaught throw in library mode reaches the panic sink and then ABORTS the
-// process (SC4013). So a stub must never throw from setup(): registering an
-// async command at startup would kill the app before its first frame. Stubs
-// that hand back a callback report through it; fire-and-forget stubs log; and
-// commandAsync registers a command that throws only when the page calls it —
-// where dispatch()'s try/catch turns it into a rejected promise.
+/**
+ * The scheduling family's guard — commandAsync, defer and sleep.
+ *
+ * These three are absent for one shared reason, and will return for one
+ * shared reason. Replacing this function with a real implementation (timers
+ * scheduled by the shell, the library re-entered when they fire) is the whole
+ * of that change on this side.
+ */
+function scheduling(api: string): string {
+  return pending(api, "an iOS build links no event loop of its own");
+}
 
 /**
  * A running janela app on iOS, typed by the contract it serves.
@@ -138,15 +166,17 @@ export class JanelaAppImpl<
   }
 
   // -------------------------------------------------------------------------
-  // Desktop-only surface
+  // Not yet on iOS
   // -------------------------------------------------------------------------
   // Present so that a project written for desktop still COMPILES for iOS —
   // the typed contract and main.ts are shared source. Each reports clearly at
-  // the point of use instead of doing nothing quietly.
+  // the point of use instead of doing nothing quietly, and each routes through
+  // pending() / scheduling() above so there is one place to change.
 
   /**
-   * @remarks Desktop only. iOS builds are libraries with no event loop
-   * linked, so nothing can answer later; the command rejects when invoked.
+   * @remarks Not on iOS yet — an iOS build links no event loop, so nothing can
+   * answer later. The command is registered and rejects when invoked; parity
+   * is planned.
    */
   commandAsync<K extends keyof C & string>(
     name: K,
@@ -159,70 +189,67 @@ export class JanelaAppImpl<
     // Registering must not throw — setup() runs at library init, outside any
     // try/catch, where a throw would abort the app before it draws. Instead
     // the command exists and rejects, which dispatch() contains.
-    const message = unsupported(
-      "commandAsync",
-      "an iOS build links no event loop, so a command cannot answer later",
-    );
+    const message = scheduling("commandAsync");
     this.names.push(name);
     this.handlers.push((_args: unknown) => {
       throw new Error(message);
     });
   }
 
-  /** @remarks Desktop only — there is no loop to defer onto. */
+  /** @remarks Not on iOS yet; see scheduling() above. */
   defer(_fn: () => void): void {
-    console.error(unsupported("defer", "an iOS build links no event loop"));
+    console.error(scheduling("defer"));
   }
 
-  /** @remarks Desktop only — there is no timer surface in a library build. */
+  /** @remarks Not on iOS yet; see scheduling() above. */
   sleep(_ms: number, _fn: () => void): void {
-    console.error(unsupported("sleep", "an iOS build links no timers"));
+    console.error(scheduling("sleep"));
   }
 
-  /** @remarks Desktop only; reports through the callback. */
+  /** @remarks Not on iOS yet; reports through the callback. */
   readFileAsync(_path: string, cb: FsCallback): void {
-    cb(unsupported("readFileAsync", "file access is not wired on iOS yet"), "");
+    cb(pending("readFileAsync", "file access is not wired on iOS"), "");
   }
 
-  /** @remarks Desktop only; reports through the callback. */
+  /** @remarks Not on iOS yet; reports through the callback. */
   writeFileAsync(_path: string, _data: string, cb: (err: string | null) => void): void {
-    cb(unsupported("writeFileAsync", "file access is not wired on iOS yet"));
+    cb(pending("writeFileAsync", "file access is not wired on iOS"));
   }
 
-  /** @remarks Desktop only; reports through the callback. */
+  /** @remarks Not on iOS yet; reports through the callback. */
   openFileDialog(
     _options: OpenDialogOptions,
     cb: (paths: string[] | null, err?: string) => void,
   ): void {
-    cb(null, unsupported("openFileDialog", "iOS uses a document picker, not wired yet"));
+    cb(null, pending("openFileDialog", "iOS needs a document picker"));
   }
 
-  /** @remarks Desktop only; reports through the callback. */
+  /** @remarks Not on iOS yet; reports through the callback. */
   saveFileDialog(
     _options: SaveDialogOptions,
     cb: (path: string | null, err?: string) => void,
   ): void {
-    cb(null, unsupported("saveFileDialog", "iOS uses a document picker, not wired yet"));
+    cb(null, pending("saveFileDialog", "iOS needs a document picker"));
   }
 
-  /** @remarks Desktop only — an iOS app has no window title. */
+  /** @remarks No-op on iOS: an app has no window title to set. */
   setTitle(_title: string): void {
-    console.error(unsupported("setTitle", "an iOS app has no window title"));
+    console.error(pending("setTitle", "an iOS app has no window title"));
   }
 
-  /** @remarks Desktop only — an iOS app fills the screen. */
+  /** @remarks No-op on iOS: an app fills the screen. */
   setSize(_width: number, _height: number, _hint?: number): void {
-    console.error(unsupported("setSize", "an iOS app fills the screen"));
+    console.error(pending("setSize", "an iOS app fills the screen"));
   }
 
-  /** @remarks Desktop only — an iOS app is always fullscreen. */
+  /** @remarks No-op on iOS: an app is always fullscreen. */
   setFullscreen(_on: boolean): void {
-    console.error(unsupported("setFullscreen", "an iOS app is always fullscreen"));
+    console.error(pending("setFullscreen", "an iOS app is always fullscreen"));
   }
 
-  /** @remarks Desktop only — iOS apps are dismissed by the user, not by code. */
+  /** @remarks No-op on iOS: apps are dismissed by the user, not by code. */
   quit(): void {
-    console.error(unsupported("quit", "iOS apps are dismissed by the user"));
+    console.error(pending("quit", "iOS apps are dismissed by the user"));
   }
 
   /**
