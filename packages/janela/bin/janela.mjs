@@ -418,14 +418,16 @@ function buildIos(root, conf, buildDir, outDir) {
   const bundle = join(outDir, `${conf.name}.app`);
   mkdirSync(bundle, { recursive: true });
   const sdk = capture(["xcrun", "--sdk", "iphonesimulator", "--show-sdk-path"]);
-  // The .mm extension picks Objective-C++; an explicit `-x objective-c++`
-  // would leak onto the archive that follows and be compiled as source.
+  // Plain C++: the shell drives the webview through webview.h's UIKit
+  // backend, which uses the Objective-C runtime rather than Objective-C, so
+  // no .mm and no -fobjc-arc. Blocks still need -fblocks for libdispatch.
   run([
     "xcrun", "clang++",
-    join(KIT, "shim", "ios", "app.mm"),
+    join(KIT, "shim", "ios", "app.cc"),
     "-target", `arm64-apple-ios${ios.minimumVersion}-simulator`,
     "-isysroot", sdk,
-    "-fobjc-arc", "-std=c++17", "-O2",
+    "-std=c++17", "-O2", "-fblocks",
+    `-I${join(KIT, "vendor-webview", "core", "include")}`,
     "-framework", "UIKit", "-framework", "WebKit", "-framework", "Foundation",
     lib,
     "-o", join(bundle, conf.name),
