@@ -118,26 +118,57 @@ flight exits 0 — the shim joins its workers at shutdown.
 
 ### The cost is the drain, not the read
 
-Format-2 FFI has no `bytes` return, so the payload crosses one byte per call
-and is rebuilt in TS. Measured on macOS arm64 (M-series, warm page cache):
+The syscall runs on a worker thread, so it never touches the window. What does
+cost UI-thread time is the **drain**: turning the job's UTF-8 bytes into a
+TypeScript string, which is proportional to the payload.
 
-| File | Total |
-|---|---|
-| 1 MB | 120 ms |
-| 10 MB | 1,170 ms |
+Taken in one call, that cost lands in a single turn — a 100 MB file froze the
+window for ~176 ms. So the drain is **time-budgeted** instead: each turn takes
+128 KB slices until `DRAIN_BUDGET_MS` (4 ms) is spent, then yields to the run
+loop and resumes next tick. The budget is wall-clock rather than a fixed chunk
+count on purpose — a fixed chunk size bounds the worst turn but also caps
+throughput, whereas a time budget spends whatever the machine manages in the
+time available. While a payload is in flight the ticker also runs tighter
+(4 ms instead of 8 ms), so yielding does not halve throughput.
 
-That is ~8.5 MB/s, and it is spent **on the UI thread**, inside one tick. So
-the syscall no longer blocks the window, but materializing a very large file
-still does, for roughly 115 ms per MB. Read config files and documents freely;
-do not stream video through it.
+Measured on macOS arm64 (M-series, warm page cache), reading files that carry
+multi-byte characters throughout. "Max stall" is the worst round-trip of a
+`ping` command hammered from the page while the read is in flight — i.e. what
+the window actually feels:
 
-**A quadratic trap found while measuring this.** Building the result with
-`s = s + c` in a loop is O(n²) in scriptc (0.0.32 and 0.0.35 alike) — 200k single-character
-appends cost 449 ms versus **2 ms** for `parts.push(c)` + `join("")`. That one
-change took a 1 MB read from 11,888 ms to 120 ms (99×). `drainJob` and
-`readRequest` both build with push+join for this reason; anything in this
-runtime that accumulates a string in a loop must do the same.
+| File | Max stall before | Max stall now | Read time before | Read time now |
+|---|---|---|---|---|
+| 1 MB | 11 ms | 10 ms | 11 ms | 11 ms |
+| 10 MB | 29 ms | 9 ms | 48 ms | 58 ms |
+| 100 MB | **176 ms** | **25 ms** | 453 ms | 467 ms |
 
-The pending upgrade to scriptc 0.0.35 (FFI formats 3–5: `bytes` params,
-`cstring`, retained callbacks) should remove the byte-at-a-time drain
-altogether, which is why no packing micro-optimisation was attempted here.
+p99 round-trip during a 100 MB read is 4 ms. Throughput is within ~3% of the
+old all-at-once path.
+
+The residual ~25 ms at 100 MB is the final `parts.join("")`: the callback
+receives one string, so the whole payload must be materialised once, and that
+copy cannot be split across turns. Removing even that would mean handing the
+app its bytes in chunks rather than as one value — a streaming read API, which
+janela does not have today.
+
+**Slices never split a character.** `wv_job_take_at` pulls the slice end back
+to a UTF-8 sequence boundary before handing it to TS, because scriptc decodes
+a `string` param as UTF-8 and a mid-sequence cut would produce replacement
+characters on both sides of the seam. Bytes that are not valid UTF-8 have no
+boundary to find, so after four steps the cut stands as asked. Verified with
+100 MB of text carrying `— çãé 🚀` every ~1 KB: 103,207 astral characters
+survive a 800-slice drain exactly.
+
+**Two traps found while measuring this**, both worth knowing when writing host
+code that touches large strings:
+
+- Building a string with `s = s + c` in a loop is O(n²) in scriptc — 200k
+  single-character appends cost 449 ms versus **2 ms** for `parts.push(c)` +
+  `join("")`. Anything in this runtime that accumulates a string must use
+  push + join.
+- **Indexing a large string is O(n).** scriptc stores strings as UTF-8 but
+  exposes UTF-16 indices, so it must scan to convert between them:
+  `text.slice(text.length - 12)` on a 104 MB string costs **74 ms**, and
+  `text.length` alone costs 6 ms. That is *your* cost, not the drain's — a
+  callback that probes a huge string will stall the window no matter how
+  carefully the runtime delivered it.
