@@ -220,7 +220,11 @@ export class JanelaAppImpl<
     this.nextCont = id + 1;
     this.contIds.push(id);
     this.contFns.push(fn);
-    wvSchedule(this.handle, id, ms > 0 ? ms : 0);
+    const delay = ms > 0 ? ms : 0;
+    // `+ 0` per the note at the top of this file: a bare FFI call is not safe
+    // in every position, and this one is silently dropped without it.
+    const rc = wvSchedule(this.handle, id, delay) + 0;
+    if (rc < 0) console.log("[janela] could not schedule continuation", id);
   }
 
   /** Run the continuation parked under `id`, if it is still waiting. */
