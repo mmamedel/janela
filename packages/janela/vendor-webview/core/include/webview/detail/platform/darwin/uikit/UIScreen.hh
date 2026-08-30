@@ -23,33 +23,35 @@
  * SOFTWARE.
  */
 
-#ifndef WEBVIEW_PLATFORM_DARWIN_COCOA_NSSIZE_HH
-#define WEBVIEW_PLATFORM_DARWIN_COCOA_NSSIZE_HH
+#ifndef WEBVIEW_PLATFORM_DARWIN_UIKIT_UISCREEN_HH
+#define WEBVIEW_PLATFORM_DARWIN_UIKIT_UISCREEN_HH
 
 #if defined(__cplusplus) && !defined(WEBVIEW_HEADER)
 
 #include "../../../../macros.h"
 
-#if defined(WEBVIEW_PLATFORM_DARWIN) &&                                       \
-    (defined(WEBVIEW_COCOA) || defined(WEBVIEW_UIKIT))
+#if defined(WEBVIEW_PLATFORM_DARWIN) && defined(WEBVIEW_UIKIT)
 
-#include <CoreGraphics/CoreGraphics.h>
+#include "../cocoa/NSRect.hh"
+#include "../objc/objc.hh"
 
 namespace webview {
 namespace detail {
-namespace cocoa {
+namespace uikit {
 
-using NSSize = CGSize;
-
-constexpr inline NSSize NSSizeMake(CGFloat w, CGFloat h) {
-  return CGSizeMake(w, h);
+inline id UIScreen_get_mainScreen() {
+  return objc::msg_send<id>(objc::get_class("UIScreen"),
+                            objc::selector("mainScreen"));
 }
 
-} // namespace cocoa
+inline cocoa::NSRect UIScreen_get_bounds(id self) {
+  return objc::msg_send_stret<cocoa::NSRect>(self, objc::selector("bounds"));
+}
+
+} // namespace uikit
 } // namespace detail
 } // namespace webview
 
-#endif // defined(WEBVIEW_PLATFORM_DARWIN) &&
-       // (defined(WEBVIEW_COCOA) || defined(WEBVIEW_UIKIT))
+#endif // defined(WEBVIEW_PLATFORM_DARWIN) && defined(WEBVIEW_UIKIT)
 #endif // defined(__cplusplus) && !defined(WEBVIEW_HEADER)
-#endif // WEBVIEW_PLATFORM_DARWIN_COCOA_NSSIZE_HH
+#endif // WEBVIEW_PLATFORM_DARWIN_UIKIT_UISCREEN_HH

@@ -23,46 +23,57 @@
  * SOFTWARE.
  */
 
-#ifndef WEBVIEW_PLATFORM_DARWIN_COCOA_NSINVOCATION_HH
-#define WEBVIEW_PLATFORM_DARWIN_COCOA_NSINVOCATION_HH
+#ifndef WEBVIEW_PLATFORM_DARWIN_UIKIT_UIVIEW_HH
+#define WEBVIEW_PLATFORM_DARWIN_UIKIT_UIVIEW_HH
 
 #if defined(__cplusplus) && !defined(WEBVIEW_HEADER)
 
 #include "../../../../macros.h"
 
-#if defined(WEBVIEW_PLATFORM_DARWIN) &&                                       \
-    (defined(WEBVIEW_COCOA) || defined(WEBVIEW_UIKIT))
+#if defined(WEBVIEW_PLATFORM_DARWIN) && defined(WEBVIEW_UIKIT)
 
+#include "../cocoa/NSRect.hh"
 #include "../objc/objc.hh"
 
 namespace webview {
 namespace detail {
-namespace cocoa {
+namespace uikit {
 
-inline id NSInvocation_invocationWithMethodSignature(id sig) {
-  return objc::msg_send<id>(objc::get_class("NSInvocation"),
-                            objc::selector("invocationWithMethodSignature:"),
-                            sig);
+/// Mirrors UIViewAutoresizing. A web view added as a subview of the root
+/// view controller's view must track it on both axes, or it keeps the size it
+/// was created with when the device rotates.
+enum UIViewAutoresizing : NSUInteger {
+  UIViewAutoresizingNone = 0,
+  UIViewAutoresizingFlexibleWidth = 1 << 1,
+  UIViewAutoresizingFlexibleHeight = 1 << 4
+};
+
+inline id UIView_withFrame(cocoa::NSRect frame) {
+  return objc::msg_send<id>(
+      objc::msg_send<id>(objc::get_class("UIView"), objc::selector("alloc")),
+      objc::selector("initWithFrame:"), frame);
 }
 
-inline void NSInvocation_set_target(id self, id target) {
-  objc::msg_send<void>(self, objc::selector("setTarget:"), target);
+inline void UIView_addSubview(id self, id subview) {
+  objc::msg_send<void>(self, objc::selector("addSubview:"), subview);
 }
 
-inline void NSInvocation_setArgument(id self, void *location, NSInteger index) {
-  objc::msg_send<void>(self, objc::selector("setArgument:atIndex:"), location,
-                       index);
+inline cocoa::NSRect UIView_get_bounds(id self) {
+  return objc::msg_send_stret<cocoa::NSRect>(self, objc::selector("bounds"));
 }
 
-inline void NSInvocation_invoke(id self) {
-  objc::msg_send<void>(self, objc::selector("invoke"));
+inline void UIView_set_frame(id self, cocoa::NSRect frame) {
+  objc::msg_send<void>(self, objc::selector("setFrame:"), frame);
 }
 
-} // namespace cocoa
+inline void UIView_set_autoresizingMask(id self, UIViewAutoresizing mask) {
+  objc::msg_send<void>(self, objc::selector("setAutoresizingMask:"), mask);
+}
+
+} // namespace uikit
 } // namespace detail
 } // namespace webview
 
-#endif // defined(WEBVIEW_PLATFORM_DARWIN) &&
-       // (defined(WEBVIEW_COCOA) || defined(WEBVIEW_UIKIT))
+#endif // defined(WEBVIEW_PLATFORM_DARWIN) && defined(WEBVIEW_UIKIT)
 #endif // defined(__cplusplus) && !defined(WEBVIEW_HEADER)
-#endif // WEBVIEW_PLATFORM_DARWIN_COCOA_NSInvocation_HH
+#endif // WEBVIEW_PLATFORM_DARWIN_UIKIT_UIVIEW_HH

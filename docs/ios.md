@@ -113,15 +113,41 @@ read back byte-exact including `— çãé 🚀`.
 - `packages/janela/runtime/ios.ts` — the iOS runtime lane. Same class name and
   public surface as the desktop runtime, so your `main.ts` compiles against
   either; a command registry and a dispatcher, with no loop machinery.
-- `packages/janela/shim/ios/app.mm` — the UIKit shell: `UIWindow`, a root view
-  controller, the `WKWebView`, and the script-message bridge. It injects the
-  same `window.janela` bridge the desktop shim does, so `janela/api` works
-  unchanged.
+- `packages/janela/shim/ios/app.cc` — the shell, in plain C++. It owns the
+  due-ordered timer queue, the table of page replies being held, file I/O on a
+  serial queue, and the scriptc library's C ABI. Everything webview-shaped —
+  creating the view, injecting the bootstrap, binding the invoke channel,
+  evaluating JavaScript, settling a deferred reply — goes through `webview.h`.
 - One library export carries every command (`handleInvoke(cmd, args) -> string`),
   so your commands need no ABI of their own; a second returns the page. Events
   travel the other way through a declared callback channel.
 
-The `WKWebView` and script-message-handler wiring follows the approach used by
-[wry](https://github.com/tauri-apps/wry) (Apache-2.0), `src/wkwebview/`. wry
-attaches its webview to a `UIView` supplied by tao; janela has no tao, so the
-shell creates the window and root view controller itself.
+## The webview backend
+
+The `WKWebView` itself is driven by a **UIKit backend for
+[webview/webview](https://github.com/webview/webview)** that lives in this
+repo's vendored copy, at
+`packages/janela/vendor-webview/core/include/webview/detail/backends/uikit_webkit.hh`
+with its platform wrappers under `detail/platform/darwin/uikit/`.
+
+It is written in the shape upstream uses for the Cocoa backend — plain C++ over
+the Objective-C runtime, deriving from `engine_base` — because upstream lists
+mobile on its v1 roadmap with no implementation, and this is meant to be
+offered there rather than kept private. Three parts of the C API do not fit a
+phone, and the backend documents each in place:
+
+| API | On iOS |
+|---|---|
+| `run()` | enters `UIApplicationMain`, which never returns |
+| `terminate()` | no-op — an iOS app cannot exit itself |
+| `set_size()` | no-op — the window is the screen |
+| `set_title()` | sets the root view controller's title |
+| `create(debug, window)` | `nullptr` builds the app, window and root view controller; a `UIView*` attaches to an embedder's view instead |
+
+Because `UIApplicationMain` never returns, the web view is built eagerly in the
+constructor and only the window is created at launch — so `navigate`,
+`set_html`, `init` and `bind` all still work before `run()`.
+
+The approach follows [wry](https://github.com/tauri-apps/wry) (Apache-2.0),
+`src/wkwebview/`, which attaches its webview to a `UIView` supplied by tao;
+janela has no tao, so the `nullptr` path creates the window itself.
