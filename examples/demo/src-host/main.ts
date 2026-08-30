@@ -8,7 +8,7 @@
 // complete variable initializer — wrap it in any expression (`+ 0`). Plain
 // TypeScript like everything in this file is unaffected.
 
-import type { JanelaApp } from "./janela";
+import type { JanelaApp } from "janela/host";
 
 // Cap what we ship to the page — this is a viewer, not an editor.
 const MAX_PREVIEW = 64 * 1024;

@@ -12,6 +12,9 @@
       "types": "./api/index.d.ts",
       "default": "./api/index.js"
     },
+    "./host": {
+      "types": "./runtime/types.ts"
+    },
     "./global": {
       "types": "./api/global.d.ts"
     },

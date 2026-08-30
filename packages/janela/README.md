@@ -111,10 +111,10 @@ ambient declaration.
 
 </details>
 
-Backend API (`src-host/main.ts`):
+Backend API (`src-host/main.ts`) — also typed, from the same package:
 
 ```ts
-import type { JanelaApp } from "./janela";
+import type { JanelaApp } from "janela/host";
 
 export function setup(app: JanelaApp): void {
   app.command("add", (args) => {              // values in, values out
@@ -250,9 +250,27 @@ import { invoke } from "janela/api";
 const sum = await invoke<number>("add", { a: 2, b: 40 });
 ```
 
+The host side had the same problem and gets the same fix. `src-host/main.ts`
+used to import `JanelaApp` from `"./janela"` — a path that only exists inside
+`.janela/build/`, so an editor could never resolve it and the whole `app.*`
+API was untyped:
+
+```ts
+// 0.3.x — unresolved in the editor; JanelaApp was effectively `any`
+import type { JanelaApp } from "./janela";
+
+// 0.4.x — resolves against the installed package
+import type { JanelaApp } from "janela/host";
+```
+
+`janela build` rewrites that specifier to the local runtime copy while
+assembling the compile unit, so the build stays fully static and a project
+with no `node_modules` at all still compiles.
+
 The framework templates (`vue`, `react`, `svelte`, `solid`) are TypeScript now
-and scaffold with a `typecheck` script. `vanilla` stays plain JavaScript on the
-global, so it still needs no `npm install` before the first build.
+and scaffold with a `typecheck` script that covers `src/` and `src-host/`
+alike. `vanilla` stays plain JavaScript on the global, so it still needs no
+`npm install` before the first build.
 
 ## Migrating from 0.1.x
 
