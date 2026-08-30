@@ -1,6 +1,6 @@
 {
   "name": "janela",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Desktop apps in pure TypeScript, compiled to native. No Rust, no Node, no Electron.",
   "type": "module",
   "bin": {
