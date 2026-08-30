@@ -1,7 +1,7 @@
 {
   "name": "janela",
-  "version": "0.9.0",
-  "description": "Desktop apps in pure TypeScript, compiled to native. No Rust, no Node, no Electron.",
+  "version": "0.10.0",
+  "description": "Desktop and iOS apps in pure TypeScript, compiled to native. No Rust, no Node, no Electron.",
   "type": "module",
   "bin": {
     "janela": "bin/janela.mjs",
@@ -40,7 +40,8 @@
     "native",
     "tauri",
     "electron-alternative",
-    "scriptc"
+    "scriptc",
+    "ios"
   ],
   "engines": {
     "node": ">=24"
