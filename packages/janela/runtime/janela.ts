@@ -586,17 +586,17 @@ export function createApp<
 
 /** @deprecated Use `app.command(name, handler)` on a contract-typed app. */
 export function on<M extends CommandShapes, K extends keyof M & string>(
-  app: JanelaApp<M, Record<string, unknown>>,
+  app: JanelaApp,
   _commands: Commands<M>,
   name: K,
   handler: (args: M[K]["args"]) => M[K]["result"],
 ): void {
-  app.command(name, handler);
+  app.command(name, (args: unknown) => handler(args as M[K]["args"]));
 }
 
 /** @deprecated Use `app.commandAsync(name, handler)` on a contract-typed app. */
 export function onAsync<M extends CommandShapes, K extends keyof M & string>(
-  app: JanelaApp<M, Record<string, unknown>>,
+  app: JanelaApp,
   _commands: Commands<M>,
   name: K,
   handler: (
@@ -605,15 +605,20 @@ export function onAsync<M extends CommandShapes, K extends keyof M & string>(
     reject: (reason: unknown) => void,
   ) => void,
 ): void {
-  app.commandAsync(name, handler);
+  app.commandAsync(
+    name,
+    (args: unknown, resolve: (v: unknown) => void, reject: (r: unknown) => void) => {
+      handler(args as M[K]["args"], (value: M[K]["result"]) => resolve(value), reject);
+    },
+  );
 }
 
 /** @deprecated Use `app.emit(event, payload)` on a contract-typed app. */
 export function emit<E, K extends keyof E & string>(
-  app: JanelaApp<CommandShapes, E>,
+  app: JanelaApp,
   _events: Events<E>,
   name: K,
   payload: E[K],
 ): void {
-  app.emit(name, payload);
+  app.emit(name, payload as unknown);
 }

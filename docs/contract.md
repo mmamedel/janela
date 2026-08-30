@@ -35,40 +35,50 @@ pulled into the page. The built frontend bundle contains none of the host's
 code — that is checked in CI-adjacent verification by grepping the bundle for
 host-only strings.
 
-## Why the registrars take the app and the contract
+## Why the app is a class
 
-The host side reads a little unusually:
+The host side reads naturally:
 
 ```ts
-on(app, commands, "add", (args) => args.a + args.b);
+export function setup(app: JanelaApp<AppCommands, AppEvents>): void {
+  app.command("add", (args) => args.a + args.b);
+}
 ```
 
-rather than the more obvious `commands.on(app, "add", …)` or a bound registrar
-object. That is a scriptc constraint, not a preference. scriptc cannot dispatch
-a **generic method** through an interface-typed receiver:
+Getting there required one non-obvious thing: `JanelaApp` is a **class**, not
+an interface. scriptc dispatches generic methods statically, so it can only
+compile a call when the receiver's runtime class is provable — and an
+interface, being signature-only, never is:
 
 ```
-error SC1090: calls of the generic method 'onAsync' through this receiver
+error SC1090: calls of the generic method 'command' through this receiver
 (the interface declaration is signature-only and generic methods dispatch
-statically, so the receiver's runtime class must be provable) is not
-supported yet
+statically, so the receiver's runtime class must be provable — bind the
+receiver to a const initialized with its 'new' expression) is not supported yet
 ```
 
-Standalone generic functions compile fine, so the registrars are standalone
-functions that take the contract as a value — the value is empty, and exists
-only so inference has something to read.
+The message points at `new`, but the real requirement is narrower: the
+receiver's **type** must be a class. A plain function parameter works, which is
+exactly what `setup(app)` is. So the class never appears in application code —
+you annotate, you never construct.
 
-A second constraint shaped the handler wrapper. Casting a *function* to a
-different signature and calling it through the cast fails at runtime
-(scriptc's `as` inserts a checked conversion), and coercing a record of
-differently-typed handlers into `Record<string, T>` is rejected outright. What
-does work is wrapping in a contextually-typed closure and casting the *value*:
+Two consequences worth knowing:
 
-```ts
-app.command(name, (args: unknown) => handler(args as M[K]["args"]));
-```
+- **scriptc monomorphises generic classes.** `JanelaApp<A>` and `JanelaApp<B>`
+  are different runtime types, and no cast bridges them (`'JanelaApp%0' values
+  where 'JanelaApp%1' is expected`). The generated entry therefore *constructs*
+  the app at the instantiation your `setup` asks for, reading the type
+  arguments back off its signature.
+- **Some shapes still don't compile**, which is why the API looks the way it
+  does rather than some tidier way. A discriminated-union argument
+  (`app.command({ name, handler })`) fails with `SC2009`; a factory returning a
+  generic function (`const command = commandsOf(app); command("add", …)`) fails
+  with `SC1090` — "results that are themselves generic functions"; and a single
+  exhaustive handler map compiles for sync commands but not async ones, because
+  the `resolve` callback cannot width-coerce (`SC2002`).
 
-which is the same shape hand-written janela handlers already used.
+The deprecated `on` / `onAsync` / `emit` functions from 0.5.x are one-line
+wrappers over the methods, kept so existing code keeps compiling.
 
 ## Gotchas
 

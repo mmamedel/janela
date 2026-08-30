@@ -138,24 +138,27 @@ framework templates' default.
 
 ```ts
 // src-host/main.ts
-import { defineCommands, defineEvents, emit, on, onAsync, type JanelaApp } from "janela/host";
+import { defineCommands, defineEvents, type JanelaApp } from "janela/host";
 
-export const commands = defineCommands<{
+export type AppCommands = {
   add:   { args: { a: number; b: number }; result: number };
   greet: { args: { name: string };         result: string };
   wait:  { args: { ms: number };           result: string };
-}>();
+};
+export type AppEvents = { added: number };
 
-export const events = defineEvents<{ added: number }>();
+export const commands = defineCommands<AppCommands>();
+export const events = defineEvents<AppEvents>();
 
 export type App = { commands: typeof commands; events: typeof events };
 
-export function setup(app: JanelaApp): void {
-  on(app, commands, "add", (args) => {      // args inferred: { a: number; b: number }
-    emit(app, events, "added", args.a + args.b);
+// Typing the app with the contract is what makes the methods below checked.
+export function setup(app: JanelaApp<AppCommands, AppEvents>): void {
+  app.command("add", (args) => {            // args inferred: { a: number; b: number }
+    app.emit("added", args.a + args.b);     // event name and payload checked
     return args.a + args.b;                 // return type checked against the contract
   });
-  onAsync(app, commands, "wait", (args, resolve) => {
+  app.commandAsync("wait", (args, resolve) => {
     app.sleep(args.ms, () => resolve("waited " + args.ms + "ms"));
   });
 }
@@ -309,6 +312,43 @@ nested modal loop would otherwise re-enter the host loop underneath a live TS
 frame; [docs/native-shell.md](../../docs/native-shell.md) has the details, the
 per-platform table, and the Windows GUI-subsystem note.
 
+## Migrating from 0.5.x
+
+The contract now rides on the app itself, so the standalone registrars are no
+longer needed. Type the app with your contract and call its methods:
+
+```ts
+// before (0.5.x)
+export function setup(app: JanelaApp): void {
+  on(app, commands, "add", (args) => args.a + args.b);
+  onAsync(app, commands, "wait", (args, resolve) => { … });
+  emit(app, events, "added", 42);
+}
+
+// after (0.6.x)
+export function setup(app: JanelaApp<AppCommands, AppEvents>): void {
+  app.command("add", (args) => args.a + args.b);
+  app.commandAsync("wait", (args, resolve) => { … });
+  app.emit("added", 42);
+}
+```
+
+Declare each contract as a named type so the same one feeds `defineCommands`
+and the `setup` signature:
+
+```ts
+export type AppCommands = { add: { args: { a: number; b: number }; result: number } };
+export type AppEvents = { added: number };
+export const commands = defineCommands<AppCommands>();
+export const events = defineEvents<AppEvents>();
+```
+
+`on`, `onAsync` and `emit` still work — they are `@deprecated` one-line
+wrappers now — so 0.5.x code keeps compiling. The page side is unchanged:
+`createClient<App>()` and `client.invoke(...)` are exactly as before. An app
+with no contract needs no change at all: `setup(app: JanelaApp)` still gets an
+untyped `app.command(name, handler)`.
+
 ## Migrating from 0.4.x
 
 Nothing breaks: `app.command`, `app.emit`, and the untyped `invoke` / `listen`
@@ -338,7 +378,7 @@ export const commands = defineCommands<{
 }>();
 export type App = { commands: typeof commands; events: typeof events };
 
-on(app, commands, "add", (args) => args.a + args.b);   // args inferred, no cast
+app.command("add", (args) => args.a + args.b);   // args inferred, no cast
 ```
 
 then on the page, replace `invoke<number>("add", …)` with
