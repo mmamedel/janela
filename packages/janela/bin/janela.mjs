@@ -263,7 +263,212 @@ function webview2Include(cacheDir) {
   return incDir;
 }
 
+// ---- iOS ------------------------------------------------------------------
+//
+// The second build lane. Desktop compiles TypeScript to an EXECUTABLE that
+// drives a C library over FFI; iOS compiles it to a LIBRARY that a UIKit shell
+// drives. scriptc refuses executables for iOS targets, so the inversion is not
+// a preference — and library mode links no event loop (SC4005), which is why
+// the async surface is desktop-only there.
+//
+// Everything below is simulator-only: a device build additionally needs a
+// signing identity and a provisioning profile, which is its own project.
+
+const IOS_MIN_VERSION = "15.0";
+const IOS_PREFIX = "jl_";
+
+function iosDeviceOrFail(name) {
+  const json = capture(["xcrun", "simctl", "list", "devices", "available", "--json"]);
+  const devices = JSON.parse(json).devices ?? {};
+  const runtimes = Object.keys(devices).filter((k) => /iOS/i.test(k));
+  if (runtimes.length === 0) {
+    fail(
+      "no iOS simulator runtime is installed — open Xcode > Settings > Components " +
+        "and get an iOS simulator, or run `xcodebuild -downloadPlatform iOS` in a terminal " +
+        "(it needs admin rights, so it cannot run unattended)",
+    );
+  }
+  const all = runtimes.flatMap((k) => devices[k]);
+  const pick = name
+    ? all.find((d) => d.name === name)
+    : all.find((d) => /^iPhone/.test(d.name)) ?? all[0];
+  if (!pick) fail(`no simulator named '${name}' — see \`xcrun simctl list devices\``);
+  return pick;
+}
+
+function iosConf(conf) {
+  const ios = conf.ios ?? {};
+  return {
+    identifier: ios.identifier ?? conf.identifier,
+    displayName: ios.displayName ?? conf.window?.title ?? conf.name,
+    minimumVersion: String(ios.minimumVersion ?? IOS_MIN_VERSION),
+    device: ios.device ?? null,
+  };
+}
+
+// The library profile: one export carries every command, so a project's own
+// commands need no ABI of their own. `janelaEmit` is the reverse channel the
+// shell registers before init.
+function iosProfile() {
+  return {
+    profile_format: 1,
+    name: "janela",
+    entry: "./entry.ts",
+    emission: "llvm",
+    abi: {
+      prefix: IOS_PREFIX,
+      init_symbol: `${IOS_PREFIX}init`,
+      sink_register_symbol: `${IOS_PREFIX}set_panic_sink`,
+      collect_symbol: `${IOS_PREFIX}collect`,
+      result_reset_symbol: `${IOS_PREFIX}reset`,
+      callback_register_symbol: `${IOS_PREFIX}set_callback`,
+    },
+    exports: [
+      {
+        export: "handleInvoke",
+        symbol: `${IOS_PREFIX}handle_invoke`,
+        params: ["string", "string"],
+        returns: "string",
+      },
+      {
+        export: "indexHtml",
+        symbol: `${IOS_PREFIX}index_html`,
+        params: [],
+        returns: "string",
+      },
+      // The shell calls these back on the main queue when work it owns comes
+      // due. They are the mirror of the desktop shim's wv_on_timer: the
+      // library parks a continuation under an id and is re-entered with it.
+      {
+        export: "onTimer",
+        symbol: `${IOS_PREFIX}on_timer`,
+        params: ["f64"],
+        returns: "void",
+      },
+      {
+        export: "onFsDone",
+        symbol: `${IOS_PREFIX}on_fs_done`,
+        params: ["f64", "bool", "string"],
+        returns: "void",
+      },
+    ],
+    // TS -> shell. A channel handler must never re-enter the library (see
+    // upstream #263: violations silently appear to work), so every one of
+    // these only records the request; the shell acts on its own queue and
+    // re-enters through an export above on a later turn.
+    callbacks: [
+      { name: "janelaEmit", params: ["string", "string"], returns: "void" },
+      { name: "hostSchedule", params: ["f64", "f64"], returns: "void" },
+      { name: "hostSettle", params: ["f64", "string"], returns: "void" },
+      { name: "hostReadFile", params: ["f64", "string"], returns: "void" },
+      { name: "hostWriteFile", params: ["f64", "string", "string"], returns: "void" },
+    ],
+  };
+}
+
+function iosPlist(conf) {
+  const ios = iosConf(conf);
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>${conf.name}</string>
+  <key>CFBundleDisplayName</key><string>${ios.displayName}</string>
+  <key>CFBundleIdentifier</key><string>${ios.identifier}</string>
+  <key>CFBundleExecutable</key><string>${conf.name}</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleVersion</key><string>${conf.version ?? "0.1.0"}</string>
+  <key>CFBundleShortVersionString</key><string>${conf.version ?? "0.1.0"}</string>
+  <key>LSRequiresIPhoneOS</key><true/>
+  <key>UILaunchScreen</key><dict/>
+  <key>MinimumOSVersion</key><string>${ios.minimumVersion}</string>
+  <key>CFBundleSupportedPlatforms</key><array><string>iPhoneSimulator</string></array>
+</dict>
+</plist>
+`;
+}
+
+function buildIos(root, conf, buildDir, outDir) {
+  if (process.platform !== "darwin") {
+    fail("iOS builds need macOS with Xcode — `--target ios` is only available there");
+  }
+  if (!which("zig")) {
+    fail(
+      "iOS builds need zig on PATH: scriptc routes mobile targets through `zig cc`. " +
+        "Install it with `brew install zig`",
+    );
+  }
+  const ios = iosConf(conf);
+
+  writeFileSync(join(buildDir, "profile.json"), JSON.stringify(iosProfile(), null, 2) + "\n");
+
+  console.log("janela: compiling TypeScript to an iOS library");
+  run(["node", scriptcBin(), "build", "--lib", "--profile", "profile.json"], {
+    cwd: buildDir,
+    env: {
+      ...process.env,
+      SCRIPTC_CC: "zigcc",
+      SCRIPTC_TARGET: "aarch64-apple-ios-simulator",
+    },
+  });
+  const lib = join(buildDir, ".scriptc", "entry.lib.a");
+  if (!existsSync(lib)) fail(`scriptc produced no library at ${lib}`);
+
+  console.log("janela: compiling the UIKit shell");
+  const bundle = join(outDir, `${conf.name}.app`);
+  mkdirSync(bundle, { recursive: true });
+  const sdk = capture(["xcrun", "--sdk", "iphonesimulator", "--show-sdk-path"]);
+  // The .mm extension picks Objective-C++; an explicit `-x objective-c++`
+  // would leak onto the archive that follows and be compiled as source.
+  run([
+    "xcrun", "clang++",
+    join(KIT, "shim", "ios", "app.mm"),
+    "-target", `arm64-apple-ios${ios.minimumVersion}-simulator`,
+    "-isysroot", sdk,
+    "-fobjc-arc", "-std=c++17", "-O2",
+    "-framework", "UIKit", "-framework", "WebKit", "-framework", "Foundation",
+    lib,
+    "-o", join(bundle, conf.name),
+  ]);
+  run(["strip", join(bundle, conf.name)]);
+  writeFileSync(join(bundle, "Info.plist"), iosPlist(conf));
+
+  console.log(
+    `janela: built ${relative(root, bundle)} ` +
+      `(${statSync(join(bundle, conf.name)).size} bytes, iOS Simulator)`,
+  );
+  return bundle;
+}
+
+async function devIos(root) {
+  const conf = loadConf(root);
+  const device = iosDeviceOrFail(iosConf(conf).device);
+  const bundle = build(root, { target: "ios" });
+
+  if (device.state !== "Booted") {
+    console.log(`janela: booting ${device.name}`);
+    spawnSync("xcrun", ["simctl", "boot", device.udid]);
+    spawnSync("xcrun", ["simctl", "bootstatus", device.udid, "-b"]);
+  }
+  spawnSync("open", ["-a", "Simulator"]);
+
+  console.log(`janela: installing on ${device.name}`);
+  run(["xcrun", "simctl", "install", device.udid, bundle]);
+  console.log("janela: launching (Ctrl-C to stop following the log)");
+  run([
+    "xcrun", "simctl", "launch", "--console-pty",
+    device.udid, iosConf(conf).identifier,
+  ]);
+}
+
 // ---- shim ----------------------------------------------------------------
+
+function which(bin) {
+  const r = spawnSync(process.platform === "win32" ? "where" : "which", [bin], {
+    encoding: "utf8",
+  });
+  return r.status === 0 ? r.stdout.trim().split("\n")[0] : null;
+}
 
 function buildShim(cacheDir) {
   const src = join(KIT, "shim", "wvshim.cc");
@@ -470,17 +675,23 @@ function makeGuiSubsystem(exePath) {
 
 // `devUrl` points the window at a running vite server instead of inlining the
 // frontend; `gui` asks for a GUI-subsystem .exe on Windows (build, not dev).
-function build(root, { devUrl = null, gui = true } = {}) {
+function build(root, { devUrl = null, gui = true, target = "desktop" } = {}) {
   const conf = loadConf(root);
-  const buildDir = join(root, ".janela", "build");
+  const ios = target === "ios";
+  const buildDir = join(root, ".janela", ios ? "build-ios" : "build");
   const cacheDir = join(root, ".janela", "cache");
-  const outDir = join(root, ".janela", "out");
+  const outDir = join(root, ".janela", ios ? "out-ios" : "out");
   for (const d of [buildDir, cacheDir, outDir]) mkdirSync(d, { recursive: true });
 
-  const shimLib = buildShim(cacheDir);
+  // Desktop links a C shim over webview.h; iOS links no shim at all — the
+  // UIKit shell is the program, and it links this build's output instead.
+  const shimLib = ios ? null : buildShim(cacheDir);
 
   // Assemble the compile unit: runtime + user's commands + generated modules.
-  cpSync(join(KIT, "runtime", "janela.ts"), join(buildDir, "janela.ts"));
+  // Which runtime lane lands here as "./janela" is the whole difference
+  // between the two targets — a project's main.ts is compiled unchanged
+  // against either.
+  cpSync(join(KIT, "runtime", ios ? "ios.ts" : "janela.ts"), join(buildDir, "janela.ts"));
   cpSync(join(KIT, "runtime", "types.ts"), join(buildDir, "types.ts"));
   const mainSrc = join(root, "src-host", "main.ts");
   if (!existsSync(mainSrc)) fail("missing src-host/main.ts");
@@ -512,6 +723,34 @@ function build(root, { devUrl = null, gui = true } = {}) {
       `width: ${Number(w.width ?? 800)}, height: ${Number(w.height ?? 600)} };\n`,
   );
 
+  // The iOS entry exports the library's two entry points instead of running a
+  // loop: UIKit owns the loop and calls in. Everything above this line — the
+  // contract, main.ts, the flattened frontend — is identical to desktop.
+  const entryTail = ios
+    ? `const app = createApp<CmdsOf<typeof setup>, EvtsOf<typeof setup>>(WINDOW);\n` +
+      `setup(app);\n` +
+      `app.setHtml(INDEX_HTML);\n\n` +
+      `/** One page invoke; the UIKit shell calls this through the library ABI. */\n` +
+      `export function handleInvoke(cmd: string, argsJson: string): string {\n` +
+      `  return app.dispatch(cmd, argsJson);\n` +
+      `}\n\n` +
+      `/** The document the shell loads into its WKWebView. */\n` +
+      `export function indexHtml(): string {\n` +
+      `  return app.indexHtml();\n` +
+      `}\n\n` +
+      `/** A continuation the shell parked has come due (main queue). */\n` +
+      `export function onTimer(id: number): void {\n` +
+      `  app.onTimer(id);\n` +
+      `}\n\n` +
+      `/** A file job the shell owns has finished (main queue). */\n` +
+      `export function onFsDone(id: number, ok: boolean, payload: string): void {\n` +
+      `  app.onFsDone(id, ok, payload);\n` +
+      `}\n`
+    : `const app = createApp<CmdsOf<typeof setup>, EvtsOf<typeof setup>>(WINDOW);\n` +
+      `setup(app);\n` +
+      `const rc = app.run(INDEX_HTML) + 0;\n` +
+      `console.log("[janela] run returned", rc);\n`;
+
   writeFileSync(
     join(buildDir, "entry.ts"),
     `// Generated by janela — do not edit.\n` +
@@ -529,11 +768,10 @@ function build(root, { devUrl = null, gui = true } = {}) {
       `// and what is wanted here is the normalised table anyway.\n` +
       `type CmdsOf<F> = F extends (app: JanelaAppImpl<infer C, infer _E>) => void ? C : CommandShapes;\n` +
       `type EvtsOf<F> = F extends (app: JanelaAppImpl<infer _C, infer E>) => void ? E : Record<string, unknown>;\n\n` +
-      `const app = createApp<CmdsOf<typeof setup>, EvtsOf<typeof setup>>(WINDOW);\n` +
-      `setup(app);\n` +
-      `const rc = app.run(INDEX_HTML) + 0;\n` +
-      `console.log("[janela] run returned", rc);\n`,
+      entryTail,
   );
+
+  if (ios) return buildIos(root, conf, buildDir, outDir);
 
   writeFileSync(join(buildDir, "janela.ffi.json"), JSON.stringify(ffiManifest(shimLib), null, 2) + "\n");
 
@@ -730,20 +968,30 @@ function positionals() {
   return out;
 }
 
+const TARGETS = ["desktop", "ios"];
+
+function targetOrFail() {
+  const t = flag("target", "desktop");
+  if (!TARGETS.includes(t)) fail(`unknown target '${t}' (${TARGETS.join(", ")})`);
+  return t;
+}
+
 switch (cmd) {
   case "init":
     init(positionals()[0], flag("template", "vanilla"));
     break;
   case "build":
-    build(process.cwd());
+    build(process.cwd(), { target: targetOrFail() });
     break;
   case "dev":
-    await dev(process.cwd());
+    if (targetOrFail() === "ios") await devIos(process.cwd());
+    else await dev(process.cwd());
     break;
   default:
     console.log(
       "usage: janela init <name> [--template vanilla|vue|react|svelte|solid]\n" +
-        "       janela build | janela dev",
+        "       janela build [--target desktop|ios]\n" +
+        "       janela dev   [--target desktop|ios]",
     );
     process.exit(cmd ? 1 : 0);
 }

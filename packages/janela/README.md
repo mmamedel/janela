@@ -542,10 +542,28 @@ no `-framework` support) and the binary is wrapped into an ad-hoc-signed
 - `console.log` from commands goes to stdout — visible under `janela dev`,
   not when launched from Finder.
 
+## iOS
+
+An iOS build runs the same app from the same source — same `main.ts`, same
+contract, same frontend:
+
+```bash
+janela build --target ios     # -> .janela/out-ios/<name>.app  (simulator)
+janela dev   --target ios     # build, boot a simulator, install, launch
+```
+
+It is **not part of a release yet** and is simulator-only. Commands, the typed
+contract, events, Vite frontends, async commands (`commandAsync`, `defer`,
+`sleep`) and file I/O all work the same as on desktop — the shell owns the
+clock and the file queue on both. File dialogs are not on iOS yet and report
+clearly when called; window control is a no-op there by nature. See
+[docs/ios.md](../../docs/ios.md).
+
 ## Status
 
 Early proof of concept, on macOS (arm64), Linux (WebKitGTK) and Windows
-(WebView2). The design notes and scriptc findings behind it are in
+(WebView2), with iOS on a branch (above). The design notes and scriptc
+findings behind it are in
 [docs/findings.md](../../docs/findings.md). Not yet: async commands that run in
 parallel (host code is single-threaded; `commandAsync` interleaves instead),
 tray icons and menus, multi-window, directory picking on Windows,
