@@ -19,13 +19,12 @@ declare function wvEval(h: number, js: string): number;
 declare function wvBind(h: number, name: string): number;
 declare function wvReply(h: number, body: string): number;
 declare function wvOnInvoke(h: number, cb: (req: string) => number): number;
-declare function wvOnTick(h: number, cb: () => void): number;
+declare function wvOnTimer(h: number, cb: (id: number) => void): number;
 declare function wvRun(h: number): number;
 declare function wvTerminate(h: number): number;
 declare function wvDefer(h: number): number;
 declare function wvResolve(h: number, id: number, status: number): number;
-declare function wvTickStart(h: number, intervalMs: number): number;
-declare function wvTickStop(h: number): number;
+declare function wvSchedule(h: number, id: number, ms: number): number;
 declare function wvFsRead(h: number, path: string): number;
 declare function wvFsWrite(h: number, path: string, data: string): number;
 declare function wvJobStatus(h: number, id: number): number;
@@ -148,11 +147,10 @@ function encodeFilters(filters: DialogFilter[] | undefined): string {
 const DRAIN_BUDGET_MS = 4; // = a quarter of a 60fps frame
 const DRAIN_SLICE = 131072; // 128 KB - granularity within the budget
 
-// 8 ms is plenty for timers and task chains, but while a payload is draining
-// the loop does real work every turn, and waiting 8 ms between 4 ms slices
-// would halve throughput for no benefit.
-const TICK_IDLE_MS = 8;
-const TICK_DRAIN_MS = 4;
+// The shell posts this id when a file read or a dialog reaches a terminal
+// state. It is not a continuation - it means "service the jobs you are
+// waiting on". Continuation ids start at 1, so the two can never collide.
+const TIMER_JOBS = -1;
 
 /**
  * A running janela app.
@@ -171,21 +169,23 @@ export class JanelaAppImpl<
   names: string[] = [];
   handlers: CommandHandler[] = [];
 
-  // ---- the host loop -------------------------------------------------------
+  // ---- scheduling ----------------------------------------------------------
   // scriptc's event loop is parked for as long as the program sits inside the
   // wvRun() FFI call, so setTimeout/await never fire while the window is open.
-  // These queues are drained instead by the retained tick handler that the
-  // shim's ticker posts to the UI thread, and the ticker only runs while there
-  // is work - an idle app costs nothing.
+  // The shell schedules instead: a continuation is parked here under an id and
+  // handed to wvSchedule(), and the shim calls onTimer(id) back on the UI
+  // thread once it comes due. Nothing here polls and nothing wakes
+  // periodically - an idle app is genuinely idle.
+  //
+  // This is the same shape the iOS shell must use, where the compiled TS links
+  // no event loop at all and could not hold a timer even if it wanted to.
   asyncNames: string[] = [];
   asyncHandlers: AsyncCommandHandler[] = [];
-  taskFns: (() => void)[] = [];
-  timerFns: (() => void)[] = [];
-  timerDue: number[] = [];
+  contIds: number[] = [];
+  contFns: (() => void)[] = [];
+  nextCont = 1; // ids start at 1; TIMER_JOBS (-1) is the shell's own
   jobIds: number[] = [];
   jobCbs: FsCallback[] = [];
-  ticking = false;
-  tickMs = TICK_IDLE_MS;
 
   // ---- the drain -----------------------------------------------------------
   // A finished job's bytes still have to be decoded into a TypeScript string,
@@ -194,6 +194,7 @@ export class JanelaAppImpl<
   // decoded a slice at a time, giving the run loop the thread back between
   // slices - total work is unchanged, but no single turn carries much of it.
   drainIds: number[] = [];
+  draining = false; // a drain continuation is already queued
   drainCbs: FsCallback[] = [];
   drainOk: boolean[] = [];
   drainParts: string[][] = [];
@@ -208,37 +209,49 @@ export class JanelaAppImpl<
     wvInit(h, BOOTSTRAP);
   }
 
-  retick(): void {
-    const want = this.drainIds.length > 0 ? TICK_DRAIN_MS : TICK_IDLE_MS;
-    if (!this.ticking || want === this.tickMs) return;
-    this.tickMs = want;
-    wvTickStart(this.handle, want);
+  /**
+   * Park `fn` with the shell and ask to be called back in `ms`.
+   *
+   * The id is the whole protocol: TS keeps the closure, the shell keeps the
+   * clock, and neither needs to know anything else about the other.
+   */
+  schedule(ms: number, fn: () => void): void {
+    const id = this.nextCont;
+    this.nextCont = id + 1;
+    this.contIds.push(id);
+    this.contFns.push(fn);
+    const delay = ms > 0 ? ms : 0;
+    // `+ 0` per the note at the top of this file: a bare FFI call is not safe
+    // in every position, and this one is silently dropped without it.
+    const rc = wvSchedule(this.handle, id, delay) + 0;
+    if (rc < 0) console.log("[janela] could not schedule continuation", id);
   }
 
-  wake(): void {
-    if (this.ticking) return;
-    this.ticking = true;
-    this.tickMs = this.drainIds.length > 0 ? TICK_DRAIN_MS : TICK_IDLE_MS;
-    wvTickStart(this.handle, this.tickMs);
-  }
-
-  idle(): void {
-    if (!this.ticking) return;
-    if (
-      this.taskFns.length > 0 ||
-      this.timerFns.length > 0 ||
-      this.jobIds.length > 0 ||
-      this.drainIds.length > 0
-    ) {
-      return;
+  /** Run the continuation parked under `id`, if it is still waiting. */
+  runCont(id: number): void {
+    for (let i = 0; i < this.contIds.length; i++) {
+      if (this.contIds[i] === id) {
+        const fn = this.contFns[i];
+        // Unregister BEFORE running: a continuation that schedules another one
+        // must not disturb the entry being removed, and a continuation that
+        // throws must not stay parked forever.
+        this.contIds.splice(i, 1);
+        this.contFns.splice(i, 1);
+        fn();
+        return;
+      }
     }
-    this.ticking = false;
-    wvTickStop(this.handle);
   }
 
   // Decode as much of the pending payloads as the budget allows, then yield.
   // Slices are taken from one job at a time so a big read finishes promptly
   // rather than every concurrent read finishing slowly.
+  /**
+   * Decode as much of the pending payloads as the budget allows, then hand the
+   * thread back. If work remains, a zero-delay continuation carries on at the
+   * top of the next turn, so a 100 MB read is spread across frames instead of
+   * freezing one.
+   */
   drainSome(): void {
     if (this.drainIds.length === 0) return;
     const started = Date.now() + 0;
@@ -281,38 +294,39 @@ export class JanelaAppImpl<
         // before starting another payload.
       }
 
-      if (Date.now() - started >= DRAIN_BUDGET_MS) return;
+      if (Date.now() - started >= DRAIN_BUDGET_MS) {
+        this.drainMore();
+        return;
+      }
     }
   }
 
-  // One turn of the loop: every task queued so far, plus every due timer.
-  // Tasks queued *by* this turn wait for the next one, so a defer() chain
-  // yields to the UI between slices instead of starving it.
-  turn(): void {
-    const tasks = this.taskFns;
-    this.taskFns = [];
-    for (let i = 0; i < tasks.length; i++) tasks[i]();
+  /** Continue draining on the next turn, without stacking duplicate work. */
+  drainMore(): void {
+    if (this.drainIds.length === 0 || this.draining) return;
+    this.draining = true;
+    this.schedule(0, () => {
+      this.draining = false;
+      this.drainSome();
+    });
+  }
 
-    if (this.timerFns.length > 0) {
-      const now = Date.now() + 0;
-      const keptFns: (() => void)[] = [];
-      const keptDue: number[] = [];
-      const fire: (() => void)[] = [];
-      for (let i = 0; i < this.timerFns.length; i++) {
-        if (this.timerDue[i] <= now) {
-          fire.push(this.timerFns[i]);
-        } else {
-          keptFns.push(this.timerFns[i]);
-          keptDue.push(this.timerDue[i]);
-        }
-      }
-      this.timerFns = keptFns;
-      this.timerDue = keptDue;
-      for (let i = 0; i < fire.length; i++) fire[i]();
+  /**
+   * The shell calls here on the UI thread when something it was holding comes
+   * due: a continuation TS parked (id >= 1), or a job that finished
+   * (TIMER_JOBS). This is the only entry into the loop, and it always lands at
+   * the top of a fresh turn — never underneath a TS frame.
+   */
+  onTimer(id: number): void {
+    if (id !== TIMER_JOBS) {
+      this.runCont(id);
+      return;
     }
+    this.serviceJobs();
+  }
 
-    // Finished file jobs: the worker thread has already done the blocking
-    // syscall, so all that happens on this (UI) thread is the drain.
+  /** A job reached a terminal state: move the finished ones to the drain. */
+  serviceJobs(): void {
     if (this.jobIds.length > 0) {
       const keptIds: number[] = [];
       const keptCbs: FsCallback[] = [];
@@ -346,8 +360,6 @@ export class JanelaAppImpl<
     }
 
     this.drainSome();
-    this.retick();
-    this.idle();
   }
 
   // Both dialog kinds share one path: start the job, then let the same drain
@@ -371,8 +383,7 @@ export class JanelaAppImpl<
       encodeFilters(filters),
     ) + 0;
     if (id < 0) {
-      this.taskFns.push(() => cb(null, "EAGAIN: could not open a dialog"));
-      this.wake();
+      this.defer(() => cb(null, "EAGAIN: could not open a dialog"));
       return;
     }
     this.jobIds.push(id);
@@ -384,7 +395,6 @@ export class JanelaAppImpl<
       // "null" is a cancel; anything else is a JSON array of paths.
       cb(JSON.parse(text) as string[] | null);
     });
-    this.wake();
   }
 
   /**
@@ -427,16 +437,14 @@ export class JanelaAppImpl<
 
   /** Run fn on the next turn of the host loop - the way to slice long work. */
   defer(fn: () => void): void {
-    this.taskFns.push(fn);
-    this.wake();
+    // Zero delay: the shell posts straight to the next turn, no timer at all.
+    this.schedule(0, fn);
   }
 
-  /** Run fn after at least ms. The host loop's timer; scriptc's setTimeout
+  /** Run fn after at least ms. The shell owns the clock; scriptc's setTimeout
    *  cannot fire while the window is open (its loop is parked inside run()). */
   sleep(ms: number, fn: () => void): void {
-    this.timerFns.push(fn);
-    this.timerDue.push(Date.now() + (ms > 0 ? ms : 0));
-    this.wake();
+    this.schedule(ms, fn);
   }
 
   /**
@@ -451,7 +459,6 @@ export class JanelaAppImpl<
     }
     this.jobIds.push(id);
     this.jobCbs.push(cb);
-    this.wake();
   }
 
   /** Write a file without blocking the window; cb(null) on success. */
@@ -465,7 +472,6 @@ export class JanelaAppImpl<
     // The write payload is empty on success; the shared callback shape just
     // ignores the text argument.
     this.jobCbs.push((err, _text) => cb(err));
-    this.wake();
   }
 
   /** Show the native "open" dialog; cb gets the paths, or null on cancel. */
@@ -531,8 +537,8 @@ export class JanelaAppImpl<
     const h = this.handle;
     // Both handlers are retained: registered once here, called by the shim
     // for as long as the window is open.
-    wvOnTick(h, () => {
-      this.turn();
+    wvOnTimer(h, (id) => {
+      this.onTimer(id);
     });
     wvOnInvoke(h, (req) => {
       const env = JSON.parse(req) as string[];

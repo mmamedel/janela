@@ -8,15 +8,22 @@
 //   * format 3 — callback params may be `string`/`bytes`, so a payload crosses
 //     into TS as one argument instead of one FFI call per byte. Payloads going
 //     the other way ride `string` params on ordinary functions.
-//   * format 4 — callbacks may be `retained`, so the invoke and tick handlers
+//   * format 4 — callbacks may be `retained`, so the invoke and timer handlers
 //     are registered once and live for the app's lifetime. wv_run() is a plain
 //     blocking call again; it no longer has to carry a callback whose "call
 //     scope" was standing in for "app lifetime".
+//
+// The shell owns scheduling. TS never holds a timer: it registers a
+// continuation under an id and calls wv_schedule(), and this shim calls back
+// into TS with that id once the delay is up. That is the same shape a library
+// -mode host (iOS) must use, where the compiled TS links no event loop at all.
 
 #include "webview.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -50,6 +57,13 @@ struct Pending {
   std::string call_id;
 };
 
+// A continuation TS has parked with the shell: run whatever TS registered
+// under `id` once `due` has passed. The shell owns the clock; TS owns the id.
+struct Timer {
+  int32_t id;
+  std::chrono::steady_clock::time_point due;
+};
+
 struct App {
   webview_t w = nullptr;
   bool used = false;
@@ -59,8 +73,8 @@ struct App {
   // request rides in as a (ptr, len) string param.
   int32_t (*on_invoke)(const uint8_t *, size_t, void *) = nullptr;
   void *on_invoke_ctx = nullptr;
-  void (*on_tick)(void *) = nullptr;
-  void *on_tick_ctx = nullptr;
+  void (*on_timer)(int32_t, void *) = nullptr;
+  void *on_timer_ctx = nullptr;
 
   // Staging for the in-flight request.
   std::string req;      // JSON args array from JS
@@ -69,12 +83,25 @@ struct App {
   uint32_t seq = 0;
 
   // ---- async support ----
-  std::vector<Pending> pending;  // deferred invokes, addressed by index
-  bool deferred = false;         // set by wv_defer() during the current call
-  std::thread ticker;            // pure-C++ thread; never touches TS itself
-  std::atomic<bool> ticking{false};
-  std::atomic<int32_t> tick_ms{16};
+  // The held-reply table: an invoke whose answer is not ready yet. The page's
+  // promise stays unsettled until wv_resolve() answers this call id.
+  std::vector<Pending> pending;
+  bool deferred = false;  // set by wv_defer() during the current call
+
+  // The shell's timer queue, and the one thread that watches it. The thread
+  // only sleeps and posts — it never touches TS, because scriptc's runtime is
+  // not thread-safe. Everything reaches TS through webview_dispatch, on the UI
+  // thread, on a LATER turn of the shell's own loop (see timer_on_ui_thread).
+  std::vector<Timer> timers;
+  std::mutex timers_mu;
+  std::condition_variable timers_cv;
+  std::thread scheduler;
+  std::atomic<bool> scheduling{false};
 };
+
+// Reserved timer id: not a TS continuation but "a job changed state, service
+// them". TS allocates its own continuation ids from 1 upwards.
+const int32_t TIMER_JOBS = -1;
 
 // Fixed-size table: handles are indices, never pointers.
 App g_apps[8];
@@ -92,8 +119,9 @@ std::string to_str(const uint8_t *p, size_t n) {
 // ---- jobs ------------------------------------------------------------------
 //
 // A job is any unit of work whose answer cannot be produced during the FFI
-// call that asks for it. TS starts one, gets an id back immediately, and polls
-// wv_job_status() from its tick loop until the job is terminal.
+// call that asks for it. TS starts one and gets an id back immediately; when
+// the job reaches a terminal state it posts TIMER_JOBS to the UI thread, and
+// TS then reads wv_job_status() for the jobs it is waiting on.
 //
 // Two kinds use this pool, for opposite reasons:
 //   * file I/O — the blocking syscall must happen off the UI thread, so a
@@ -102,9 +130,9 @@ std::string to_str(const uint8_t *p, size_t n) {
 //     later, on the UI thread.
 //   * native dialogs — the modal must run ON the UI thread, but not while TS
 //     is on the stack (runModal/gtk_dialog_run spin a nested event loop, which
-//     would re-enter the tick handler underneath the invoke handler that asked
-//     for the dialog). So the job is posted with webview_dispatch and runs at
-//     the top of a later turn, with no TS frame beneath it.
+//     would re-enter TS underneath the invoke handler that asked for the
+//     dialog). So the job is posted with webview_dispatch and runs at the top
+//     of a later turn, with no TS frame beneath it.
 
 const int32_t JOB_PENDING = 0;
 const int32_t JOB_OK = 1;
@@ -119,6 +147,9 @@ struct Job {
   std::string data;  // payload on success, the error message on failure
   std::thread worker;  // unused by dialog jobs, which run on the UI thread
   bool used = false;
+  // Which app to wake when this job finishes. Without the ticker there is
+  // nothing polling, so a finished job has to announce itself.
+  int32_t app = -1;
 };
 
 // Jobs are addressed by index and held behind unique_ptr so the vector may
@@ -135,7 +166,7 @@ Job *job_at(int32_t id) {
 
 // Reuses a finished slot when one is free, so a long-running app that reads
 // many files does not grow the table without bound.
-int32_t new_job() {
+int32_t new_job(int32_t app) {
   std::lock_guard<std::mutex> lock(g_jobs_mu);
   for (size_t i = 0; i < g_jobs.size(); i++) {
     if (g_jobs[i]->used) continue;
@@ -143,10 +174,12 @@ int32_t new_job() {
     g_jobs[i]->status.store(JOB_PENDING);
     g_jobs[i]->data.clear();
     g_jobs[i]->used = true;
+    g_jobs[i]->app = app;
     return static_cast<int32_t>(i);
   }
   g_jobs.push_back(std::unique_ptr<Job>(new Job()));
   g_jobs.back()->used = true;
+  g_jobs.back()->app = app;
   return static_cast<int32_t>(g_jobs.size() - 1);
 }
 
@@ -166,9 +199,18 @@ std::string fs_error_message(const std::string &path, const char *op) {
   return "EIO: failed to " + std::string(op) + " '" + path + "'";
 }
 
+// Defined below, once the app table is in scope. Posts `id` to the app's UI
+// thread via webview_dispatch, so TS is entered on a later turn of the shell's
+// own loop and never underneath a frame it is already inside.
+void post_timer(int32_t app, int32_t id);
+
 void job_finish(Job *j, int32_t status, std::string payload) {
   j->data = std::move(payload);
   j->status.store(status, std::memory_order_release);
+  // Nothing polls any more, so a finished job announces itself. Safe from a
+  // worker thread: webview_dispatch is the documented cross-thread hand-off,
+  // and it only queues — TS runs later, on the UI thread.
+  if (j->app >= 0) post_timer(j->app, TIMER_JOBS);
 }
 
 void fs_read_worker(Job *j, std::string path) {
@@ -614,18 +656,67 @@ void trampoline(const char *id, const char *req, void *arg) {
   webview_return(a->w, a->cur_id.c_str(), status,
                  a->reply.empty() ? "null" : a->reply.c_str());
   // wv_defer() treats a non-empty cur_id as "an invoke is in flight". Clearing
-  // it here means a defer from anywhere else — a tick, say — fails with -1
+  // it here means a defer from anywhere else — a timer, say — fails with -1
   // instead of stealing this already-answered call's id.
   a->cur_id.clear();
 }
 
-// Runs on the UI thread (posted by the ticker via webview_dispatch), so the
-// TS it calls stays single-threaded — scriptc's runtime is NOT thread-safe.
-void tick_on_ui_thread(webview_t, void *arg) {
-  App *a = &g_apps[reinterpret_cast<uintptr_t>(arg)];
-  if (!a->used || !a->on_tick) return;  // app quit between dispatch and delivery
+// The app index and the timer id, packed into the single void* that
+// webview_dispatch carries.
+void *pack_timer(int32_t app, int32_t id) {
+  uintptr_t packed = (static_cast<uintptr_t>(static_cast<uint32_t>(app)) << 32) |
+                     static_cast<uint32_t>(id);
+  return reinterpret_cast<void *>(packed);
+}
+
+// Runs on the UI thread, posted via webview_dispatch, so the TS it calls stays
+// single-threaded — scriptc's runtime is NOT thread-safe.
+//
+// This is also the one place that guarantees the shell never re-enters TS from
+// inside a frame TS is already in. Everything that wants to reach TS — a due
+// timer, a finished file read, a dismissed dialog — goes through a dispatch
+// and therefore lands at the top of a later turn, with no TS beneath it. That
+// rule is invisible when broken: a violating host gets correct-looking results
+// right up until it doesn't, so it is kept by construction, not by testing.
+void timer_on_ui_thread(webview_t, void *arg) {
+  uintptr_t packed = reinterpret_cast<uintptr_t>(arg);
+  App *a = &g_apps[packed >> 32];
+  int32_t id = static_cast<int32_t>(static_cast<uint32_t>(packed & 0xffffffffu));
+  if (!a->used || !a->on_timer) return;  // app quit between dispatch and delivery
   a->seq++;
-  a->on_tick(a->on_tick_ctx);
+  a->on_timer(id, a->on_timer_ctx);
+}
+
+void post_timer(int32_t app, int32_t id) {
+  if (app < 0 || app >= 8) return;
+  App *a = &g_apps[app];
+  if (!a->used || !a->w) return;
+  webview_dispatch(a->w, timer_on_ui_thread, pack_timer(app, id));
+}
+
+// The scheduler thread: sleep until the earliest timer is due, hand its id to
+// the UI thread, repeat. It never touches TS and holds no TS state.
+void scheduler_loop(App *a, int32_t h) {
+  std::unique_lock<std::mutex> lk(a->timers_mu);
+  while (a->scheduling.load()) {
+    if (a->timers.empty()) {
+      a->timers_cv.wait(lk);
+      continue;
+    }
+    auto soonest = std::min_element(
+        a->timers.begin(), a->timers.end(),
+        [](const Timer &x, const Timer &y) { return x.due < y.due; });
+    auto due = soonest->due;
+    if (due > std::chrono::steady_clock::now()) {
+      a->timers_cv.wait_until(lk, due);
+      continue;  // re-check: an earlier timer may have arrived meanwhile
+    }
+    int32_t id = soonest->id;
+    a->timers.erase(soonest);
+    lk.unlock();
+    post_timer(h, id);
+    lk.lock();
+  }
 }
 
 }  // namespace
@@ -642,16 +733,16 @@ int32_t wv_create(int32_t debug) {
     g_apps[i].binds.clear();
     g_apps[i].on_invoke = nullptr;
     g_apps[i].on_invoke_ctx = nullptr;
-    g_apps[i].on_tick = nullptr;
-    g_apps[i].on_tick_ctx = nullptr;
+    g_apps[i].on_timer = nullptr;
+    g_apps[i].on_timer_ctx = nullptr;
     g_apps[i].req.clear();
     g_apps[i].cur_id.clear();
     g_apps[i].reply.clear();
     g_apps[i].seq = 0;
     g_apps[i].pending.clear();
     g_apps[i].deferred = false;
-    g_apps[i].ticking.store(false);
-    g_apps[i].tick_ms.store(16);
+    g_apps[i].scheduling.store(false);
+    g_apps[i].timers.clear();
     g_apps[i].w = w;
     g_apps[i].used = true;
     return i;
@@ -723,8 +814,8 @@ int32_t wv_reply(int32_t h, const uint8_t *p, size_t n) {
 // call, and wv_run() is one such call for the app's whole life — so setTimeout
 // and promise continuations in TS never fire while the window is open. These
 // four functions supply the missing loop: TS may postpone an invoke's answer
-// (wv_defer), answer it later (wv_resolve), and get called back periodically
-// on the UI thread to make progress (wv_tick_start / wv_tick_stop).
+// (wv_defer), answer it later (wv_resolve), and park a continuation with the
+// shell to be called back on the UI thread when it comes due (wv_schedule).
 
 // Postpone the answer to the invoke being handled right now. Returns a
 // pending id to hand back to wv_resolve(), or -1 outside a bind callback.
@@ -759,43 +850,60 @@ int32_t wv_resolve(int32_t h, int32_t id, int32_t status) {
   return 0;
 }
 
-// Start pumping the retained tick handler every interval_ms. The thread
-// itself only sleeps and posts; all TS execution happens on the UI thread.
-int32_t wv_tick_start(int32_t h, int32_t interval_ms) {
+// Ask the shell to call the retained timer handler with `id` after `ms`.
+//
+// This is the whole of scheduling: TS keeps the continuation, the shell keeps
+// the clock. A zero delay is not a special case — it posts on the next turn of
+// the loop, which is exactly what app.defer() wants, with no timer involved.
+//
+// An idle app now costs nothing at all: with no timers queued the scheduler
+// thread blocks on a condition variable rather than waking every few
+// milliseconds to find nothing to do.
+int32_t wv_schedule(int32_t h, int32_t id, int32_t ms) {
   App *a = app_at(h);
   if (!a) return -1;
-  a->tick_ms = interval_ms > 0 ? interval_ms : 16;
-  if (a->ticking.exchange(true)) return 0;  // already running
-  uintptr_t idx = static_cast<uintptr_t>(h);
-  a->ticker = std::thread([a, idx]() {
-    while (a->ticking.load()) {
-      std::this_thread::sleep_for(
-          std::chrono::milliseconds(a->tick_ms.load()));
-      if (!a->ticking.load()) break;
-      webview_dispatch(a->w, tick_on_ui_thread, reinterpret_cast<void *>(idx));
+
+  // Zero delay skips the queue: there is nothing to wait for, and posting
+  // straight to the UI thread keeps a defer() chain as short as possible.
+  if (ms <= 0) {
+    post_timer(h, id);
+    return 0;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(a->timers_mu);
+    a->timers.push_back(
+        Timer{id, std::chrono::steady_clock::now() +
+                      std::chrono::milliseconds(ms)});
+    if (!a->scheduling.exchange(true)) {
+      a->scheduler = std::thread(scheduler_loop, a, h);
     }
-  });
+  }
+  a->timers_cv.notify_one();
   return 0;
 }
 
-int32_t wv_tick_stop(int32_t h) {
-  App *a = app_at(h);
-  if (!a) return -1;
-  if (!a->ticking.exchange(false)) return 0;
-  if (a->ticker.joinable()) a->ticker.join();
-  return 0;
+// Stop the scheduler thread and drop any timers that never came due. Called on
+// the way out of wv_run(), so nothing can reach TS after the window closes.
+void stop_scheduler(App *a) {
+  if (!a->scheduling.exchange(false)) return;
+  a->timers_cv.notify_all();
+  if (a->scheduler.joinable()) a->scheduler.join();
+  std::lock_guard<std::mutex> lock(a->timers_mu);
+  a->timers.clear();
 }
 
 // ---- async file I/O ---------------------------------------------------------
 //
 // wv_fs_read/wv_fs_write start a worker thread and return immediately with a
-// job id. TS polls wv_job_status() from its tick loop and drains the payload
+// job id. TS is woken with TIMER_JOBS when it finishes, reads wv_job_status()
+// and drains the payload
 // with wv_fs_byte() once the job is terminal. On failure the payload is the
 // error message, so success and failure share one drain path.
 
 int32_t wv_fs_read(int32_t h, const uint8_t *p, size_t n) {
   if (!app_at(h)) return -1;
-  int32_t id = new_job();
+  int32_t id = new_job(h);
   Job *j = job_at(id);
   if (!j) return -1;
   j->worker = std::thread(fs_read_worker, j, to_str(p, n));
@@ -805,7 +913,7 @@ int32_t wv_fs_read(int32_t h, const uint8_t *p, size_t n) {
 int32_t wv_fs_write(int32_t h, const uint8_t *p, size_t n, const uint8_t *dp,
                     size_t dn) {
   if (!app_at(h)) return -1;
-  int32_t id = new_job();
+  int32_t id = new_job(h);
   Job *j = job_at(id);
   if (!j) return -1;
   j->worker = std::thread(fs_write_worker, j, to_str(p, n), to_str(dp, dn));
@@ -906,7 +1014,7 @@ int32_t wv_dialog(int32_t h, int32_t kind, int32_t flags, const uint8_t *tp,
                   size_t nn, const uint8_t *fp, size_t fn) {
   App *a = app_at(h);
   if (!a) return -1;
-  int32_t id = new_job();
+  int32_t id = new_job(h);
   Job *j = job_at(id);
   if (!j) return -1;
 
@@ -994,12 +1102,13 @@ int32_t wv_on_invoke(int32_t h,
   return 0;
 }
 
-// Register the retained handler the ticker pumps on the UI thread.
-int32_t wv_on_tick(int32_t h, void (*cb)(void *), void *ctx) {
+// Register the retained handler the shell calls when a scheduled id comes due
+// (and with TIMER_JOBS when a file read or dialog finishes).
+int32_t wv_on_timer(int32_t h, void (*cb)(int32_t, void *), void *ctx) {
   App *a = app_at(h);
   if (!a) return -1;
-  a->on_tick = cb;
-  a->on_tick_ctx = ctx;
+  a->on_timer = cb;
+  a->on_timer_ctx = ctx;
   return 0;
 }
 
@@ -1009,11 +1118,10 @@ int32_t wv_run(int32_t h) {
   if (!a) return -1;
   int rc = webview_run(a->w);
   // Nothing may call into TS once run() has returned.
-  a->ticking.store(false);
-  if (a->ticker.joinable()) a->ticker.join();
+  stop_scheduler(a);
   jobs_join_all();  // nor may an in-flight read outlive the app
   a->on_invoke = nullptr;
-  a->on_tick = nullptr;
+  a->on_timer = nullptr;
   return rc;
 }
 
@@ -1026,8 +1134,7 @@ int32_t wv_terminate(int32_t h) {
 int32_t wv_destroy(int32_t h) {
   App *a = app_at(h);
   if (!a) return -1;
-  a->ticking.store(false);
-  if (a->ticker.joinable()) a->ticker.join();
+  stop_scheduler(a);
   webview_destroy(a->w);
   a->used = false;
   a->w = nullptr;
