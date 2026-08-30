@@ -6,6 +6,7 @@
  * parse.
  */
 
+import type { JanelaApp } from "../runtime/janela";
 import type { CommandShapes, Commands, Events } from "../runtime/types";
 
 /** Removes a subscription created by `listen` / `client.on`. */
@@ -50,17 +51,36 @@ export declare function listen<T = unknown>(
 // Typed contract
 // ---------------------------------------------------------------------------
 
-/** Anything shaped like a host contract module's exported `App` type. */
+/**
+ * Anything shaped like a host contract module's exported `App` type.
+ *
+ * @deprecated The `{ commands, events }` wrapper of 0.5.x/0.6.x. Export
+ * `type App = JanelaApp<AppCommands, AppEvents>` instead.
+ */
 export interface Contract {
   commands: Commands<CommandShapes>;
   events: Events<unknown>;
 }
 
-/** The command table declared by a contract. */
-export type CommandsOf<A> = A extends { commands: Commands<infer M> } ? M : never;
+/**
+ * The command table declared by a contract.
+ *
+ * Reads the contract off a `JanelaApp<C, E>` — what a host's `App` type is
+ * from 0.7.0 — and falls back to the 0.5.x/0.6.x `{ commands, events }`
+ * wrapper, so a project written against either shape keeps checking.
+ */
+export type CommandsOf<A> = A extends JanelaApp<infer M, infer _E>
+  ? M
+  : A extends { commands: Commands<infer M> }
+    ? M
+    : never;
 
-/** The event table declared by a contract. */
-export type EventsOf<A> = A extends { events: Events<infer E> } ? E : never;
+/** The event table declared by a contract; see CommandsOf for the two shapes. */
+export type EventsOf<A> = A extends JanelaApp<infer _M, infer E>
+  ? E
+  : A extends { events: Events<infer E> }
+    ? E
+    : never;
 
 /**
  * A client bound to a host contract: command names, argument shapes, result
@@ -89,7 +109,7 @@ export interface JanelaClient<A> {
  * Build a client checked against a host's contract.
  *
  * ```ts
- * import type { App } from "../src-host/main";
+ * import type { App } from "../src-host/main";   // App = JanelaApp<Cmds, Evts>
  * const client = createClient<App>();
  * const sum = await client.invoke("add", { a: 2, b: 40 });   // number
  * const off = client.on("added", (v) => console.log(v));      // v: number
