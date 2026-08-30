@@ -1,0 +1,4 @@
+.scriptc/
+build/
+hostcheck/.scriptc/
+hostcheck/driver
