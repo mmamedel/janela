@@ -97,6 +97,17 @@ Also not covered yet: real devices (needs a signing identity and a
 provisioning profile), the App Store, and Android (needs the NDK and a JNI
 shell).
 
+## Evidence
+
+![async, timers and file I/O on iOS](img/ios-parity.png)
+
+A scaffolded app in the simulator: a sync command answering at `t+0ms` while
+an async one is pending, four continuations firing in due order from
+registrations made out of order, a rejected command, and a file written and
+read back byte-exact including `— çãé 🚀`.
+
+![the vue template on iOS](img/ios-vue.png)
+
 ## Under the hood
 
 - `packages/janela/runtime/ios.ts` — the iOS runtime lane. Same class name and
