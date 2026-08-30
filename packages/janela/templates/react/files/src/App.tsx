@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
-import { invoke, listen } from "janela/api";
+import { createClient } from "janela/api";
+// Type-only import of the host contract: erased at compile time, so no host
+// code is bundled into the page.
+import type { App as Contract } from "../src-host/main";
 import "./App.css";
+
+const client = createClient<Contract>();
 
 export default function App() {
   const [greeting, setGreeting] = useState("…");
@@ -10,16 +15,17 @@ export default function App() {
   const [events, setEvents] = useState<string[]>([]);
 
   useEffect(() => {
-    // Backend→frontend events. The payload arrives as a value, and the
-    // generic says which value.
-    listen<number>("added", (value) =>
+    // The event name is checked against the contract, `value` is inferred,
+    // and `on` returns a disposer.
+    const off = client.on("added", (value) =>
       setEvents((prev) => [`host emitted: ${value}`, ...prev]),
     );
-    invoke<string>("greet", { name: "__NAME__" }).then(setGreeting);
+    client.invoke("greet", { name: "__NAME__" }).then(setGreeting);
+    return off;
   }, []);
 
   const add = async () =>
-    setSum(await invoke<number>("add", { a, b }));
+    setSum(await client.invoke("add", { a, b }));
 
   return (
     <>

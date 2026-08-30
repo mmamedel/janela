@@ -246,38 +246,39 @@
     <div class="code-cols">
       <div class="codecard">
         <div class="bar"><span class="dots"><i></i><i></i><i></i></span>src-host/main.ts <span>— compiled to native</span></div>
-        <pre><code><span class="k">import type</span> { JanelaApp } <span class="k">from</span> <span class="s">"./janela"</span>;
+        <pre><code><span class="k">import</span> { defineCommands, defineEvents, emit, on }
+  <span class="k">from</span> <span class="s">"janela/host"</span>;
+
+<span class="c">// one declaration; the page is checked against it</span>
+<span class="k">export const</span> commands = <span class="f">defineCommands</span>&lt;{
+  add: { args: { a: <span class="k">number</span>; b: <span class="k">number</span> }; result: <span class="k">number</span> };
+}&gt;();
+<span class="k">export const</span> events = <span class="f">defineEvents</span>&lt;{ added: <span class="k">number</span> }&gt;();
+<span class="k">export type</span> App = {
+  commands: <span class="k">typeof</span> commands; events: <span class="k">typeof</span> events;
+};
 
 <span class="k">export function</span> <span class="f">setup</span>(app: JanelaApp): <span class="k">void</span> {
-  app.<span class="f">command</span>(<span class="s">"add"</span>, (args) =&gt; {
-    <span class="k">const</span> a = args <span class="k">as</span> { a: <span class="k">number</span>; b: <span class="k">number</span> };
-    <span class="c">// push an event to the page</span>
-    app.<span class="f">emit</span>(<span class="s">"added"</span>, a.a + a.b);
-    <span class="k">return</span> a.a + a.b;
-  });
-
-  <span class="c">// off-thread read: the window keeps painting</span>
-  app.<span class="f">commandAsync</span>(<span class="s">"readFile"</span>, (args, resolve) =&gt; {
-    <span class="k">const</span> a = args <span class="k">as</span> { path: <span class="k">string</span> };
-    app.<span class="f">readFileAsync</span>(a.path, (err, text) =&gt; {
-      <span class="f">resolve</span>(err !== <span class="k">null</span> ? { ok: <span class="k">false</span>, err } : { ok: <span class="k">true</span>, text });
-    });
+  <span class="f">on</span>(app, commands, <span class="s">"add"</span>, (args) =&gt; {
+    <span class="c">// args inferred; return type checked</span>
+    <span class="f">emit</span>(app, events, <span class="s">"added"</span>, args.a + args.b);
+    <span class="k">return</span> args.a + args.b;
   });
 }</code></pre>
       </div>
       <div class="codecard">
         <div class="bar"><span class="dots"><i></i><i></i><i></i></span>src/App.tsx <span>— runs in the OS webview</span></div>
-        <pre><code><span class="k">import</span> { invoke, listen } <span class="k">from</span> <span class="s">"janela/api"</span>;
+        <pre><code><span class="k">import</span> { createClient } <span class="k">from</span> <span class="s">"janela/api"</span>;
+<span class="c">// type-only: erased, no host code in the bundle</span>
+<span class="k">import type</span> { App } <span class="k">from</span> <span class="s">"../src-host/main"</span>;
 
-<span class="k">const</span> sum = <span class="k">await</span> <span class="f">invoke</span>&lt;<span class="k">number</span>&gt;(<span class="s">"add"</span>, { a: <span class="k">2</span>, b: <span class="k">40</span> });
-<span class="c">// → 42, computed in the native TS binary</span>
+<span class="k">const</span> client = <span class="f">createClient</span>&lt;App&gt;();
 
-<span class="f">listen</span>&lt;<span class="k">number</span>&gt;(<span class="s">"added"</span>, (payload) =&gt; {
-  console.<span class="f">log</span>(<span class="s">"host says:"</span>, payload);
-});
+<span class="k">const</span> sum = <span class="k">await</span> client.<span class="f">invoke</span>(<span class="s">"add"</span>, { a: <span class="k">2</span>, b: <span class="k">40</span> });
+<span class="c">// sum: number — checked against the host's contract</span>
 
-<span class="k">const</span> text = <span class="k">await</span> <span class="f">invoke</span>&lt;<span class="k">string</span>&gt;(<span class="s">"readFile"</span>, {
-  path: <span class="s">"/etc/hosts"</span>,
+<span class="k">const</span> off = client.<span class="f">on</span>(<span class="s">"added"</span>, (payload) =&gt; {
+  console.<span class="f">log</span>(<span class="s">"host says:"</span>, payload);  <span class="c">// payload: number</span>
 });</code></pre>
       </div>
     </div>
@@ -301,8 +302,9 @@
       <div class="card">
         <h3><span class="mini" aria-hidden="true"><i></i><i></i><i></i><i></i></span>Tauri-shaped API</h3>
         <p><code>invoke()</code> and <code>listen()</code> in the page;
-          <code>app.command()</code> and <code>app.emit()</code> in the host. Typed end to end,
-          and familiar on day one.</p>
+          <code>app.command()</code> and <code>app.emit()</code> in the host — or declare a contract
+          and have command names, arguments, results and event payloads checked by the compiler,
+          with no code generation.</p>
       </div>
       <div class="card">
         <h3><span class="mini" aria-hidden="true"><i></i><i></i><i></i><i></i></span>No plugin layer for fs &amp; friends</h3>

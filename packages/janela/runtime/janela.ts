@@ -67,6 +67,11 @@ const BOOTSTRAP =
   "  listen: function (event, cb) {" +
   "    if (!window.__wvListeners[event]) window.__wvListeners[event] = [];" +
   "    window.__wvListeners[event].push(cb);" +
+  "    return function () {" +
+  "      var a = window.__wvListeners[event] || [];" +
+  "      var i = a.indexOf(cb);" +
+  "      if (i >= 0) a.splice(i, 1);" +
+  "    };" +
   "  }," +
   "};" +
   "window.__wvEmit = function (event, payload) {" +
@@ -80,13 +85,22 @@ const BOOTSTRAP =
 export type {
   AsyncCommandHandler,
   CommandHandler,
+  CommandShape,
+  CommandShapes,
+  Commands,
   DialogFilter,
+  Events,
   FsCallback,
   JanelaApp,
   OpenDialogOptions,
   SaveDialogOptions,
   WindowConfig,
 } from "./types";
+
+// The typed-contract helpers are values, so they are re-exported as values.
+// A project's `import { defineCommands } from "janela/host"` is rewritten to
+// this module by the CLI before scriptc sees it.
+export { defineCommands, defineEvents, emit, on, onAsync } from "./types";
 
 import type {
   AsyncCommandHandler,
