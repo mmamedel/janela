@@ -336,9 +336,32 @@ function iosProfile() {
         params: [],
         returns: "string",
       },
+      // The shell calls these back on the main queue when work it owns comes
+      // due. They are the mirror of the desktop shim's wv_on_timer: the
+      // library parks a continuation under an id and is re-entered with it.
+      {
+        export: "onTimer",
+        symbol: `${IOS_PREFIX}on_timer`,
+        params: ["f64"],
+        returns: "void",
+      },
+      {
+        export: "onFsDone",
+        symbol: `${IOS_PREFIX}on_fs_done`,
+        params: ["f64", "bool", "string"],
+        returns: "void",
+      },
     ],
+    // TS -> shell. A channel handler must never re-enter the library (see
+    // upstream #263: violations silently appear to work), so every one of
+    // these only records the request; the shell acts on its own queue and
+    // re-enters through an export above on a later turn.
     callbacks: [
       { name: "janelaEmit", params: ["string", "string"], returns: "void" },
+      { name: "hostSchedule", params: ["f64", "f64"], returns: "void" },
+      { name: "hostSettle", params: ["f64", "string"], returns: "void" },
+      { name: "hostReadFile", params: ["f64", "string"], returns: "void" },
+      { name: "hostWriteFile", params: ["f64", "string", "string"], returns: "void" },
     ],
   };
 }
@@ -714,6 +737,14 @@ function build(root, { devUrl = null, gui = true, target = "desktop" } = {}) {
       `/** The document the shell loads into its WKWebView. */\n` +
       `export function indexHtml(): string {\n` +
       `  return app.indexHtml();\n` +
+      `}\n\n` +
+      `/** A continuation the shell parked has come due (main queue). */\n` +
+      `export function onTimer(id: number): void {\n` +
+      `  app.onTimer(id);\n` +
+      `}\n\n` +
+      `/** A file job the shell owns has finished (main queue). */\n` +
+      `export function onFsDone(id: number, ok: boolean, payload: string): void {\n` +
+      `  app.onFsDone(id, ok, payload);\n` +
       `}\n`
     : `const app = createApp<CmdsOf<typeof setup>, EvtsOf<typeof setup>>(WINDOW);\n` +
       `setup(app);\n` +

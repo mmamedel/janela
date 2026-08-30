@@ -29,13 +29,157 @@ int32_t jl_set_callback(const char *name, void (*fn)(void), void *ctx);
 void jl_handle_invoke(const char *cmd, size_t cmd_len, const char *args, size_t args_len,
                       char **out, size_t *out_len);
 void jl_index_html(char **out, size_t *out_len);
+void jl_on_timer(double id);
+void jl_on_fs_done(double id, bool ok, const char *payload, size_t payload_len);
 }
 
 static WKWebView *gWebView = nil;
 
+/// Settle one page-side promise with an envelope that is already JSON.
+static void settlePage(NSNumber *callId, NSString *envelope) {
+  NSString *js =
+      [NSString stringWithFormat:@"window.__janelaSettle(%@,%@);", callId, envelope];
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [gWebView evaluateJavaScript:js completionHandler:nil];
+  });
+}
+
 static void panicSink(void *ctx, const char *sym, size_t symlen, const char *msg, size_t msglen) {
   (void)ctx;
   NSLog(@"[janela] host panic in %.*s: %.*s", (int)symlen, sym, (int)msglen, msg);
+}
+
+// ---- what the shell owns for the library ----------------------------------
+//
+// Two tables, mirroring the desktop shim: continuations the library parked
+// with us, and page replies we are holding until the library says what they
+// are. Both live on the main queue and are only touched there.
+//
+// THE RULE (upstream #263): a channel handler must never re-enter the library.
+// Every handler below therefore only records what it was told and returns; the
+// re-entry happens from a dispatch_async block, i.e. at the top of a later
+// turn with no library frame beneath it. A breach silently appears to work, so
+// this has to hold by construction rather than by testing.
+
+/// Page replies whose answer was not ready when handle_invoke returned.
+/// pendingId -> the page-side call id we have not settled yet.
+static NSMutableDictionary<NSNumber *, NSNumber *> *gHeld = nil;
+/// Envelopes that arrived before we knew the page call id — a command that
+/// resolves synchronously settles during its own dispatch, before the
+/// {"pending":id} envelope has made it back to us.
+static NSMutableDictionary<NSNumber *, NSString *> *gEarly = nil;
+
+/// Answer the page for a pending id, whichever half arrived first.
+static void resolvePending(NSNumber *pendingId, NSString *envelope) {
+  NSNumber *callId = gHeld[pendingId];
+  if (callId) {
+    [gHeld removeObjectForKey:pendingId];
+    settlePage(callId, envelope);
+  } else {
+    gEarly[pendingId] = envelope; // handle_invoke has not returned yet
+  }
+}
+
+/// Register the page call id a pending answer belongs to.
+static void holdPending(NSNumber *pendingId, NSNumber *callId) {
+  NSString *early = gEarly[pendingId];
+  if (early) {
+    [gEarly removeObjectForKey:pendingId];
+    settlePage(callId, early); // it resolved synchronously; answer now
+  } else {
+    gHeld[pendingId] = callId;
+  }
+}
+
+// ---- channels the library calls (TS -> shell) ------------------------------
+
+/// Park a continuation with us and call back when it comes due. A zero delay
+/// still goes through dispatch_after(0), which posts to the next turn — that
+/// is app.defer(), and it costs no timer.
+static void hostSchedule(void *ctx, double id, double ms) {
+  (void)ctx;
+  int64_t delay = (int64_t)(ms > 0 ? ms : 0);
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, delay * NSEC_PER_MSEC),
+                 dispatch_get_main_queue(), ^{
+    jl_on_timer(id); // fresh turn: no library frame beneath us
+  });
+}
+
+/// The library has an answer for a held page reply.
+static void hostSettle(void *ctx, double pendingId, const char *env, size_t env_len) {
+  (void)ctx;
+  NSString *envelope = [[NSString alloc] initWithBytes:env
+                                                length:env_len
+                                              encoding:NSUTF8StringEncoding] ?: @"null";
+  NSNumber *key = @((int64_t)pendingId);
+  dispatch_async(dispatch_get_main_queue(), ^{
+    resolvePending(key, envelope);
+  });
+}
+
+/// The file queue: blocking I/O happens here, never on the main queue, and
+/// never inside the library. The library links no threads of its own, so this
+/// is the only place a read can go.
+/// An iOS app has no useful working directory and cannot see host paths, so a
+/// relative path is taken as relative to the app's Documents directory — the
+/// one place a sandboxed app can freely read and write.
+static NSString *resolvePath(NSString *path) {
+  if ([path hasPrefix:@"/"]) return path;
+  NSArray<NSString *> *dirs =
+      NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+  NSString *docs = dirs.firstObject ?: NSTemporaryDirectory();
+  return [docs stringByAppendingPathComponent:path];
+}
+
+static dispatch_queue_t fsQueue(void) {
+  static dispatch_queue_t q;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    q = dispatch_queue_create("dev.janela.fs", DISPATCH_QUEUE_SERIAL);
+  });
+  return q;
+}
+
+static void finishFs(double id, bool ok, NSString *payload) {
+  // Convert INSIDE the block: -UTF8String hands back an autoreleased buffer
+  // whose lifetime does not survive the hop to another queue. The NSString is
+  // captured (and retained) by the block; the bytes are taken on arrival.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    const char *bytes = payload.UTF8String ?: "";
+    jl_on_fs_done(id, ok, bytes, strlen(bytes));
+  });
+}
+
+static void hostReadFile(void *ctx, double id, const char *path, size_t path_len) {
+  (void)ctx;
+  NSString *p = resolvePath([[NSString alloc] initWithBytes:path
+                                                     length:path_len
+                                                   encoding:NSUTF8StringEncoding] ?: @"");
+  dispatch_async(fsQueue(), ^{
+    NSError *err = nil;
+    NSString *text = [NSString stringWithContentsOfFile:p
+                                               encoding:NSUTF8StringEncoding
+                                                  error:&err];
+    if (text) finishFs(id, true, text);
+    else finishFs(id, false, err.localizedDescription ?: @"read failed");
+  });
+}
+
+static void hostWriteFile(void *ctx, double id, const char *path, size_t path_len,
+                          const char *data, size_t data_len) {
+  (void)ctx;
+  NSString *p = resolvePath([[NSString alloc] initWithBytes:path
+                                                     length:path_len
+                                                   encoding:NSUTF8StringEncoding] ?: @"");
+  NSString *d = [[NSString alloc] initWithBytes:data
+                                         length:data_len
+                                       encoding:NSUTF8StringEncoding] ?: @"";
+  dispatch_async(fsQueue(), ^{
+    NSError *err = nil;
+    BOOL ok = [d writeToFile:p atomically:YES encoding:NSUTF8StringEncoding error:&err];
+    if (ok) finishFs(id, true, @"");
+    else finishFs(id, false, err.localizedDescription ?: @"write failed");
+  });
 }
 
 /// Copy a library-owned result out of its arena and release it. Results live
@@ -101,14 +245,22 @@ static void emitEvent(void *ctx, const char *name, size_t name_len,
   jl_handle_invoke(c, strlen(c), a, strlen(a), &out, &out_len);
   NSString *reply = takeResult(out, out_len);
 
-  // The reply is an envelope: {"ok":true,"value":…} or {"ok":false,"error":…}.
-  // It is already JSON, so it can be spliced straight into the expression that
-  // settles the page-side promise.
-  NSString *js =
-      [NSString stringWithFormat:@"window.__janelaSettle(%@,%@);", callId, reply];
-  dispatch_async(dispatch_get_main_queue(), ^{
-    [gWebView evaluateJavaScript:js completionHandler:nil];
-  });
+  // An async command answers later: the library returns {"pending":<id>} and
+  // we hold the page's promise until hostSettle() tells us what it is.
+  NSData *replyData = [reply dataUsingEncoding:NSUTF8StringEncoding];
+  NSDictionary *env = replyData
+      ? [NSJSONSerialization JSONObjectWithData:replyData options:0 error:nil]
+      : nil;
+  NSNumber *pendingId = [env isKindOfClass:NSDictionary.class] ? env[@"pending"] : nil;
+  if (pendingId) {
+    holdPending(pendingId, callId);
+    return;
+  }
+
+  // Otherwise the reply is an envelope: {"ok":true,"value":…} or
+  // {"ok":false,"error":…}, already JSON, so it splices straight into the
+  // expression that settles the page-side promise.
+  settlePage(callId, reply);
 }
 
 @end
@@ -204,6 +356,16 @@ static NSString *const kBootstrap =
   // the event channel must both be in place before any TypeScript runs, since
   // setup() executes during jl_init().
   jl_set_panic_sink(panicSink, NULL);
+  gHeld = [NSMutableDictionary dictionary];
+  gEarly = [NSMutableDictionary dictionary];
+  // Registration is a pure store and is legal before init; it also survives
+  // jl_reset(), so it is done once here.
+  if (jl_set_callback("hostSchedule", (void (*)(void))hostSchedule, NULL) != 0 ||
+      jl_set_callback("hostSettle", (void (*)(void))hostSettle, NULL) != 0 ||
+      jl_set_callback("hostReadFile", (void (*)(void))hostReadFile, NULL) != 0 ||
+      jl_set_callback("hostWriteFile", (void (*)(void))hostWriteFile, NULL) != 0) {
+    NSLog(@"[janela] could not register a host channel");
+  }
   if (jl_set_callback("janelaEmit", (void (*)(void))emitEvent, NULL) != 0) {
     NSLog(@"[janela] could not register the event channel — app.emit will trap");
   }

@@ -38,6 +38,16 @@ import type {
 // shell registers it before jl_init(); calling a channel the host never
 // registered is a defined trap (SC4025), not undefined behaviour.
 declare function janelaEmit(event: string, payloadJson: string): void;
+declare function hostSchedule(id: number, ms: number): void;
+declare function hostSettle(pendingId: number, envelopeJson: string): void;
+declare function hostReadFile(jobId: number, path: string): void;
+declare function hostWriteFile(jobId: number, path: string, data: string): void;
+
+// One job table serves reads and writes; these sentinels say which callback of
+// the pair is the real one. Identity comparison is the whole trick, so they
+// must be module-level singletons rather than fresh closures.
+const nullRead: FsCallback = (_e: string | null, _t: string) => {};
+const nullWrite: (err: string | null) => void = (_e: string | null) => {};
 
 function encode(value: unknown): string {
   if (value === undefined) return "null";
@@ -52,12 +62,15 @@ function encode(value: unknown): string {
 // decides what is or is not available, so the day a capability lands on iOS
 // its stub becomes a real implementation and this comment shrinks.
 //
-// The scheduling family — commandAsync, defer, sleep — is the near-term one.
-// It is absent today only because a library build links no event loop
-// (SC4005), not because iOS cannot do it: UIKit schedules perfectly well, and
-// routing timers through the shell (host schedules, library is re-entered when
-// they fire) would give full parity. `scheduling()` marks exactly the calls
-// that a shell-scheduling change replaces, so that change edits one path.
+// The scheduling family — commandAsync, defer, sleep — and file I/O now work
+// exactly as they do on desktop: TS never holds a timer or a file handle, it
+// parks work with the shell under an id and is re-entered when the shell has
+// an answer. A library build still links no event loop (SC4005); that is why
+// the design routes through the shell rather than a limitation of iOS.
+//
+// What remains behind pending(): the file dialogs (iOS wants a document
+// picker, which is its own delegate lifecycle) and window control, which is
+// permanently meaningless on a phone rather than unfinished.
 //
 // FAILING LOUDLY WITHOUT KILLING THE APP: an uncaught throw in library mode
 // reaches the panic sink and then ABORTS the process (SC4013). So a stub must
@@ -83,10 +96,6 @@ function pending(api: string, why: string): string {
  * scheduled by the shell, the library re-entered when they fire) is the whole
  * of that change on this side.
  */
-function scheduling(api: string): string {
-  return pending(api, "an iOS build links no event loop of its own");
-}
-
 /**
  * A running janela app on iOS, typed by the contract it serves.
  *
@@ -101,6 +110,30 @@ export class JanelaAppImpl<
   names: string[] = [];
   handlers: CommandHandler[] = [];
   html = "";
+
+  // ---- scheduling ----------------------------------------------------------
+  // Identical in shape to the desktop lane, and for a stronger reason: an iOS
+  // library links no event loop at all (SC4005), so TS could not hold a timer
+  // even if it wanted to. It parks a continuation under an id, asks the shell
+  // to schedule it, and the shell re-enters onTimer(id) on the main queue when
+  // it comes due. Nothing here polls.
+  contIds: number[] = [];
+  contFns: (() => void)[] = [];
+  nextCont = 1;
+
+  // An invoke whose answer is not ready when dispatch() returns. The shell
+  // holds the page's reply under this id and settles it when hostSettle()
+  // arrives. Mirrors the desktop shim's wv_defer/wv_resolve pair.
+  pendingIds: number[] = [];
+  nextPending = 1;
+  deferred = -1; // set by an async command during its own dispatch()
+
+  // In-flight file jobs: the shell does the blocking I/O on its own queue and
+  // re-enters onFsDone() with the result.
+  jobIds: number[] = [];
+  jobCbs: FsCallback[] = [];
+  jobWriteCbs: ((err: string | null) => void)[] = [];
+  nextJob = 1;
 
   // Kept so the shared WindowConfig shape compiles; iOS has no window to size.
   constructor(_cfg: WindowConfig) {}
@@ -147,7 +180,17 @@ export class JanelaAppImpl<
       const args = JSON.parse(argsJson) as unknown;
       for (let i = 0; i < this.names.length; i++) {
         if (this.names[i] === cmd) {
-          return encode({ ok: true, value: this.handlers[i](args) });
+          this.deferred = -1;
+          const value = this.handlers[i](args);
+          // An async command parked its answer during the call above. Tell the
+          // shell to hold the page's reply under that id instead of settling
+          // now; hostSettle() answers it later.
+          if (this.deferred >= 0) {
+            const held = this.deferred;
+            this.deferred = -1;
+            return encode({ pending: held });
+          }
+          return encode({ ok: true, value });
         }
       }
       return encode({ ok: false, error: "unknown command: " + cmd });
@@ -171,49 +214,142 @@ export class JanelaAppImpl<
   // Present so that a project written for desktop still COMPILES for iOS —
   // the typed contract and main.ts are shared source. Each reports clearly at
   // the point of use instead of doing nothing quietly, and each routes through
-  // pending() / scheduling() above so there is one place to change.
+  // pending() above so there is one place to change.
 
   /**
-   * @remarks Not on iOS yet — an iOS build links no event loop, so nothing can
-   * answer later. The command is registered and rejects when invoked; parity
-   * is planned.
+   * An async command: answer later, without freezing the window.
+   *
+   * The handler runs during dispatch() but need not produce a value. It parks
+   * a pending id; dispatch() returns that id to the shell, which holds the
+   * page's promise until resolve/reject settles it. Same contract as desktop.
    */
   commandAsync<K extends keyof C & string>(
     name: K,
-    _handler: (
+    handler: (
       args: C[K]["args"],
       resolve: (value: C[K]["result"]) => void,
       reject: (reason: unknown) => void,
     ) => void,
   ): void {
-    // Registering must not throw — setup() runs at library init, outside any
-    // try/catch, where a throw would abort the app before it draws. Instead
-    // the command exists and rejects, which dispatch() contains.
-    const message = scheduling("commandAsync");
     this.names.push(name);
-    this.handlers.push((_args: unknown) => {
-      throw new Error(message);
+    this.handlers.push((args: unknown) => {
+      const id = this.nextPending;
+      this.nextPending = id + 1;
+      this.pendingIds.push(id);
+      // dispatch() reads this immediately after the handler returns.
+      this.deferred = id;
+      handler(
+        args as C[K]["args"],
+        (value: C[K]["result"]) => {
+          this.settle(id, encode({ ok: true, value: value }));
+        },
+        (reason: unknown) => {
+          this.settle(id, encode({ ok: false, error: String(reason) }));
+        },
+      );
+      return null;
     });
   }
 
-  /** @remarks Not on iOS yet; see scheduling() above. */
-  defer(_fn: () => void): void {
-    console.error(scheduling("defer"));
+  /** Settle a held reply once, ignoring a second resolve/reject. */
+  settle(id: number, envelope: string): void {
+    for (let i = 0; i < this.pendingIds.length; i++) {
+      if (this.pendingIds[i] === id) {
+        this.pendingIds.splice(i, 1);
+        hostSettle(id, envelope);
+        return;
+      }
+    }
   }
 
-  /** @remarks Not on iOS yet; see scheduling() above. */
-  sleep(_ms: number, _fn: () => void): void {
-    console.error(scheduling("sleep"));
+  /**
+   * Park `fn` with the shell and ask to be called back in `ms`.
+   *
+   * The id is the whole protocol: TS keeps the closure, the shell keeps the
+   * clock. Identical to the desktop lane.
+   */
+  schedule(ms: number, fn: () => void): void {
+    const id = this.nextCont;
+    this.nextCont = id + 1;
+    this.contIds.push(id);
+    this.contFns.push(fn);
+    const delay = ms > 0 ? ms : 0;
+    hostSchedule(id, delay);
   }
 
-  /** @remarks Not on iOS yet; reports through the callback. */
-  readFileAsync(_path: string, cb: FsCallback): void {
-    cb(pending("readFileAsync", "file access is not wired on iOS"), "");
+  /** Run fn on the next turn of the host loop — no timer involved. */
+  defer(fn: () => void): void {
+    this.schedule(0, fn);
   }
 
-  /** @remarks Not on iOS yet; reports through the callback. */
-  writeFileAsync(_path: string, _data: string, cb: (err: string | null) => void): void {
-    cb(pending("writeFileAsync", "file access is not wired on iOS"));
+  /** Run fn after roughly `ms`, without blocking the window meanwhile. */
+  sleep(ms: number, fn: () => void): void {
+    this.schedule(ms, fn);
+  }
+
+  /**
+   * Called by the shell on the main queue when a continuation comes due.
+   *
+   * This always lands at the top of a fresh turn with no TS frame beneath it,
+   * because the shell posts through its own queue rather than calling back
+   * from inside a channel handler (upstream #263: a breach silently appears
+   * to work, so it has to hold by construction).
+   */
+  onTimer(id: number): void {
+    for (let i = 0; i < this.contIds.length; i++) {
+      if (this.contIds[i] === id) {
+        const fn = this.contFns[i];
+        // Unregister BEFORE running: a continuation that schedules another one
+        // must not disturb the entry being removed.
+        this.contIds.splice(i, 1);
+        this.contFns.splice(i, 1);
+        fn();
+        return;
+      }
+    }
+  }
+
+  /** Read a file without blocking the UI; the shell does the I/O off-queue. */
+  readFileAsync(path: string, cb: FsCallback): void {
+    const id = this.nextJob;
+    this.nextJob = id + 1;
+    this.jobIds.push(id);
+    this.jobCbs.push(cb);
+    this.jobWriteCbs.push(nullWrite);
+    hostReadFile(id, path);
+  }
+
+  /** Write a file without blocking the UI; the shell does the I/O off-queue. */
+  writeFileAsync(path: string, data: string, cb: (err: string | null) => void): void {
+    const id = this.nextJob;
+    this.nextJob = id + 1;
+    this.jobIds.push(id);
+    this.jobCbs.push(nullRead);
+    this.jobWriteCbs.push(cb);
+    hostWriteFile(id, path, data);
+  }
+
+  /**
+   * Called by the shell on the main queue when a file job finishes. `payload`
+   * carries the contents on a read, or the error message when `ok` is false.
+   */
+  onFsDone(id: number, ok: boolean, payload: string): void {
+    for (let i = 0; i < this.jobIds.length; i++) {
+      if (this.jobIds[i] === id) {
+        const readCb = this.jobCbs[i];
+        const writeCb = this.jobWriteCbs[i];
+        this.jobIds.splice(i, 1);
+        this.jobCbs.splice(i, 1);
+        this.jobWriteCbs.splice(i, 1);
+        if (readCb !== nullRead) {
+          if (ok) readCb(null, payload);
+          else readCb(payload, "");
+        } else {
+          writeCb(ok ? null : payload);
+        }
+        return;
+      }
+    }
   }
 
   /** @remarks Not on iOS yet; reports through the callback. */
