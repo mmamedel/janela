@@ -90,14 +90,77 @@ export interface WindowConfig {
 // tokens and their `define*` constructors are the 0.5.x/0.6.x shape, kept so
 // projects written against it still compile.
 
-/** One command's argument and result types. */
+/**
+ * One command's argument and result types, in normalised form.
+ *
+ * This is what the app class works with internally. A contract is *written*
+ * as plain function types — see CommandSpec — and normalised to this by
+ * `Norm` before it reaches the class.
+ */
 export interface CommandShape {
   args: unknown;
   result: unknown;
 }
 
-/** A contract's command table: name → shape. */
+/** A normalised command table: name → shape. */
 export type CommandShapes = Record<string, CommandShape>;
+
+/**
+ * How a command may be declared in a contract: as a plain function type
+ * (preferred), or as the `{ args; result }` record of 0.5.x–0.7.x.
+ *
+ * ```ts
+ * type AppCommands = {
+ *   add: (args: { a: number; b: number }) => number;
+ *   quit: () => void;                                    // no arguments
+ *   legacy: { args: { name: string }; result: string };  // still accepted
+ * };
+ * ```
+ */
+export type CommandSpec = ((...args: never[]) => unknown) | CommandShape;
+
+/** A contract's command table as written: name → spec. */
+export type CommandSpecs = Record<string, CommandSpec>;
+
+/**
+ * The argument type of a declared command. A function's single parameter, or
+ * a record's `args`. A command declared with no parameters takes `null` — the
+ * page's `invoke(name)` sends null, and nothing is lost.
+ */
+export type ArgsOf<F> = F extends (...a: infer P) => unknown
+  ? P extends [infer A]
+    ? A
+    : null
+  : F extends { args: infer A }
+    ? A
+    : null;
+
+/**
+ * The result type of a declared command. `void` is normalised to `null`:
+ * every command answers the page's promise with a value, and scriptc has no
+ * conversion from a void value to the `unknown` the handler table holds.
+ */
+export type ResultOf<F> = F extends (...a: never[]) => infer R
+  ? [R] extends [void]
+    ? null
+    : R
+  : F extends { result: infer R }
+    ? R
+    : never;
+
+/**
+ * Normalise a written contract to the record form the app class indexes.
+ *
+ * This runs where `C` is still concrete — in the `JanelaApp<C, E>` alias, one
+ * step before the class — on purpose. scriptc cannot compile a *value* whose
+ * type is an unresolved conditional or a mapped type indexed by a type
+ * parameter (`SC2001: values of type 'ArgsOf<C[K]>' cannot be compiled yet`),
+ * so the class body only ever sees plain indexed access on a record.
+ * Idempotent: normalising a record-form table returns it unchanged.
+ */
+export type Norm<C> = {
+  [K in keyof C]: { args: ArgsOf<C[K]>; result: ResultOf<C[K]> };
+};
 
 /**
  * A declared command contract. Carries `M` at the type level only — the value
@@ -119,7 +182,7 @@ export interface Events<E> {
  * types and name the app itself:
  *
  * ```ts
- * export type AppCommands = { add: { args: { a: number; b: number }; result: number } };
+ * export type AppCommands = { add: (args: { a: number; b: number }) => number };
  * export type AppEvents = { added: number };
  * export type App = JanelaApp<AppCommands, AppEvents>;
  * export function setup(app: App): void { … }

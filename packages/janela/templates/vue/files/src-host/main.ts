@@ -9,19 +9,18 @@
 // Two gotchas inherited from scriptc:
 //   - never use a bare FFI-backed call as a complete variable initializer;
 //     wrap it in any expression (`+ 0`);
-//   - write `args: null` for a command that takes nothing, not `undefined` —
-//     an `undefined` argument lowers to a zero-parameter function and fails
-//     to compile.
+//   - a command that returns nothing is declared `() => void` and its handler
+//     returns `null`; every command answers the page's promise with a value.
 
 import type { JanelaApp } from "janela/host";
 
 /** Every command this app answers. Declared once; the page checks against it. */
 export type AppCommands = {
-  add: { args: { a: number; b: number }; result: number };
-  greet: { args: { name: string }; result: string };
-  log: { args: string; result: null };
-  wait: { args: { ms: number }; result: string };
-  quit: { args: null; result: null };
+  add: (args: { a: number; b: number }) => number;
+  greet: (args: { name: string }) => string;
+  log: (args: string) => void;
+  wait: (args: { ms: number }) => string;
+  quit: () => void;
 };
 
 /** Every event this app emits, and what each one carries. */

@@ -250,7 +250,7 @@
 
 <span class="c">// one declaration; the page is checked against it</span>
 <span class="k">export type</span> AppCommands = {
-  add: { args: { a: <span class="k">number</span>; b: <span class="k">number</span> }; result: <span class="k">number</span> };
+  add: (args: { a: <span class="k">number</span>; b: <span class="k">number</span> }) =&gt; <span class="k">number</span>;
 };
 <span class="k">export type</span> AppEvents = { added: <span class="k">number</span> };
 
