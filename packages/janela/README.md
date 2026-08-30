@@ -141,9 +141,10 @@ framework templates' default.
 import type { JanelaApp } from "janela/host";
 
 export type AppCommands = {
-  add:   { args: { a: number; b: number }; result: number };
-  greet: { args: { name: string };         result: string };
-  wait:  { args: { ms: number };           result: string };
+  add:   (args: { a: number; b: number }) => number;
+  greet: (args: { name: string }) => string;
+  wait:  (args: { ms: number }) => string;
+  quit:  () => void;                        // a command that takes nothing
 };
 export type AppEvents = { added: number };
 
@@ -195,11 +196,23 @@ Two things worth knowing:
   own declarations rather than from an assertion you write by hand, which is
   only possible because both sides are TypeScript.
 
-Write `args: null` for a command that takes nothing — `args: undefined`
-lowers to a zero-parameter function and fails to compile.
+A command that takes nothing is declared `() => void`, and its handler
+returns `null` — every command answers the page's promise with a value, so
+`void` is normalised to `null`. The page calls it as
+`client.invoke("quit", null)`.
 
-The untyped `invoke` / `listen` still work unchanged; the contract is
-additive, and the `vanilla` template still uses the global.
+An **event payload is a single value** of any JSON-shaped type. For an event
+carrying several things, prefer an object (`{ done: number; total: number }`):
+adding a field later does not break existing listeners, and the names read
+better at the call site. A tuple works too, but note that only the payload
+*value* may be a tuple — the varargs spelling `app.emit("progress", 3, 10)`
+does not compile (`SC2011: values of type '[done: number, total: number]'
+have no static representation`, which would require `--dynamic` and ~620 KB
+of embedded engine).
+
+The `{ args; result }` record form of 0.5.x–0.7.x is still accepted, and the
+untyped `invoke` / `listen` still work unchanged; the contract is additive,
+and the `vanilla` template still uses the global.
 
 ## Async commands
 
@@ -309,6 +322,30 @@ later UI-thread turn rather than inside the call that requests it, because a
 nested modal loop would otherwise re-enter the host loop underneath a live TS
 frame; [docs/native-shell.md](../../docs/native-shell.md) has the details, the
 per-platform table, and the Windows GUI-subsystem note.
+
+## Migrating from 0.7.x
+
+Commands are declared as the functions they are. The old `{ args; result }`
+record form still compiles, so this is optional — but the function form is
+shorter, and a command that takes nothing is finally natural to write.
+
+```ts
+// 0.7.x
+export type AppCommands = {
+  add:  { args: { a: number; b: number }; result: number };
+  quit: { args: null; result: null };
+};
+
+// 0.8.0
+export type AppCommands = {
+  add:  (args: { a: number; b: number }) => number;
+  quit: () => void;
+};
+```
+
+Nothing else changes: `export type App = JanelaApp<AppCommands, AppEvents>`,
+`setup(app: App)`, `app.command(...)` and the page's `createClient<App>()` are
+all as they were. A handler for a `() => void` command returns `null`.
 
 ## Migrating from 0.6.x
 

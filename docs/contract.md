@@ -18,7 +18,8 @@ already speak the same language.
 ```ts
 // src-host/main.ts
 export type AppCommands = {
-  add: { args: { a: number; b: number }; result: number };
+  add:  (args: { a: number; b: number }) => number;
+  quit: () => void;                 // a command that takes nothing
 };
 export type AppEvents = { added: number };
 
@@ -90,9 +91,23 @@ wrappers over the methods, kept so existing code keeps compiling.
 
 ## Gotchas
 
-- **Use `args: null`, not `args: undefined`, for a command that takes nothing.**
-  An `undefined` argument type lowers to a zero-parameter function, and the
-  registration then fails to compile with a union-mismatch or an arity error.
+- **A command that takes nothing is `() => void`**, and its handler returns
+  `null`. `void` is normalised to `null` because every command answers the
+  page's promise with a value, and scriptc has no conversion from a void value
+  to the `unknown` the handler table holds.
+- **The normalisation happens in the `JanelaApp` alias, not in the class.**
+  scriptc cannot compile a *value* whose type is an unresolved conditional or a
+  mapped type indexed by a type parameter — `SC2001: values of type
+  'ArgsOf<C[K]>' cannot be compiled yet`. Converting the written contract to
+  the `{ args; result }` form one step earlier, where the table is still
+  concrete, leaves the class body indexing a plain record as it always did.
+- **An event payload is one value.** It may be any JSON-shaped type, including
+  a tuple, but prefer an object for multi-value events: a later field does not
+  break existing listeners, and named fields read better. The varargs spelling
+  `app.emit("progress", 3, 10)` does not compile — instantiating a rest
+  parameter from a generic indexed tuple gives `SC2011: values of type
+  '[done: number, total: number]' have no static representation`, which would
+  require `--dynamic` and ~620 KB of embedded engine.
 - **Types erase at runtime.** Payloads cross as JSON; nothing validates a
   malformed one. The contract buys compile-time safety only.
 - **The contract is optional.** `app.command(name, handler)` and the untyped
