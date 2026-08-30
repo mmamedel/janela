@@ -1,0 +1,24 @@
+{
+  "profile_format": 1,
+  "name": "q4b",
+  "entry": "./lib.ts",
+  "emission": "llvm",
+  "abi": {
+    "prefix": "rg_",
+    "init_symbol": "rg_init",
+    "sink_register_symbol": "rg_set_panic_sink",
+    "collect_symbol": null,
+    "result_reset_symbol": "rg_reset"
+  },
+  "exports": [
+    {
+      "export": "handleInvoke",
+      "symbol": "rg_invoke",
+      "params": [
+        "string",
+        "string"
+      ],
+      "returns": "string"
+    }
+  ]
+}

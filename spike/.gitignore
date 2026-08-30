@@ -1,0 +1,9 @@
+.scriptc/
+shell
+shell.stripped
+driver
+d
+a
+t
+t2
+*.o

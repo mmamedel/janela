@@ -1,0 +1,24 @@
+{
+  "profile_format": 1,
+  "name": "janela-spike-app",
+  "entry": "./lib.ts",
+  "emission": "llvm",
+  "abi": {
+    "prefix": "jl_",
+    "init_symbol": "jl_init",
+    "sink_register_symbol": "jl_set_panic_sink",
+    "collect_symbol": "jl_collect",
+    "result_reset_symbol": "jl_reset"
+  },
+  "exports": [
+    {
+      "export": "handleInvoke",
+      "symbol": "jl_handle_invoke",
+      "params": [
+        "string",
+        "string"
+      ],
+      "returns": "string"
+    }
+  ]
+}

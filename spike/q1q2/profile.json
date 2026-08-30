@@ -1,0 +1,37 @@
+{
+  "profile_format": 1,
+  "name": "janela-spike",
+  "entry": "./lib.ts",
+  "emission": "llvm",
+  "abi": {
+    "prefix": "sp_",
+    "init_symbol": "sp_init",
+    "sink_register_symbol": "sp_set_panic_sink",
+    "collect_symbol": "sp_collect",
+    "result_reset_symbol": "sp_reset"
+  },
+  "exports": [
+    {
+      "export": "greet",
+      "symbol": "sp_greet",
+      "params": [
+        "string"
+      ],
+      "returns": "string"
+    },
+    {
+      "export": "makeBytes",
+      "symbol": "sp_make_bytes",
+      "params": [
+        "f64"
+      ],
+      "returns": "bytes"
+    },
+    {
+      "export": "callCount",
+      "symbol": "sp_calls",
+      "params": [],
+      "returns": "f64"
+    }
+  ]
+}

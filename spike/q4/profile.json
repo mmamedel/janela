@@ -1,0 +1,23 @@
+{
+  "profile_format": 1,
+  "name": "q4",
+  "entry": "./lib.ts",
+  "emission": "llvm",
+  "abi": {
+    "prefix": "q4_",
+    "init_symbol": "q4_init",
+    "sink_register_symbol": "q4_set_panic_sink",
+    "collect_symbol": null,
+    "result_reset_symbol": null
+  },
+  "exports": [
+    {
+      "export": "talk",
+      "symbol": "q4_talk",
+      "params": [
+        "f64"
+      ],
+      "returns": "f64"
+    }
+  ]
+}
