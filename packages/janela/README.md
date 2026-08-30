@@ -138,7 +138,7 @@ framework templates' default.
 
 ```ts
 // src-host/main.ts
-import { defineCommands, defineEvents, type JanelaApp } from "janela/host";
+import type { JanelaApp } from "janela/host";
 
 export type AppCommands = {
   add:   { args: { a: number; b: number }; result: number };
@@ -147,13 +147,11 @@ export type AppCommands = {
 };
 export type AppEvents = { added: number };
 
-export const commands = defineCommands<AppCommands>();
-export const events = defineEvents<AppEvents>();
-
-export type App = { commands: typeof commands; events: typeof events };
+/** The app, carrying its contract. This is what the page imports. */
+export type App = JanelaApp<AppCommands, AppEvents>;
 
 // Typing the app with the contract is what makes the methods below checked.
-export function setup(app: JanelaApp<AppCommands, AppEvents>): void {
+export function setup(app: App): void {
   app.command("add", (args) => {            // args inferred: { a: number; b: number }
     app.emit("added", args.a + args.b);     // event name and payload checked
     return args.a + args.b;                 // return type checked against the contract
@@ -312,6 +310,37 @@ nested modal loop would otherwise re-enter the host loop underneath a live TS
 frame; [docs/native-shell.md](../../docs/native-shell.md) has the details, the
 per-platform table, and the Windows GUI-subsystem note.
 
+## Migrating from 0.6.x
+
+The contract lives entirely in the types now, so the runtime tokens are gone.
+Name the app instead of wrapping its two tables:
+
+```ts
+// before (0.6.x)
+import { defineCommands, defineEvents, type JanelaApp } from "janela/host";
+
+export const commands = defineCommands<AppCommands>();
+export const events = defineEvents<AppEvents>();
+export type App = { commands: typeof commands; events: typeof events };
+
+export function setup(app: JanelaApp<AppCommands, AppEvents>): void { … }
+
+// after (0.7.x)
+import type { JanelaApp } from "janela/host";
+
+export type App = JanelaApp<AppCommands, AppEvents>;
+
+export function setup(app: App): void { … }
+```
+
+`AppCommands` and `AppEvents` are unchanged, and so is every page: the
+frontend still writes `createClient<App>()` and `client.invoke(...)`, because
+`createClient` reads the contract off either shape.
+
+`defineCommands` and `defineEvents` still exist and still work — they are
+`@deprecated` no-ops that only ever carried types — so a 0.6.x project keeps
+compiling and running untouched.
+
 ## Migrating from 0.5.x
 
 The contract now rides on the app itself, so the standalone registrars are no
@@ -333,14 +362,13 @@ export function setup(app: JanelaApp<AppCommands, AppEvents>): void {
 }
 ```
 
-Declare each contract as a named type so the same one feeds `defineCommands`
-and the `setup` signature:
+Declare each contract as a named type and hand both to the app (0.7.x drops
+the `defineCommands` / `defineEvents` tokens entirely — see above):
 
 ```ts
 export type AppCommands = { add: { args: { a: number; b: number }; result: number } };
 export type AppEvents = { added: number };
-export const commands = defineCommands<AppCommands>();
-export const events = defineEvents<AppEvents>();
+export type App = JanelaApp<AppCommands, AppEvents>;
 ```
 
 `on`, `onAsync` and `emit` still work — they are `@deprecated` one-line
@@ -358,9 +386,11 @@ Two things are new:
 
 - `listen()` (and the injected `janela.listen`) now **return a disposer**.
   Previously they returned nothing, so existing code is unaffected.
-- The **typed contract** — `defineCommands` / `defineEvents` on the host,
+- The **typed contract** — a contract-typed app on the host,
   `createClient<App>()` on the page. The framework templates now scaffold with
-  it. See [The typed contract](#the-typed-contract).
+  it. See [The typed contract](#the-typed-contract). (0.4.x shipped this with
+  `defineCommands` / `defineEvents` tokens; 0.7.x replaced them with the `App`
+  type alias below, and the tokens are deprecated but still work.)
 
 To adopt it in an existing app, declare what the host already exposes and swap
 the registrations:
@@ -373,10 +403,11 @@ app.command("add", (args) => {
 });
 
 // after
-export const commands = defineCommands<{
+export type AppCommands = {
   add: { args: { a: number; b: number }; result: number };
-}>();
-export type App = { commands: typeof commands; events: typeof events };
+};
+export type AppEvents = { added: number };
+export type App = JanelaApp<AppCommands, AppEvents>;
 
 app.command("add", (args) => args.a + args.b);   // args inferred, no cast
 ```

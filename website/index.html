@@ -246,8 +246,7 @@
     <div class="code-cols">
       <div class="codecard">
         <div class="bar"><span class="dots"><i></i><i></i><i></i></span>src-host/main.ts <span>— compiled to native</span></div>
-        <pre><code><span class="k">import</span> { defineCommands, defineEvents }
-  <span class="k">from</span> <span class="s">"janela/host"</span>;
+        <pre><code><span class="k">import type</span> { JanelaApp } <span class="k">from</span> <span class="s">"janela/host"</span>;
 
 <span class="c">// one declaration; the page is checked against it</span>
 <span class="k">export type</span> AppCommands = {
@@ -255,13 +254,10 @@
 };
 <span class="k">export type</span> AppEvents = { added: <span class="k">number</span> };
 
-<span class="k">export const</span> commands = <span class="f">defineCommands</span>&lt;AppCommands&gt;();
-<span class="k">export const</span> events = <span class="f">defineEvents</span>&lt;AppEvents&gt;();
-<span class="k">export type</span> App = {
-  commands: <span class="k">typeof</span> commands; events: <span class="k">typeof</span> events;
-};
+<span class="c">// the app, carrying its contract</span>
+<span class="k">export type</span> App = JanelaApp&lt;AppCommands, AppEvents&gt;;
 
-<span class="k">export function</span> <span class="f">setup</span>(app: JanelaApp&lt;AppCommands, AppEvents&gt;) {
+<span class="k">export function</span> <span class="f">setup</span>(app: App) {
   app.<span class="f">command</span>(<span class="s">"add"</span>, (args) =&gt; {
     <span class="c">// args inferred; return type checked</span>
     app.<span class="f">emit</span>(<span class="s">"added"</span>, args.a + args.b);

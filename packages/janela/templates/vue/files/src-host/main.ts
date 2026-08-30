@@ -1,9 +1,10 @@
 // src-host/main.ts — your app's backend, compiled to native code by scriptc.
 //
-// The contract below is the single declaration of what this app exposes. The
-// frontend imports `App` with `import type`, so the page is checked against
-// these exact types — command names, argument shapes, results and event
-// payloads — with no code generation and nothing to keep in sync.
+// The two tables below are the single declaration of what this app exposes,
+// and `App` names an app that carries them. The frontend imports `App` with
+// `import type`, so the page is checked against these exact types — command
+// names, argument shapes, results and event payloads — with no code
+// generation and nothing to keep in sync.
 //
 // Two gotchas inherited from scriptc:
 //   - never use a bare FFI-backed call as a complete variable initializer;
@@ -12,7 +13,7 @@
 //     an `undefined` argument lowers to a zero-parameter function and fails
 //     to compile.
 
-import { defineCommands, defineEvents, type JanelaApp } from "janela/host";
+import type { JanelaApp } from "janela/host";
 
 /** Every command this app answers. Declared once; the page checks against it. */
 export type AppCommands = {
@@ -28,16 +29,13 @@ export type AppEvents = {
   added: number;
 };
 
-export const commands = defineCommands<AppCommands>();
-export const events = defineEvents<AppEvents>();
-
 /** The contract the page imports with `import type { App } from "../src-host/main"`. */
-export type App = { commands: typeof commands; events: typeof events };
+export type App = JanelaApp<AppCommands, AppEvents>;
 
 // Typing the app with the contract is what makes `app.command` checked: the
 // name must be one of the declared ones, `args` is inferred from it, and the
 // return value has to match. Same for `app.emit`.
-export function setup(app: JanelaApp<AppCommands, AppEvents>): void {
+export function setup(app: App): void {
   app.command("add", (args) => {
     const sum = args.a + args.b;
     app.emit("added", sum);

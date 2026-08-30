@@ -17,12 +17,20 @@ already speak the same language.
 
 ```ts
 // src-host/main.ts
-export const commands = defineCommands<{
+export type AppCommands = {
   add: { args: { a: number; b: number }; result: number };
-}>();
-export const events = defineEvents<{ added: number }>();
-export type App = { commands: typeof commands; events: typeof events };
+};
+export type AppEvents = { added: number };
+
+/** The app, carrying its contract — this is what the page imports. */
+export type App = JanelaApp<AppCommands, AppEvents>;
 ```
+
+The contract is types and nothing else. Earlier releases (0.5.x/0.6.x) also
+required `defineCommands()` / `defineEvents()` tokens and a
+`{ commands, events }` wrapper; those exist only to carry type parameters, so
+0.7.x names the app itself instead. The tokens remain exported and deprecated,
+and `createClient` reads either shape.
 
 ```ts
 // src/App.tsx
@@ -40,7 +48,7 @@ host-only strings.
 The host side reads naturally:
 
 ```ts
-export function setup(app: JanelaApp<AppCommands, AppEvents>): void {
+export function setup(app: App): void {
   app.command("add", (args) => args.a + args.b);
 }
 ```

@@ -85,11 +85,10 @@ export interface WindowConfig {
 // Payloads still cross as JSON, so these types are compile-time only. Nothing
 // validates a malformed payload at runtime.
 //
-// SHAPE NOTE: the registrars below are standalone generic FUNCTIONS taking the
-// contract as a value, rather than methods on a returned registrar object.
-// That is not a style choice — scriptc cannot dispatch a generic method
-// through an interface-typed receiver (SC1090), so `commands.on(...)` does not
-// compile in a host build, while `on(app, commands, ...)` does.
+// The contract is carried by the app's own type — `JanelaApp<Commands, Events>`
+// — so the tables below are types and nothing more. The `Commands`/`Events`
+// tokens and their `define*` constructors are the 0.5.x/0.6.x shape, kept so
+// projects written against it still compile.
 
 /** One command's argument and result types. */
 export interface CommandShape {
@@ -116,17 +115,25 @@ export interface Events<E> {
 /**
  * Declare the commands a host exposes.
  *
+ * @deprecated The contract needs no runtime token. Declare the tables as
+ * types and name the app itself:
+ *
  * ```ts
- * export const commands = defineCommands<{
- *   add: { args: { a: number; b: number }; result: number };
- * }>();
+ * export type AppCommands = { add: { args: { a: number; b: number }; result: number } };
+ * export type AppEvents = { added: number };
+ * export type App = JanelaApp<AppCommands, AppEvents>;
+ * export function setup(app: App): void { … }
  * ```
  */
 export function defineCommands<M extends CommandShapes>(): Commands<M> {
   return {};
 }
 
-/** Declare the events a host emits: `defineEvents<{ added: number }>()`. */
+/**
+ * Declare the events a host emits: `defineEvents<{ added: number }>()`.
+ *
+ * @deprecated Pass the event table to `JanelaApp` instead — see defineCommands.
+ */
 export function defineEvents<E>(): Events<E> {
   return {};
 }
