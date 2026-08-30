@@ -154,10 +154,14 @@ Errors arrive as values, never throws — `err` carries a Node-shaped message
 (`ENOENT: no such file or directory, open '/x'`). UTF-8 round-trips exactly,
 astral characters included.
 
-The payload crosses in a single call (format 3), and the drain that follows it
-costs about **10 ms per MB on the UI thread** — fine for config files and
-documents, still worth chunking for very large media. See
-[docs/async.md](../../docs/async.md) for the measurements.
+The payload crosses in a single call (format 3), and the decode that follows is
+spread across turns under a 4 ms budget, so a large read no longer stalls the
+window: a 100 MB file's worst UI pause is ~25 ms (p99 4 ms) rather than ~176 ms,
+at the same throughput. The remaining pause is the one unavoidable copy that
+materialises the string for your callback. See
+[docs/async.md](../../docs/async.md) for the measurements — and note that
+indexing a large string in your own callback (`text.length`, `slice`) is O(n)
+in scriptc and can cost far more than the read did.
 
 **Use `app.sleep`, not `setTimeout`.** scriptc's own event loop is parked for
 as long as the program sits inside the `run()` FFI call, so `setTimeout`,

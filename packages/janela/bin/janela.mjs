@@ -345,14 +345,17 @@ function ffiManifest(shimLib) {
     // Job accessors, shared by file I/O and dialogs: both are work whose
     // answer cannot be produced during the FFI call that starts it.
     { name: "wvJobStatus", symbol: "wv_job_status", params: ["i32", "i32"], returns: "i32" },
+    { name: "wvJobSize", symbol: "wv_job_size", params: ["i32", "i32"], returns: "f64" },
     {
-      name: "wvJobTake", symbol: "wv_job_take",
+      // One slice per call, so a large payload decodes across several UI turns
+      // instead of stalling on all of it at once. Returns the bytes covered.
+      name: "wvJobTakeAt", symbol: "wv_job_take_at",
       params: [
-        "i32", "i32",
+        "i32", "i32", "f64", "f64",
         { callback: { id: "sink", params: ["string", { context: "sink" }], returns: "void", lifetime: "call" } },
         { context: "sink" },
       ],
-      returns: "i32",
+      returns: "f64",
     },
     { name: "wvJobFree", symbol: "wv_job_free", params: ["i32", "i32"], returns: "i32" },
     // Native dialogs: the modal runs on a later UI-thread turn, so asking for

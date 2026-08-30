@@ -29,7 +29,14 @@ declare function wvTickStop(h: number): number;
 declare function wvFsRead(h: number, path: string): number;
 declare function wvFsWrite(h: number, path: string, data: string): number;
 declare function wvJobStatus(h: number, id: number): number;
-declare function wvJobTake(h: number, id: number, sink: (text: string) => void): number;
+declare function wvJobSize(h: number, id: number): number;
+declare function wvJobTakeAt(
+  h: number,
+  id: number,
+  offset: number,
+  maxBytes: number,
+  sink: (text: string) => void,
+): number;
 declare function wvJobFree(h: number, id: number): number;
 declare function wvDialog(
   h: number,
@@ -214,17 +221,109 @@ export function createApp(cfg: WindowConfig): JanelaApp {
   let jobCbs: FsCallback[] = [];
   let ticking = false;
 
+  // ---- the drain -----------------------------------------------------------
+  // A finished job's bytes still have to be decoded into a TypeScript string,
+  // and that cost is proportional to the payload: taking a 100 MB file in one
+  // call froze the window for ~240 ms. So a finished job moves here and is
+  // decoded a slice at a time, giving the run loop the thread back between
+  // slices — total work is unchanged, but no single turn carries much of it.
+  //
+  // The budget is wall-clock rather than a byte count on purpose: a fixed
+  // chunk size fixes the WORST turn but also caps throughput (128 KB per 8 ms
+  // tick would cap reads at ~16 MB/s), whereas a time budget spends whatever
+  // the machine can do in the time available.
+  const DRAIN_BUDGET_MS = 4; // ≈ a quarter of a 60fps frame
+  const DRAIN_SLICE = 131072; // 128 KB — granularity within the budget
+  let drainIds: number[] = [];
+  let drainCbs: FsCallback[] = [];
+  let drainOk: boolean[] = [];
+  let drainParts: string[][] = [];
+  let drainOff: number[] = [];
+  let drainSize: number[] = [];
+
+  // Tick interval: 8 ms is plenty for timers and task chains, but while a
+  // payload is draining the loop is doing real work every turn, and waiting
+  // 8 ms between 4 ms slices would halve throughput for no benefit. So the
+  // ticker runs tighter for as long as there is a payload in flight.
+  const TICK_IDLE_MS = 8;
+  const TICK_DRAIN_MS = 4;
+  let tickMs = TICK_IDLE_MS;
+
+  const retick = (): void => {
+    const want = drainIds.length > 0 ? TICK_DRAIN_MS : TICK_IDLE_MS;
+    if (!ticking || want === tickMs) return;
+    tickMs = want;
+    wvTickStart(h, want);
+  };
+
   const wake = (): void => {
     if (ticking) return;
     ticking = true;
-    wvTickStart(h, 8);
+    tickMs = drainIds.length > 0 ? TICK_DRAIN_MS : TICK_IDLE_MS;
+    wvTickStart(h, tickMs);
   };
 
   const idle = (): void => {
     if (!ticking) return;
-    if (taskFns.length > 0 || timerFns.length > 0 || jobIds.length > 0) return;
+    if (
+      taskFns.length > 0 ||
+      timerFns.length > 0 ||
+      jobIds.length > 0 ||
+      drainIds.length > 0
+    ) {
+      return;
+    }
     ticking = false;
     wvTickStop(h);
+  };
+
+  // Decode as much of the pending payloads as the budget allows, then yield.
+  // Slices are taken from one job at a time so a big read finishes promptly
+  // rather than every concurrent read finishing slowly.
+  const drainSome = (): void => {
+    if (drainIds.length === 0) return;
+    const started = Date.now() + 0;
+
+    while (drainIds.length > 0) {
+      let chunk = "";
+      const taken =
+        wvJobTakeAt(h, drainIds[0], drainOff[0], DRAIN_SLICE, (text) => {
+          chunk = text;
+        }) + 0;
+
+      // A negative count means the job vanished; treat the payload as final
+      // rather than spinning on it forever.
+      if (taken > 0) {
+        drainParts[0].push(chunk);
+        drainOff[0] = drainOff[0] + taken;
+      }
+
+      if (taken <= 0 || drainOff[0] >= drainSize[0]) {
+        // Joining is one unavoidable O(n) copy: the callback is handed a
+        // single string, so the whole payload must be materialised once.
+        const payload = drainParts[0].join("");
+        const cb = drainCbs[0];
+        const ok = drainOk[0];
+        wvJobFree(h, drainIds[0]);
+
+        drainIds = drainIds.slice(1);
+        drainCbs = drainCbs.slice(1);
+        drainOk = drainOk.slice(1);
+        drainParts = drainParts.slice(1);
+        drainOff = drainOff.slice(1);
+        drainSize = drainSize.slice(1);
+
+        if (ok) {
+          cb(null, payload);
+        } else {
+          cb(payload, "");
+        }
+        // User code just ran and may have taken a while; re-check the budget
+        // before starting another payload.
+      }
+
+      if (Date.now() - started >= DRAIN_BUDGET_MS) return;
+    }
   };
 
   // One turn of the loop: every task queued so far, plus every due timer.
@@ -275,21 +374,20 @@ export function createApp(cfg: WindowConfig): JanelaApp {
       jobIds = keptIds;
       jobCbs = keptCbs;
       for (let i = 0; i < doneIds.length; i++) {
-        // On failure the payload IS the error message, so one take serves both
-        // outcomes. The sink runs synchronously inside wvFsTake (the callback
-        // is lifetime:"call"), so `payload` is set by the time it returns.
-        let payload = "";
-        wvJobTake(h, doneIds[i], (text) => {
-          payload = text;
-        });
-        wvJobFree(h, doneIds[i]);
-        if (doneOk[i]) {
-          doneCbs[i](null, payload);
-        } else {
-          doneCbs[i](payload, "");
-        }
+        // On failure the payload IS the error message, so one path serves both
+        // outcomes. Nothing is decoded here: the job joins the drain queue and
+        // its bytes are taken a slice at a time, under a time budget.
+        drainIds.push(doneIds[i]);
+        drainCbs.push(doneCbs[i]);
+        drainOk.push(doneOk[i]);
+        drainParts.push([]);
+        drainOff.push(0);
+        drainSize.push(wvJobSize(h, doneIds[i]) + 0);
       }
     }
+
+    drainSome();
+    retick();
     idle();
   };
 

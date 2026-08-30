@@ -820,18 +820,65 @@ int32_t wv_job_status(int32_t h, int32_t id) {
   return j->status.load(std::memory_order_acquire);
 }
 
-// Hand a finished job's payload to TS in one call. The callback is
-// lifetime:"call", so it runs synchronously here — on the UI thread, the only
-// thread allowed to touch the scriptc runtime. The worker is already done by
-// then (the caller has observed a terminal status), so `data` is stable.
-int32_t wv_job_take(int32_t h, int32_t id,
-                   void (*sink)(const uint8_t *, size_t, void *), void *ctx) {
+// Payload size in bytes, so TS knows when it has drained the whole thing.
+// f64 rather than i32: a payload may exceed 2 GB, and every scriptc number is
+// a double anyway (exact for byte counts far beyond any plausible file).
+double wv_job_size(int32_t h, int32_t id) {
+  if (!app_at(h)) return -1;
+  Job *j = job_at(id);
+  if (!j) return -1;
+  if (j->status.load(std::memory_order_acquire) == JOB_PENDING) return -1;
+  return static_cast<double>(j->data.size());
+}
+
+// Hand ONE SLICE of a finished job's payload to TS, and answer how many bytes
+// it covered. The callback is lifetime:"call", so it runs synchronously here —
+// on the UI thread, the only thread allowed to touch the scriptc runtime. The
+// worker is already done by then (the caller has observed a terminal status),
+// so `data` is stable for the whole drain.
+//
+// Slicing exists so the UI thread can decode a large payload across several
+// turns instead of stalling on all of it at once; the caller advances `offset`
+// by the returned count until it reaches wv_job_size().
+//
+// The slice end is pulled back to a UTF-8 sequence boundary, because scriptc
+// decodes a `string` param as UTF-8: cutting mid-sequence would turn one
+// character into replacement characters on both sides of the seam. Bytes that
+// are not valid UTF-8 have no boundary to find, so after four steps the cut
+// stands as asked and the payload is passed through unchanged.
+double wv_job_take_at(int32_t h, int32_t id, double offset, double max_bytes,
+                      void (*sink)(const uint8_t *, size_t, void *),
+                      void *ctx) {
   if (!app_at(h)) return -1;
   Job *j = job_at(id);
   if (!j || !sink) return -1;
   if (j->status.load(std::memory_order_acquire) == JOB_PENDING) return -1;
-  sink(reinterpret_cast<const uint8_t *>(j->data.data()), j->data.size(), ctx);
-  return 0;
+  if (offset < 0 || max_bytes < 0) return -1;
+
+  const size_t size = j->data.size();
+  const size_t off = static_cast<size_t>(offset);
+  if (off > size) return -1;
+  if (off == size) return 0;
+
+  size_t want = static_cast<size_t>(max_bytes);
+  if (want == 0) return 0;
+  size_t end = off + want;
+  if (end >= size) {
+    end = size;
+  } else {
+    const unsigned char *d =
+        reinterpret_cast<const unsigned char *>(j->data.data());
+    // d[end] is the first byte of the NEXT slice; while it is a continuation
+    // byte (10xxxxxx) the cut sits inside a character, so step back.
+    size_t e = end;
+    for (int guard = 0; guard < 4 && e > off && (d[e] & 0xc0) == 0x80; guard++) {
+      e--;
+    }
+    if (e > off) end = e;
+  }
+
+  sink(reinterpret_cast<const uint8_t *>(j->data.data()) + off, end - off, ctx);
+  return static_cast<double>(end - off);
 }
 
 // Release the slot for reuse. Refuses while the worker is still running, so a
