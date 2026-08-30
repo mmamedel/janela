@@ -8,7 +8,8 @@
  *   - re-exported by runtime/janela.ts, which is what the compiled build
  *     actually links against (the CLI copies both files into .janela/build/).
  *
- * Keep it declaration-only: no runtime code lives here.
+ * Mostly declarations; the typed-contract helpers at the bottom are the only
+ * runtime code, and they are deliberately trivial.
  */
 
 // Handlers take the invoked arguments as a value and return a value; the
@@ -128,4 +129,123 @@ export interface JanelaApp {
   quit: () => void;
   /** Show the page and block until the window closes. Returns the run status. */
   run: (html: string) => number;
+}
+
+// ---------------------------------------------------------------------------
+// Typed IPC contract
+// ---------------------------------------------------------------------------
+//
+// The contract is a TYPE the host declares and the frontend imports with
+// `import type`. Because both sides are TypeScript, no code generation is
+// involved and nothing can drift: the frontend checks against the host's own
+// declarations, and the import is erased, so no host code reaches the bundle.
+//
+// Payloads still cross as JSON, so these types are compile-time only. Nothing
+// validates a malformed payload at runtime.
+//
+// SHAPE NOTE: the registrars below are standalone generic FUNCTIONS taking the
+// contract as a value, rather than methods on a returned registrar object.
+// That is not a style choice — scriptc cannot dispatch a generic method
+// through an interface-typed receiver (SC1090), so `commands.on(...)` does not
+// compile in a host build, while `on(app, commands, ...)` does.
+
+/** One command's argument and result types. */
+export interface CommandShape {
+  args: unknown;
+  result: unknown;
+}
+
+/** A contract's command table: name → shape. */
+export type CommandShapes = Record<string, CommandShape>;
+
+/**
+ * A declared command contract. Carries `M` at the type level only — the value
+ * is empty, and exists so that inference has something to read at a call site.
+ */
+export interface Commands<M extends CommandShapes> {
+  __commands?: M;
+}
+
+/** A declared event contract: event name → payload type. */
+export interface Events<E> {
+  __events?: E;
+}
+
+/**
+ * Declare the commands a host exposes.
+ *
+ * ```ts
+ * export const commands = defineCommands<{
+ *   add: { args: { a: number; b: number }; result: number };
+ * }>();
+ * ```
+ */
+export function defineCommands<M extends CommandShapes>(): Commands<M> {
+  return {};
+}
+
+/** Declare the events a host emits: `defineEvents<{ added: number }>()`. */
+export function defineEvents<E>(): Events<E> {
+  return {};
+}
+
+/**
+ * Register a command against the contract. `args` is inferred from the
+ * contract, and the return type is checked against it, so the handler is
+ * written once with no casts.
+ *
+ * ```ts
+ * on(app, commands, "add", (args) => args.a + args.b);
+ * ```
+ */
+export function on<M extends CommandShapes, K extends keyof M & string>(
+  app: JanelaApp,
+  _commands: Commands<M>,
+  name: K,
+  handler: (args: M[K]["args"]) => M[K]["result"],
+): void {
+  app.command(name, (args: unknown) => handler(args as M[K]["args"]));
+}
+
+/**
+ * Register a command that answers on a later turn. `resolve` takes the
+ * contract's result type; see AsyncCommandHandler for the timing rules.
+ */
+export function onAsync<M extends CommandShapes, K extends keyof M & string>(
+  app: JanelaApp,
+  _commands: Commands<M>,
+  name: K,
+  handler: (
+    args: M[K]["args"],
+    resolve: (value: M[K]["result"]) => void,
+    reject: (reason: unknown) => void,
+  ) => void,
+): void {
+  app.commandAsync(
+    name,
+    (args: unknown, resolve: (value: unknown) => void, reject: (reason: unknown) => void) => {
+      handler(
+        args as M[K]["args"],
+        (value: M[K]["result"]) => resolve(value),
+        reject,
+      );
+    },
+  );
+}
+
+/**
+ * Emit a declared event. The name must exist in the contract and the payload
+ * must match its type.
+ *
+ * ```ts
+ * emit(app, events, "added", 42);
+ * ```
+ */
+export function emit<E, K extends keyof E & string>(
+  app: JanelaApp,
+  _events: Events<E>,
+  name: K,
+  payload: E[K],
+): void {
+  app.emit(name, payload);
 }

@@ -29,7 +29,36 @@ export async function invoke(cmd, args) {
   return bridge().invoke(cmd, args);
 }
 
-/** Subscribe to an event the host sends with `app.emit`. */
+/**
+ * Subscribe to an event the host sends with `app.emit`. Returns a function
+ * that removes the subscription.
+ */
 export function listen(event, cb) {
-  bridge().listen(event, cb);
+  const off = bridge().listen(event, cb);
+  // Hosts before 0.5.0 returned nothing from listen; keep a working disposer
+  // either way rather than handing back undefined.
+  if (typeof off === "function") return off;
+  return function unlisten() {
+    const all = globalThis.__wvListeners ? globalThis.__wvListeners[event] : undefined;
+    if (!all) return;
+    const i = all.indexOf(cb);
+    if (i >= 0) all.splice(i, 1);
+  };
+}
+
+/**
+ * A client bound to a host's declared contract. The type parameter carries the
+ * command and event tables; at runtime this is the same bridge as `invoke` and
+ * `listen`, so the contract costs nothing and validates nothing — it is
+ * checked entirely by the compiler.
+ */
+export function createClient() {
+  return {
+    invoke(name, args) {
+      return invoke(name, args);
+    },
+    on(event, cb) {
+      return listen(event, cb);
+    },
+  };
 }

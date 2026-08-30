@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { invoke, listen } from "janela/api";
+  import { createClient } from "janela/api";
+  // Type-only import of the host contract: erased at compile time, so no
+  // host code is bundled into the page.
+  import type { App as Contract } from "../src-host/main";
+
+  const client = createClient<Contract>();
 
   let greeting = $state("…");
   let a = $state(2);
@@ -9,12 +14,12 @@
 
   // Backend→frontend events. The payload arrives as a value, and the generic
   // says which value.
-  listen<number>("added", (value) => (events = [`host emitted: ${value}`, ...events]));
+  client.on("added", (value) => (events = [`host emitted: ${value}`, ...events]));
 
-  invoke<string>("greet", { name: "__NAME__" }).then((g) => (greeting = g));
+  client.invoke("greet", { name: "__NAME__" }).then((g) => (greeting = g));
 
   async function add() {
-    sum = await invoke<number>("add", { a: Number(a), b: Number(b) });
+    sum = await client.invoke("add", { a: Number(a), b: Number(b) });
   }
 </script>
 

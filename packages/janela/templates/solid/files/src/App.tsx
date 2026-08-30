@@ -1,6 +1,11 @@
 import { createSignal, onMount, For, Show } from "solid-js";
-import { invoke, listen } from "janela/api";
+import { createClient } from "janela/api";
+// Type-only import of the host contract: erased at compile time, so no host
+// code is bundled into the page.
+import type { App as Contract } from "../src-host/main";
 import "./App.css";
+
+const client = createClient<Contract>();
 
 export default function App() {
   const [greeting, setGreeting] = createSignal("…");
@@ -11,16 +16,16 @@ export default function App() {
 
   // Backend→frontend events. The payload arrives as a value, and the generic
   // says which value.
-  listen<number>("added", (value) =>
+  client.on("added", (value) =>
     setEvents((prev) => [`host emitted: ${value}`, ...prev]),
   );
 
   onMount(async () =>
-    setGreeting(await invoke<string>("greet", { name: "__NAME__" })),
+    setGreeting(await client.invoke("greet", { name: "__NAME__" })),
   );
 
   const add = async () =>
-    setSum(await invoke<number>("add", { a: a(), b: b() }));
+    setSum(await client.invoke("add", { a: a(), b: b() }));
 
   return (
     <>

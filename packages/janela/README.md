@@ -126,6 +126,80 @@ export function setup(app: JanelaApp): void {
 }
 ```
 
+## The typed contract
+
+The API above works, but `invoke<number>("add", …)` is an *assertion*: nothing
+checks that the command exists, that the arguments match, or that the result
+is really a number. Rename a command and the page still compiles.
+
+Declare a contract instead, and both sides are checked against the same
+declarations — no code generation, nothing to keep in sync. This is the
+framework templates' default.
+
+```ts
+// src-host/main.ts
+import { defineCommands, defineEvents, emit, on, onAsync, type JanelaApp } from "janela/host";
+
+export const commands = defineCommands<{
+  add:   { args: { a: number; b: number }; result: number };
+  greet: { args: { name: string };         result: string };
+  wait:  { args: { ms: number };           result: string };
+}>();
+
+export const events = defineEvents<{ added: number }>();
+
+export type App = { commands: typeof commands; events: typeof events };
+
+export function setup(app: JanelaApp): void {
+  on(app, commands, "add", (args) => {      // args inferred: { a: number; b: number }
+    emit(app, events, "added", args.a + args.b);
+    return args.a + args.b;                 // return type checked against the contract
+  });
+  onAsync(app, commands, "wait", (args, resolve) => {
+    app.sleep(args.ms, () => resolve("waited " + args.ms + "ms"));
+  });
+}
+```
+
+```ts
+// src/App.tsx (or .vue, .svelte …)
+import { createClient } from "janela/api";
+import type { App } from "../src-host/main";   // type-only: erased at compile time
+
+const client = createClient<App>();
+
+const sum = await client.invoke("add", { a: 2, b: 40 });  // sum: number
+const off = client.on("added", (v) => console.log(v));    // v: number
+off();                                                     // unsubscribe
+```
+
+Now these are all compile errors:
+
+```ts
+await client.invoke("addd", { a: 1, b: 2 });   // unknown command
+await client.invoke("add", { a: 1, b: "2" });  // wrong argument type
+const s: string = await client.invoke("add", { a: 1, b: 2 });  // wrong result
+client.on("addedd", () => {});                 // unknown event
+client.on("added", (v: string) => {});         // wrong payload type
+```
+
+Two things worth knowing:
+
+- **`import type` is erased**, so no host code is bundled into the page — the
+  contract is a type edge and nothing more. (Verified: the built frontend
+  bundle contains none of the host's strings.)
+- **Types erase at runtime.** Payloads still cross as JSON and nothing
+  validates a malformed one. This is compile-time safety, like Tauri's
+  `invoke<T>()` — the difference is that here the types come from the host's
+  own declarations rather than from an assertion you write by hand, which is
+  only possible because both sides are TypeScript.
+
+Write `args: null` for a command that takes nothing — `args: undefined`
+lowers to a zero-parameter function and fails to compile.
+
+The untyped `invoke` / `listen` still work unchanged; the contract is
+additive, and the `vanilla` template still uses the global.
+
 ## Async commands
 
 A command that has to wait — or to chew through real work — should not freeze
@@ -234,6 +308,41 @@ later UI-thread turn rather than inside the call that requests it, because a
 nested modal loop would otherwise re-enter the host loop underneath a live TS
 frame; [docs/native-shell.md](../../docs/native-shell.md) has the details, the
 per-platform table, and the Windows GUI-subsystem note.
+
+## Migrating from 0.4.x
+
+Nothing breaks: `app.command`, `app.emit`, and the untyped `invoke` / `listen`
+all work exactly as before, and the `vanilla` template is unchanged.
+
+Two things are new:
+
+- `listen()` (and the injected `janela.listen`) now **return a disposer**.
+  Previously they returned nothing, so existing code is unaffected.
+- The **typed contract** — `defineCommands` / `defineEvents` on the host,
+  `createClient<App>()` on the page. The framework templates now scaffold with
+  it. See [The typed contract](#the-typed-contract).
+
+To adopt it in an existing app, declare what the host already exposes and swap
+the registrations:
+
+```ts
+// before
+app.command("add", (args) => {
+  const a = args as { a: number; b: number };
+  return a.a + a.b;
+});
+
+// after
+export const commands = defineCommands<{
+  add: { args: { a: number; b: number }; result: number };
+}>();
+export type App = { commands: typeof commands; events: typeof events };
+
+on(app, commands, "add", (args) => args.a + args.b);   // args inferred, no cast
+```
+
+then on the page, replace `invoke<number>("add", …)` with
+`client.invoke("add", …)` built from `createClient<App>()`.
 
 ## Migrating from 0.3.x
 
