@@ -156,7 +156,10 @@ const TICK_DRAIN_MS = 4;
  * interface (being signature-only) never is. A class receiver works even as a
  * plain function parameter, which is what `setup(app)` is.
  */
-export class JanelaApp {
+export class JanelaApp<
+  C extends CommandShapes = CommandShapes,
+  E = Record<string, unknown>,
+> {
   handle: number;
   names: string[] = [];
   handlers: CommandHandler[] = [];
@@ -377,16 +380,42 @@ export class JanelaApp {
     this.wake();
   }
 
-  /** Register a named command, callable from the page as janela.invoke(name, args). */
-  command(name: string, handler: CommandHandler): void {
+  /**
+   * Register a named command, callable from the page as janela.invoke(name, args).
+   *
+   * With a contract (`JanelaApp<App>`) the name must be one the contract
+   * declares, `args` is inferred from it, and the return value is checked
+   * against it. Without one, `args` is `unknown` and any name is accepted.
+   */
+  command<K extends keyof C & string>(
+    name: K,
+    handler: (args: C[K]["args"]) => C[K]["result"],
+  ): void {
     this.names.push(name);
-    this.handlers.push(handler);
+    // The cast is on the VALUE, inside a contextually-typed closure: casting
+    // the function itself to another signature and calling through it fails
+    // at runtime.
+    this.handlers.push((args: unknown) => handler(args as C[K]["args"]));
   }
 
-  /** Register a command that answers later; see AsyncCommandHandler. */
-  commandAsync(name: string, handler: AsyncCommandHandler): void {
+  /**
+   * Register a command that answers later; see AsyncCommandHandler. Under a
+   * contract, `resolve` takes exactly the declared result type.
+   */
+  commandAsync<K extends keyof C & string>(
+    name: K,
+    handler: (
+      args: C[K]["args"],
+      resolve: (value: C[K]["result"]) => void,
+      reject: (reason: unknown) => void,
+    ) => void,
+  ): void {
     this.asyncNames.push(name);
-    this.asyncHandlers.push(handler);
+    this.asyncHandlers.push(
+      (args: unknown, resolve: (v: unknown) => void, reject: (r: unknown) => void) => {
+        handler(args as C[K]["args"], (value: C[K]["result"]) => resolve(value), reject);
+      },
+    );
   }
 
   /** Run fn on the next turn of the host loop - the way to slice long work. */
@@ -474,8 +503,11 @@ export class JanelaApp {
     wvSetFullscreen(this.handle, on ? 1 : 0);
   }
 
-  /** Fire an event into the page; the payload is delivered as a value. */
-  emit(event: string, payload: unknown): void {
+  /**
+   * Fire an event into the page; the payload is delivered as a value. Under a
+   * contract, the name must be declared and the payload must match its type.
+   */
+  emit<K extends keyof E & string>(event: K, payload: E[K]): void {
     wvEval(
       this.handle,
       "window.__wvEmit(" + JSON.stringify(event) + "," + encode(payload) + ");",
@@ -539,6 +571,49 @@ export class JanelaApp {
   }
 }
 
-export function createApp(cfg: WindowConfig): JanelaApp {
-  return new JanelaApp(cfg);
+export function createApp<
+  C extends CommandShapes = CommandShapes,
+  E = Record<string, unknown>,
+>(cfg: WindowConfig): JanelaApp<C, E> {
+  return new JanelaApp<C, E>(cfg);
+}
+
+// ---------------------------------------------------------------------------
+// Deprecated standalone registrars (0.5.x)
+// ---------------------------------------------------------------------------
+// These were the shape before the app itself carried the contract. They still
+// work; prefer app.command / app.commandAsync / app.emit.
+
+/** @deprecated Use `app.command(name, handler)` on a contract-typed app. */
+export function on<M extends CommandShapes, K extends keyof M & string>(
+  app: JanelaApp<M, Record<string, unknown>>,
+  _commands: Commands<M>,
+  name: K,
+  handler: (args: M[K]["args"]) => M[K]["result"],
+): void {
+  app.command(name, handler);
+}
+
+/** @deprecated Use `app.commandAsync(name, handler)` on a contract-typed app. */
+export function onAsync<M extends CommandShapes, K extends keyof M & string>(
+  app: JanelaApp<M, Record<string, unknown>>,
+  _commands: Commands<M>,
+  name: K,
+  handler: (
+    args: M[K]["args"],
+    resolve: (value: M[K]["result"]) => void,
+    reject: (reason: unknown) => void,
+  ) => void,
+): void {
+  app.commandAsync(name, handler);
+}
+
+/** @deprecated Use `app.emit(event, payload)` on a contract-typed app. */
+export function emit<E, K extends keyof E & string>(
+  app: JanelaApp<CommandShapes, E>,
+  _events: Events<E>,
+  name: K,
+  payload: E[K],
+): void {
+  app.emit(name, payload);
 }
