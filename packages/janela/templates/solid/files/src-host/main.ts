@@ -12,56 +12,55 @@
 //     an `undefined` argument lowers to a zero-parameter function and fails
 //     to compile.
 
-import {
-  defineCommands,
-  defineEvents,
-  emit,
-  on,
-  onAsync,
-  type JanelaApp,
-} from "janela/host";
+import { defineCommands, defineEvents, type JanelaApp } from "janela/host";
 
-export const commands = defineCommands<{
+/** Every command this app answers. Declared once; the page checks against it. */
+export type AppCommands = {
   add: { args: { a: number; b: number }; result: number };
   greet: { args: { name: string }; result: string };
   log: { args: string; result: null };
   wait: { args: { ms: number }; result: string };
   quit: { args: null; result: null };
-}>();
+};
 
-export const events = defineEvents<{
+/** Every event this app emits, and what each one carries. */
+export type AppEvents = {
   added: number;
-}>();
+};
+
+export const commands = defineCommands<AppCommands>();
+export const events = defineEvents<AppEvents>();
 
 /** The contract the page imports with `import type { App } from "../src-host/main"`. */
 export type App = { commands: typeof commands; events: typeof events };
 
-export function setup(app: JanelaApp): void {
-  // `args` is inferred from the contract, and the return type is checked
-  // against it — no casts, and no way to drift from what the page expects.
-  on(app, commands, "add", (args) => {
+// Typing the app with the contract is what makes `app.command` checked: the
+// name must be one of the declared ones, `args` is inferred from it, and the
+// return value has to match. Same for `app.emit`.
+export function setup(app: JanelaApp<AppCommands, AppEvents>): void {
+  app.command("add", (args) => {
     const sum = args.a + args.b;
-    emit(app, events, "added", sum);
+    app.emit("added", sum);
     return sum;
   });
 
-  on(app, commands, "greet", (args) => {
+  app.command("greet", (args) => {
     return "Hello, " + args.name + " — from the native TS binary";
   });
 
-  on(app, commands, "log", (args) => {
+  app.command("log", (args) => {
     console.log("[host] page says:", args);
     return null;
   });
 
   // An async command: answers later, without freezing the window.
-  onAsync(app, commands, "wait", (args, resolve) => {
+  app.commandAsync("wait", (args, resolve) => {
     app.sleep(args.ms, () => {
       resolve("waited " + args.ms + "ms without blocking the UI");
     });
   });
 
-  on(app, commands, "quit", (_args) => {
+  app.command("quit", (_args) => {
     app.quit();
     return null;
   });

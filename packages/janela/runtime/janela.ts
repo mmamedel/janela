@@ -91,7 +91,6 @@ export type {
   DialogFilter,
   Events,
   FsCallback,
-  JanelaApp,
   OpenDialogOptions,
   SaveDialogOptions,
   WindowConfig,
@@ -100,14 +99,16 @@ export type {
 // The typed-contract helpers are values, so they are re-exported as values.
 // A project's `import { defineCommands } from "janela/host"` is rewritten to
 // this module by the CLI before scriptc sees it.
-export { defineCommands, defineEvents, emit, on, onAsync } from "./types";
+export { defineCommands, defineEvents } from "./types";
 
 import type {
   AsyncCommandHandler,
   CommandHandler,
+  CommandShapes,
+  Commands,
   DialogFilter,
+  Events,
   FsCallback,
-  JanelaApp,
   OpenDialogOptions,
   SaveDialogOptions,
   WindowConfig,
@@ -120,118 +121,149 @@ function encode(value: unknown): string {
   return JSON.stringify(value);
 }
 
-export function createApp(cfg: WindowConfig): JanelaApp {
-  const h = wvCreate(0) + 0;
-  wvSetTitle(h, cfg.title);
-  wvSetSize(h, cfg.width, cfg.height, 0);
-  wvInit(h, BOOTSTRAP);
+
+// Filters cross as "Name|ext,ext|Name|ext" - the shim needs no JSON parser
+// for what is always a short, flat list.
+function encodeFilters(filters: DialogFilter[] | undefined): string {
+  if (filters === undefined || filters.length === 0) return "";
+  const parts: string[] = [];
+  for (let i = 0; i < filters.length; i++) {
+    parts.push(filters[i].name);
+    parts.push(filters[i].extensions.join(","));
+  }
+  return parts.join("|");
+}
+
+// Loop tuning. The drain budget is wall-clock rather than a byte count on
+// purpose: a fixed chunk size fixes the WORST turn but also caps throughput
+// (128 KB per 8 ms tick would cap reads at ~16 MB/s), whereas a time budget
+// spends whatever the machine can do in the time available.
+const DRAIN_BUDGET_MS = 4; // = a quarter of a 60fps frame
+const DRAIN_SLICE = 131072; // 128 KB - granularity within the budget
+
+// 8 ms is plenty for timers and task chains, but while a payload is draining
+// the loop does real work every turn, and waiting 8 ms between 4 ms slices
+// would halve throughput for no benefit.
+const TICK_IDLE_MS = 8;
+const TICK_DRAIN_MS = 4;
+
+/**
+ * A running janela app.
+ *
+ * This is a class rather than an interface because the contract-typed methods
+ * below are generic, and scriptc dispatches generic methods statically: it can
+ * only compile a call when the receiver's runtime class is provable, which an
+ * interface (being signature-only) never is. A class receiver works even as a
+ * plain function parameter, which is what `setup(app)` is.
+ */
+export class JanelaApp<
+  C extends CommandShapes = CommandShapes,
+  E = Record<string, unknown>,
+> {
+  handle: number;
+  names: string[] = [];
+  handlers: CommandHandler[] = [];
 
   // ---- the host loop -------------------------------------------------------
   // scriptc's event loop is parked for as long as the program sits inside the
   // wvRun() FFI call, so setTimeout/await never fire while the window is open.
   // These queues are drained instead by the retained tick handler that the
   // shim's ticker posts to the UI thread, and the ticker only runs while there
-  // is work — an idle app costs nothing.
-  const asyncNames: string[] = [];
-  const asyncHandlers: AsyncCommandHandler[] = [];
-  let taskFns: (() => void)[] = [];
-  let timerFns: (() => void)[] = [];
-  let timerDue: number[] = [];
-  let jobIds: number[] = [];
-  let jobCbs: FsCallback[] = [];
-  let ticking = false;
+  // is work - an idle app costs nothing.
+  asyncNames: string[] = [];
+  asyncHandlers: AsyncCommandHandler[] = [];
+  taskFns: (() => void)[] = [];
+  timerFns: (() => void)[] = [];
+  timerDue: number[] = [];
+  jobIds: number[] = [];
+  jobCbs: FsCallback[] = [];
+  ticking = false;
+  tickMs = TICK_IDLE_MS;
 
   // ---- the drain -----------------------------------------------------------
   // A finished job's bytes still have to be decoded into a TypeScript string,
   // and that cost is proportional to the payload: taking a 100 MB file in one
   // call froze the window for ~240 ms. So a finished job moves here and is
   // decoded a slice at a time, giving the run loop the thread back between
-  // slices — total work is unchanged, but no single turn carries much of it.
-  //
-  // The budget is wall-clock rather than a byte count on purpose: a fixed
-  // chunk size fixes the WORST turn but also caps throughput (128 KB per 8 ms
-  // tick would cap reads at ~16 MB/s), whereas a time budget spends whatever
-  // the machine can do in the time available.
-  const DRAIN_BUDGET_MS = 4; // ≈ a quarter of a 60fps frame
-  const DRAIN_SLICE = 131072; // 128 KB — granularity within the budget
-  let drainIds: number[] = [];
-  let drainCbs: FsCallback[] = [];
-  let drainOk: boolean[] = [];
-  let drainParts: string[][] = [];
-  let drainOff: number[] = [];
-  let drainSize: number[] = [];
+  // slices - total work is unchanged, but no single turn carries much of it.
+  drainIds: number[] = [];
+  drainCbs: FsCallback[] = [];
+  drainOk: boolean[] = [];
+  drainParts: string[][] = [];
+  drainOff: number[] = [];
+  drainSize: number[] = [];
 
-  // Tick interval: 8 ms is plenty for timers and task chains, but while a
-  // payload is draining the loop is doing real work every turn, and waiting
-  // 8 ms between 4 ms slices would halve throughput for no benefit. So the
-  // ticker runs tighter for as long as there is a payload in flight.
-  const TICK_IDLE_MS = 8;
-  const TICK_DRAIN_MS = 4;
-  let tickMs = TICK_IDLE_MS;
+  constructor(cfg: WindowConfig) {
+    const h = wvCreate(0) + 0;
+    this.handle = h;
+    wvSetTitle(h, cfg.title);
+    wvSetSize(h, cfg.width, cfg.height, 0);
+    wvInit(h, BOOTSTRAP);
+  }
 
-  const retick = (): void => {
-    const want = drainIds.length > 0 ? TICK_DRAIN_MS : TICK_IDLE_MS;
-    if (!ticking || want === tickMs) return;
-    tickMs = want;
-    wvTickStart(h, want);
-  };
+  retick(): void {
+    const want = this.drainIds.length > 0 ? TICK_DRAIN_MS : TICK_IDLE_MS;
+    if (!this.ticking || want === this.tickMs) return;
+    this.tickMs = want;
+    wvTickStart(this.handle, want);
+  }
 
-  const wake = (): void => {
-    if (ticking) return;
-    ticking = true;
-    tickMs = drainIds.length > 0 ? TICK_DRAIN_MS : TICK_IDLE_MS;
-    wvTickStart(h, tickMs);
-  };
+  wake(): void {
+    if (this.ticking) return;
+    this.ticking = true;
+    this.tickMs = this.drainIds.length > 0 ? TICK_DRAIN_MS : TICK_IDLE_MS;
+    wvTickStart(this.handle, this.tickMs);
+  }
 
-  const idle = (): void => {
-    if (!ticking) return;
+  idle(): void {
+    if (!this.ticking) return;
     if (
-      taskFns.length > 0 ||
-      timerFns.length > 0 ||
-      jobIds.length > 0 ||
-      drainIds.length > 0
+      this.taskFns.length > 0 ||
+      this.timerFns.length > 0 ||
+      this.jobIds.length > 0 ||
+      this.drainIds.length > 0
     ) {
       return;
     }
-    ticking = false;
-    wvTickStop(h);
-  };
+    this.ticking = false;
+    wvTickStop(this.handle);
+  }
 
   // Decode as much of the pending payloads as the budget allows, then yield.
   // Slices are taken from one job at a time so a big read finishes promptly
   // rather than every concurrent read finishing slowly.
-  const drainSome = (): void => {
-    if (drainIds.length === 0) return;
+  drainSome(): void {
+    if (this.drainIds.length === 0) return;
     const started = Date.now() + 0;
 
-    while (drainIds.length > 0) {
+    while (this.drainIds.length > 0) {
       let chunk = "";
       const taken =
-        wvJobTakeAt(h, drainIds[0], drainOff[0], DRAIN_SLICE, (text) => {
+        wvJobTakeAt(this.handle, this.drainIds[0], this.drainOff[0], DRAIN_SLICE, (text) => {
           chunk = text;
         }) + 0;
 
       // A negative count means the job vanished; treat the payload as final
       // rather than spinning on it forever.
       if (taken > 0) {
-        drainParts[0].push(chunk);
-        drainOff[0] = drainOff[0] + taken;
+        this.drainParts[0].push(chunk);
+        this.drainOff[0] = this.drainOff[0] + taken;
       }
 
-      if (taken <= 0 || drainOff[0] >= drainSize[0]) {
+      if (taken <= 0 || this.drainOff[0] >= this.drainSize[0]) {
         // Joining is one unavoidable O(n) copy: the callback is handed a
         // single string, so the whole payload must be materialised once.
-        const payload = drainParts[0].join("");
-        const cb = drainCbs[0];
-        const ok = drainOk[0];
-        wvJobFree(h, drainIds[0]);
+        const payload = this.drainParts[0].join("");
+        const cb = this.drainCbs[0];
+        const ok = this.drainOk[0];
+        wvJobFree(this.handle, this.drainIds[0]);
 
-        drainIds = drainIds.slice(1);
-        drainCbs = drainCbs.slice(1);
-        drainOk = drainOk.slice(1);
-        drainParts = drainParts.slice(1);
-        drainOff = drainOff.slice(1);
-        drainSize = drainSize.slice(1);
+        this.drainIds = this.drainIds.slice(1);
+        this.drainCbs = this.drainCbs.slice(1);
+        this.drainOk = this.drainOk.slice(1);
+        this.drainParts = this.drainParts.slice(1);
+        this.drainOff = this.drainOff.slice(1);
+        this.drainSize = this.drainSize.slice(1);
 
         if (ok) {
           cb(null, payload);
@@ -244,88 +276,76 @@ export function createApp(cfg: WindowConfig): JanelaApp {
 
       if (Date.now() - started >= DRAIN_BUDGET_MS) return;
     }
-  };
+  }
 
   // One turn of the loop: every task queued so far, plus every due timer.
   // Tasks queued *by* this turn wait for the next one, so a defer() chain
   // yields to the UI between slices instead of starving it.
-  const turn = (): void => {
-    const tasks = taskFns;
-    taskFns = [];
+  turn(): void {
+    const tasks = this.taskFns;
+    this.taskFns = [];
     for (let i = 0; i < tasks.length; i++) tasks[i]();
 
-    if (timerFns.length > 0) {
+    if (this.timerFns.length > 0) {
       const now = Date.now() + 0;
       const keptFns: (() => void)[] = [];
       const keptDue: number[] = [];
       const fire: (() => void)[] = [];
-      for (let i = 0; i < timerFns.length; i++) {
-        if (timerDue[i] <= now) {
-          fire.push(timerFns[i]);
+      for (let i = 0; i < this.timerFns.length; i++) {
+        if (this.timerDue[i] <= now) {
+          fire.push(this.timerFns[i]);
         } else {
-          keptFns.push(timerFns[i]);
-          keptDue.push(timerDue[i]);
+          keptFns.push(this.timerFns[i]);
+          keptDue.push(this.timerDue[i]);
         }
       }
-      timerFns = keptFns;
-      timerDue = keptDue;
+      this.timerFns = keptFns;
+      this.timerDue = keptDue;
       for (let i = 0; i < fire.length; i++) fire[i]();
     }
 
     // Finished file jobs: the worker thread has already done the blocking
     // syscall, so all that happens on this (UI) thread is the drain.
-    if (jobIds.length > 0) {
+    if (this.jobIds.length > 0) {
       const keptIds: number[] = [];
       const keptCbs: FsCallback[] = [];
       const doneIds: number[] = [];
       const doneCbs: FsCallback[] = [];
       const doneOk: boolean[] = [];
-      for (let i = 0; i < jobIds.length; i++) {
-        const st = wvJobStatus(h, jobIds[i]) + 0;
+      for (let i = 0; i < this.jobIds.length; i++) {
+        const st = wvJobStatus(this.handle, this.jobIds[i]) + 0;
         if (st === JOB_PENDING) {
-          keptIds.push(jobIds[i]);
-          keptCbs.push(jobCbs[i]);
+          keptIds.push(this.jobIds[i]);
+          keptCbs.push(this.jobCbs[i]);
         } else {
-          doneIds.push(jobIds[i]);
-          doneCbs.push(jobCbs[i]);
+          doneIds.push(this.jobIds[i]);
+          doneCbs.push(this.jobCbs[i]);
           doneOk.push(st === JOB_OK);
         }
       }
-      jobIds = keptIds;
-      jobCbs = keptCbs;
+      this.jobIds = keptIds;
+      this.jobCbs = keptCbs;
       for (let i = 0; i < doneIds.length; i++) {
         // On failure the payload IS the error message, so one path serves both
         // outcomes. Nothing is decoded here: the job joins the drain queue and
         // its bytes are taken a slice at a time, under a time budget.
-        drainIds.push(doneIds[i]);
-        drainCbs.push(doneCbs[i]);
-        drainOk.push(doneOk[i]);
-        drainParts.push([]);
-        drainOff.push(0);
-        drainSize.push(wvJobSize(h, doneIds[i]) + 0);
+        this.drainIds.push(doneIds[i]);
+        this.drainCbs.push(doneCbs[i]);
+        this.drainOk.push(doneOk[i]);
+        this.drainParts.push([]);
+        this.drainOff.push(0);
+        this.drainSize.push(wvJobSize(this.handle, doneIds[i]) + 0);
       }
     }
 
-    drainSome();
-    retick();
-    idle();
-  };
-
-  // Filters cross as "Name|ext,ext|Name|ext" — the shim needs no JSON parser
-  // for what is always a short, flat list.
-  const encodeFilters = (filters: DialogFilter[] | undefined): string => {
-    if (filters === undefined || filters.length === 0) return "";
-    const parts: string[] = [];
-    for (let i = 0; i < filters.length; i++) {
-      parts.push(filters[i].name);
-      parts.push(filters[i].extensions.join(","));
-    }
-    return parts.join("|");
-  };
+    this.drainSome();
+    this.retick();
+    this.idle();
+  }
 
   // Both dialog kinds share one path: start the job, then let the same drain
   // that serves file I/O deliver the answer on a later turn.
-  const startDialog = (
+  startDialog(
     kind: number,
     flags: number,
     title: string | undefined,
@@ -333,9 +353,9 @@ export function createApp(cfg: WindowConfig): JanelaApp {
     defaultName: string | undefined,
     filters: DialogFilter[] | undefined,
     cb: (paths: string[] | null, err?: string) => void,
-  ): void => {
+  ): void {
     const id = wvDialog(
-      h,
+      this.handle,
       kind,
       flags,
       title === undefined ? "" : title,
@@ -344,12 +364,12 @@ export function createApp(cfg: WindowConfig): JanelaApp {
       encodeFilters(filters),
     ) + 0;
     if (id < 0) {
-      taskFns.push(() => cb(null, "EAGAIN: could not open a dialog"));
-      wake();
+      this.taskFns.push(() => cb(null, "EAGAIN: could not open a dialog"));
+      this.wake();
       return;
     }
-    jobIds.push(id);
-    jobCbs.push((err, text) => {
+    this.jobIds.push(id);
+    this.jobCbs.push((err, text) => {
       if (err !== null) {
         cb(null, err);
         return;
@@ -357,147 +377,248 @@ export function createApp(cfg: WindowConfig): JanelaApp {
       // "null" is a cancel; anything else is a JSON array of paths.
       cb(JSON.parse(text) as string[] | null);
     });
-    wake();
-  };
+    this.wake();
+  }
 
-  const app: JanelaApp = {
-    handle: h,
-    names: [],
-    handlers: [],
+  /**
+   * Register a named command, callable from the page as janela.invoke(name, args).
+   *
+   * With a contract (`JanelaApp<App>`) the name must be one the contract
+   * declares, `args` is inferred from it, and the return value is checked
+   * against it. Without one, `args` is `unknown` and any name is accepted.
+   */
+  command<K extends keyof C & string>(
+    name: K,
+    handler: (args: C[K]["args"]) => C[K]["result"],
+  ): void {
+    this.names.push(name);
+    // The cast is on the VALUE, inside a contextually-typed closure: casting
+    // the function itself to another signature and calling through it fails
+    // at runtime.
+    this.handlers.push((args: unknown) => handler(args as C[K]["args"]));
+  }
 
-    command: (name, handler) => {
-      app.names.push(name);
-      app.handlers.push(handler);
-    },
+  /**
+   * Register a command that answers later; see AsyncCommandHandler. Under a
+   * contract, `resolve` takes exactly the declared result type.
+   */
+  commandAsync<K extends keyof C & string>(
+    name: K,
+    handler: (
+      args: C[K]["args"],
+      resolve: (value: C[K]["result"]) => void,
+      reject: (reason: unknown) => void,
+    ) => void,
+  ): void {
+    this.asyncNames.push(name);
+    this.asyncHandlers.push(
+      (args: unknown, resolve: (v: unknown) => void, reject: (r: unknown) => void) => {
+        handler(args as C[K]["args"], (value: C[K]["result"]) => resolve(value), reject);
+      },
+    );
+  }
 
-    commandAsync: (name, handler) => {
-      asyncNames.push(name);
-      asyncHandlers.push(handler);
-    },
+  /** Run fn on the next turn of the host loop - the way to slice long work. */
+  defer(fn: () => void): void {
+    this.taskFns.push(fn);
+    this.wake();
+  }
 
-    defer: (fn) => {
-      taskFns.push(fn);
-      wake();
-    },
+  /** Run fn after at least ms. The host loop's timer; scriptc's setTimeout
+   *  cannot fire while the window is open (its loop is parked inside run()). */
+  sleep(ms: number, fn: () => void): void {
+    this.timerFns.push(fn);
+    this.timerDue.push(Date.now() + (ms > 0 ? ms : 0));
+    this.wake();
+  }
 
-    sleep: (ms, fn) => {
-      timerFns.push(fn);
-      timerDue.push(Date.now() + (ms > 0 ? ms : 0));
-      wake();
-    },
+  /**
+   * Read a file without blocking the window. The syscall runs on a shim
+   * worker thread; the callback lands on the UI thread on a later turn.
+   */
+  readFileAsync(path: string, cb: FsCallback): void {
+    const id = wvFsRead(this.handle, path) + 0;
+    if (id < 0) {
+      this.defer(() => cb("EAGAIN: could not start a read of '" + path + "'", ""));
+      return;
+    }
+    this.jobIds.push(id);
+    this.jobCbs.push(cb);
+    this.wake();
+  }
 
-    readFileAsync: (path, cb) => {
-      const id = wvFsRead(h, path) + 0;
-      if (id < 0) {
-        app.defer(() => cb("EAGAIN: could not start a read of '" + path + "'", ""));
-        return;
-      }
-      jobIds.push(id);
-      jobCbs.push(cb);
-      wake();
-    },
+  /** Write a file without blocking the window; cb(null) on success. */
+  writeFileAsync(path: string, data: string, cb: (err: string | null) => void): void {
+    const id = wvFsWrite(this.handle, path, data) + 0;
+    if (id < 0) {
+      this.defer(() => cb("EAGAIN: could not start a write of '" + path + "'"));
+      return;
+    }
+    this.jobIds.push(id);
+    // The write payload is empty on success; the shared callback shape just
+    // ignores the text argument.
+    this.jobCbs.push((err, _text) => cb(err));
+    this.wake();
+  }
 
-    writeFileAsync: (path, data, cb) => {
-      const id = wvFsWrite(h, path, data) + 0;
-      if (id < 0) {
-        app.defer(() => cb("EAGAIN: could not start a write of '" + path + "'"));
-        return;
-      }
-      jobIds.push(id);
-      // The write payload is empty on success; the shared callback shape just
-      // ignores the text argument.
-      jobCbs.push((err, _text) => cb(err));
-      wake();
-    },
+  /** Show the native "open" dialog; cb gets the paths, or null on cancel. */
+  openFileDialog(
+    options: OpenDialogOptions,
+    cb: (paths: string[] | null, err?: string) => void,
+  ): void {
+    let flags = 0;
+    if (options.multiple === true) flags = flags + DLG_MULTIPLE;
+    if (options.directory === true) flags = flags + DLG_DIRECTORY;
+    this.startDialog(DLG_OPEN, flags, options.title, options.defaultPath, "",
+      options.filters, (paths, err) => cb(paths, err));
+  }
 
-    openFileDialog: (options, cb) => {
-      let flags = 0;
-      if (options.multiple === true) flags = flags + DLG_MULTIPLE;
-      if (options.directory === true) flags = flags + DLG_DIRECTORY;
-      startDialog(DLG_OPEN, flags, options.title, options.defaultPath, "",
-        options.filters, (paths, err) => cb(paths, err));
-    },
-
-    saveFileDialog: (options, cb) => {
-      startDialog(DLG_SAVE, 0, options.title, options.defaultPath,
-        options.defaultName, options.filters, (paths, err) => {
-          if (paths === null) {
-            cb(null, err);
-            return;
-          }
-          cb(paths.length > 0 ? paths[0] : null, err);
-        });
-    },
-
-    setTitle: (title) => {
-      wvSetTitle(h, title);
-    },
-
-    setSize: (width, height, hint) => {
-      wvSetSize(h, width, height, hint === undefined ? 0 : hint);
-    },
-
-    setFullscreen: (on) => {
-      wvSetFullscreen(h, on ? 1 : 0);
-    },
-
-    emit: (event, payload) => {
-      wvEval(
-        h,
-        "window.__wvEmit(" + JSON.stringify(event) + "," + encode(payload) + ");",
-      );
-    },
-
-    quit: () => {
-      wvTerminate(h);
-    },
-
-    run: (html) => {
-      // Both handlers are retained: registered once here, called by the shim
-      // for as long as the window is open.
-      wvOnTick(h, turn);
-      wvOnInvoke(h, (req) => {
-        const env = JSON.parse(req) as string[];
-        const cmd = env[0];
-        const args = JSON.parse(env[1]) as unknown;
-        for (let i = 0; i < app.names.length; i++) {
-          if (app.names[i] === cmd) {
-            wvReply(h, encode(app.handlers[i](args)));
-            return 0;
-          }
+  /** Show the native "save" dialog; cb gets the path, or null on cancel. */
+  saveFileDialog(
+    options: SaveDialogOptions,
+    cb: (path: string | null, err?: string) => void,
+  ): void {
+    this.startDialog(DLG_SAVE, 0, options.title, options.defaultPath,
+      options.defaultName, options.filters, (paths, err) => {
+        if (paths === null) {
+          cb(null, err);
+          return;
         }
-        for (let i = 0; i < asyncNames.length; i++) {
-          if (asyncNames[i] === cmd) {
-            // Park the page's promise: the shim holds this call's id and
-            // answers it when resolve/reject reaches wvResolve, whenever
-            // that is. Meanwhile the loop is free to serve other calls.
-            const id = wvDefer(h) + 0;
-            if (id < 0) {
-              wvReply(h, encode("cannot defer command: " + cmd));
-              return 1;
-            }
-            const settle = (status: number): ((value: unknown) => void) => {
-              let done = false;
-              return (value: unknown) => {
-                if (done) return; // a promise settles once
-                done = true;
-                wvReply(h, encode(value));
-                wvResolve(h, id, status);
-              };
-            };
-            asyncHandlers[i](args, settle(0), settle(1));
-            return 0;
-          }
-        }
-        wvReply(h, encode("unknown command: " + cmd));
-        return 1; // rejects the frontend promise
+        cb(paths.length > 0 ? paths[0] : null, err);
       });
+  }
 
-      wvBind(h, "__invoke");
-      wvSetHtml(h, html);
-      const rc = wvRun(h) + 0;
-      return rc;
+  /** Change the window title at any time, not just at startup. */
+  setTitle(title: string): void {
+    wvSetTitle(this.handle, title);
+  }
+
+  /** Resize the window. `hint`: 0 none, 1 minimum, 2 maximum, 3 fixed. */
+  setSize(width: number, height: number, hint?: number): void {
+    wvSetSize(this.handle, width, height, hint === undefined ? 0 : hint);
+  }
+
+  /** Enter or leave fullscreen. */
+  setFullscreen(on: boolean): void {
+    wvSetFullscreen(this.handle, on ? 1 : 0);
+  }
+
+  /**
+   * Fire an event into the page; the payload is delivered as a value. Under a
+   * contract, the name must be declared and the payload must match its type.
+   */
+  emit<K extends keyof E & string>(event: K, payload: E[K]): void {
+    wvEval(
+      this.handle,
+      "window.__wvEmit(" + JSON.stringify(event) + "," + encode(payload) + ");",
+    );
+  }
+
+  /** Close the window and make run() return. */
+  quit(): void {
+    wvTerminate(this.handle);
+  }
+
+  /** Show the page and block until the window closes. Returns the run status. */
+  run(html: string): number {
+    const h = this.handle;
+    // Both handlers are retained: registered once here, called by the shim
+    // for as long as the window is open.
+    wvOnTick(h, () => {
+      this.turn();
+    });
+    wvOnInvoke(h, (req) => {
+      const env = JSON.parse(req) as string[];
+      const cmd = env[0];
+      const args = JSON.parse(env[1]) as unknown;
+      for (let i = 0; i < this.names.length; i++) {
+        if (this.names[i] === cmd) {
+          wvReply(h, encode(this.handlers[i](args)));
+          return 0;
+        }
+      }
+      for (let i = 0; i < this.asyncNames.length; i++) {
+        if (this.asyncNames[i] === cmd) {
+          // Park the page's promise: the shim holds this call's id and
+          // answers it when resolve/reject reaches wvResolve, whenever
+          // that is. Meanwhile the loop is free to serve other calls.
+          const id = wvDefer(h) + 0;
+          if (id < 0) {
+            wvReply(h, encode("cannot defer command: " + cmd));
+            return 1;
+          }
+          const settle = (status: number): ((value: unknown) => void) => {
+            let done = false;
+            return (value: unknown) => {
+              if (done) return; // a promise settles once
+              done = true;
+              wvReply(h, encode(value));
+              wvResolve(h, id, status);
+            };
+          };
+          this.asyncHandlers[i](args, settle(0), settle(1));
+          return 0;
+        }
+      }
+      wvReply(h, encode("unknown command: " + cmd));
+      return 1; // rejects the frontend promise
+    });
+
+    wvBind(h, "__invoke");
+    wvSetHtml(h, html);
+    const rc = wvRun(h) + 0;
+    return rc;
+  }
+}
+
+export function createApp<
+  C extends CommandShapes = CommandShapes,
+  E = Record<string, unknown>,
+>(cfg: WindowConfig): JanelaApp<C, E> {
+  return new JanelaApp<C, E>(cfg);
+}
+
+// ---------------------------------------------------------------------------
+// Deprecated standalone registrars (0.5.x)
+// ---------------------------------------------------------------------------
+// These were the shape before the app itself carried the contract. They still
+// work; prefer app.command / app.commandAsync / app.emit.
+
+/** @deprecated Use `app.command(name, handler)` on a contract-typed app. */
+export function on<M extends CommandShapes, K extends keyof M & string>(
+  app: JanelaApp,
+  _commands: Commands<M>,
+  name: K,
+  handler: (args: M[K]["args"]) => M[K]["result"],
+): void {
+  app.command(name, (args: unknown) => handler(args as M[K]["args"]));
+}
+
+/** @deprecated Use `app.commandAsync(name, handler)` on a contract-typed app. */
+export function onAsync<M extends CommandShapes, K extends keyof M & string>(
+  app: JanelaApp,
+  _commands: Commands<M>,
+  name: K,
+  handler: (
+    args: M[K]["args"],
+    resolve: (value: M[K]["result"]) => void,
+    reject: (reason: unknown) => void,
+  ) => void,
+): void {
+  app.commandAsync(
+    name,
+    (args: unknown, resolve: (v: unknown) => void, reject: (r: unknown) => void) => {
+      handler(args as M[K]["args"], (value: M[K]["result"]) => resolve(value), reject);
     },
-  };
-  return app;
+  );
+}
+
+/** @deprecated Use `app.emit(event, payload)` on a contract-typed app. */
+export function emit<E, K extends keyof E & string>(
+  app: JanelaApp,
+  _events: Events<E>,
+  name: K,
+  payload: E[K],
+): void {
+  app.emit(name, payload as unknown);
 }

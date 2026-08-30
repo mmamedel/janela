@@ -246,22 +246,25 @@
     <div class="code-cols">
       <div class="codecard">
         <div class="bar"><span class="dots"><i></i><i></i><i></i></span>src-host/main.ts <span>— compiled to native</span></div>
-        <pre><code><span class="k">import</span> { defineCommands, defineEvents, emit, on }
+        <pre><code><span class="k">import</span> { defineCommands, defineEvents }
   <span class="k">from</span> <span class="s">"janela/host"</span>;
 
 <span class="c">// one declaration; the page is checked against it</span>
-<span class="k">export const</span> commands = <span class="f">defineCommands</span>&lt;{
+<span class="k">export type</span> AppCommands = {
   add: { args: { a: <span class="k">number</span>; b: <span class="k">number</span> }; result: <span class="k">number</span> };
-}&gt;();
-<span class="k">export const</span> events = <span class="f">defineEvents</span>&lt;{ added: <span class="k">number</span> }&gt;();
+};
+<span class="k">export type</span> AppEvents = { added: <span class="k">number</span> };
+
+<span class="k">export const</span> commands = <span class="f">defineCommands</span>&lt;AppCommands&gt;();
+<span class="k">export const</span> events = <span class="f">defineEvents</span>&lt;AppEvents&gt;();
 <span class="k">export type</span> App = {
   commands: <span class="k">typeof</span> commands; events: <span class="k">typeof</span> events;
 };
 
-<span class="k">export function</span> <span class="f">setup</span>(app: JanelaApp): <span class="k">void</span> {
-  <span class="f">on</span>(app, commands, <span class="s">"add"</span>, (args) =&gt; {
+<span class="k">export function</span> <span class="f">setup</span>(app: JanelaApp&lt;AppCommands, AppEvents&gt;) {
+  app.<span class="f">command</span>(<span class="s">"add"</span>, (args) =&gt; {
     <span class="c">// args inferred; return type checked</span>
-    <span class="f">emit</span>(app, events, <span class="s">"added"</span>, args.a + args.b);
+    app.<span class="f">emit</span>(<span class="s">"added"</span>, args.a + args.b);
     <span class="k">return</span> args.a + args.b;
   });
 }</code></pre>
