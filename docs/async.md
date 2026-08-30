@@ -50,15 +50,27 @@ Cooperative async on the UI thread, pumped from native code:
    `webview_return`. The page's promise stays unsettled.
 2. `wv_resolve(h, id, status)` — answers that call later with whatever the
    runtime has staged in the reply buffer.
-3. `wv_tick_start(h, ms)` / `wv_tick_stop(h)` — a C++ thread that only sleeps
-   and calls `webview_dispatch`, which runs the tick **on the UI thread**,
-   where it re-enters TS to drain the runtime's task and timer queues. The
-   thread never touches TS itself, so the SIGABRT hazard above is avoided.
+3. `wv_schedule(h, id, ms)` — the runtime parks a continuation under `id` and
+   asks the shell to call it back in `ms`. The shell keeps a due-ordered timer
+   queue and one thread that only sleeps and calls `webview_dispatch`, so the
+   continuation runs **on the UI thread**. The thread never touches TS itself,
+   so the SIGABRT hazard above is avoided. A zero delay skips the queue and
+   posts straight to the next turn, which is all `app.defer()` needs.
 
-The ticker runs only while the runtime has queued work, so an idle app does no
-periodic wakeups. Because the pump is native rather than page-driven
-(`setInterval` + invoke would also work), pending work still progresses when
-the page is idle and awaiting.
+**The shell owns the clock; TS owns the id.** Nothing polls: an idle app has an
+empty queue and its scheduler thread blocks on a condition variable rather than
+waking periodically. A finished file read or dismissed dialog announces itself
+with the reserved `TIMER_JOBS` id instead of being noticed by a tick.
+
+This is deliberately the same shape a library-mode host (iOS) must use, where
+the compiled TypeScript links no event loop at all and *cannot* hold a timer —
+so one design serves both platforms rather than each growing its own.
+
+Everything reaches TS through `webview_dispatch`, i.e. at the top of a later
+turn with no TS frame beneath it. That rule is kept by construction because a
+breach is invisible: a host that re-enters from inside a callback gets
+correct-looking results right up until it doesn't (reported upstream as
+vercel-labs/scriptc#263).
 
 ## What this buys, and what it does not
 
@@ -125,11 +137,12 @@ TypeScript string, which is proportional to the payload.
 Taken in one call, that cost lands in a single turn — a 100 MB file froze the
 window for ~176 ms. So the drain is **time-budgeted** instead: each turn takes
 128 KB slices until `DRAIN_BUDGET_MS` (4 ms) is spent, then yields to the run
-loop and resumes next tick. The budget is wall-clock rather than a fixed chunk
-count on purpose — a fixed chunk size bounds the worst turn but also caps
-throughput, whereas a time budget spends whatever the machine manages in the
-time available. While a payload is in flight the ticker also runs tighter
-(4 ms instead of 8 ms), so yielding does not halve throughput.
+loop and continues with a zero-delay continuation — the same mechanism as
+`app.defer()`. The budget is wall-clock rather than a fixed chunk count on
+purpose: a fixed chunk size bounds the worst turn but also caps throughput,
+whereas a time budget spends whatever the machine manages in the time
+available. Because the continuation is posted rather than waiting for a tick,
+yielding costs only a dispatch round trip.
 
 Measured on macOS arm64 (M-series, warm page cache), reading files that carry
 multi-byte characters throughout. "Max stall" is the worst round-trip of a

@@ -279,9 +279,10 @@ in scriptc and can cost far more than the read did.
 **Use `app.sleep`, not `setTimeout`.** scriptc's own event loop is parked for
 as long as the program sits inside the `run()` FFI call, so `setTimeout`,
 `queueMicrotask` and `await` in host code never fire while the window is open
-(they all run after it closes). janela supplies its own loop instead: a native
-ticker posts work to the UI thread via `webview_dispatch`, and it only runs
-while something is queued, so an idle app costs nothing.
+(they all run after it closes). janela schedules through the shell instead: the
+runtime parks a continuation under an id, the shell keeps the clock and calls
+it back on the UI thread when it comes due. Nothing polls, so an idle app
+costs nothing at all.
 
 **Still single-threaded.** scriptc's runtime is not thread-safe (concurrent
 calls from several threads abort the process), so host code always runs on the
