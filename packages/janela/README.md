@@ -70,7 +70,7 @@ MSI.
 
 ```
 my-app/
-├── index.html          frontend — any HTML/JS; calls janela.invoke() / janela.listen()
+├── index.html          frontend — any HTML/JS/TS; calls invoke() / listen()
 ├── src-host/main.ts    backend — exports setup(app), registers commands
 └── janela.conf.json    name, bundle identifier, version, window
 ```
@@ -79,17 +79,42 @@ A Vite project adds a `vite.config.js` and a `src/` tree — that config is what
 makes janela build the frontend with Vite instead of inlining `index.html`
 directly.
 
-Frontend API (injected before page load):
-
-```js
-const sum = await janela.invoke("add", { a: 2, b: 40 }); // call a backend command
-janela.listen("added", (payload) => { ... });            // backend-fired events
-```
-
-Backend API (`src-host/main.ts`):
+Frontend API — import it, and your editor and `tsc` know the shapes:
 
 ```ts
-import type { JanelaApp } from "./janela";
+import { invoke, listen } from "janela/api";
+
+const sum = await invoke<number>("add", { a: 2, b: 40 }); // call a backend command
+listen<number>("added", (payload) => { ... });            // backend-fired events
+```
+
+`janela` is already a devDependency of a scaffolded project, so there is
+nothing extra to install. The generic is what the host command returns —
+values cross the boundary as values, so there is no JSON to parse.
+
+<details>
+<summary>No bundler? Use the injected global instead</summary>
+
+janela injects the same two functions as `window.janela` before every document
+loads, which is what the `vanilla` template uses — it needs no `npm install` at
+all:
+
+```js
+const sum = await janela.invoke("add", { a: 2, b: 40 });
+janela.listen("added", (payload) => { ... });
+```
+
+TypeScript users on this path can pull in the ambient types with
+`/// <reference types="janela/global" />`, or by adding `"janela/global"` to
+`compilerOptions.types`. With a bundler, prefer the import — it needs no
+ambient declaration.
+
+</details>
+
+Backend API (`src-host/main.ts`) — also typed, from the same package:
+
+```ts
+import type { JanelaApp } from "janela/host";
 
 export function setup(app: JanelaApp): void {
   app.command("add", (args) => {              // values in, values out
@@ -210,11 +235,48 @@ nested modal loop would otherwise re-enter the host loop underneath a live TS
 frame; [docs/native-shell.md](../../docs/native-shell.md) has the details, the
 per-platform table, and the Windows GUI-subsystem note.
 
+## Migrating from 0.3.x
+
+Nothing breaks: the injected `janela` global still works exactly as before.
+What changed is the recommendation — the frontend now has a real module, so
+editors and `tsc` can see it:
+
+```ts
+// 0.3.x — an untyped global, invisible to tsc and ESLint
+const sum = await janela.invoke("add", { a: 2, b: 40 });
+
+// 0.4.x — typed, resolvable, and generic over what the command returns
+import { invoke } from "janela/api";
+const sum = await invoke<number>("add", { a: 2, b: 40 });
+```
+
+The host side had the same problem and gets the same fix. `src-host/main.ts`
+used to import `JanelaApp` from `"./janela"` — a path that only exists inside
+`.janela/build/`, so an editor could never resolve it and the whole `app.*`
+API was untyped:
+
+```ts
+// 0.3.x — unresolved in the editor; JanelaApp was effectively `any`
+import type { JanelaApp } from "./janela";
+
+// 0.4.x — resolves against the installed package
+import type { JanelaApp } from "janela/host";
+```
+
+`janela build` rewrites that specifier to the local runtime copy while
+assembling the compile unit, so the build stays fully static and a project
+with no `node_modules` at all still compiles.
+
+The framework templates (`vue`, `react`, `svelte`, `solid`) are TypeScript now
+and scaffold with a `typecheck` script that covers `src/` and `src-host/`
+alike. `vanilla` stays plain JavaScript on the global, so it still needs no
+`npm install` before the first build.
+
 ## Migrating from 0.1.x
 
 Commands used to take and return **JSON text**; they now take and return
 **values**, with the runtime handling serialisation. The page-side API
-(`janela.invoke` / `janela.listen`) is unchanged.
+(`invoke` / `listen`) is unchanged.
 
 ```ts
 // 0.1.x

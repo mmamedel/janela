@@ -481,9 +481,22 @@ function build(root, { devUrl = null, gui = true } = {}) {
 
   // Assemble the compile unit: runtime + user's commands + generated modules.
   cpSync(join(KIT, "runtime", "janela.ts"), join(buildDir, "janela.ts"));
+  cpSync(join(KIT, "runtime", "types.ts"), join(buildDir, "types.ts"));
   const mainSrc = join(root, "src-host", "main.ts");
   if (!existsSync(mainSrc)) fail("missing src-host/main.ts");
-  cpSync(mainSrc, join(buildDir, "main.ts"));
+  // A project's main.ts imports from "janela/host" so that it resolves in the
+  // editor against the installed package. Here it is compiled next to the
+  // runtime instead, so the specifier is rewritten to that local copy: the
+  // build never resolves through node_modules, which keeps it static and will
+  // keep working when "janela/host" starts exporting values (not just types)
+  // as well.
+  writeFileSync(
+    join(buildDir, "main.ts"),
+    readFileSync(mainSrc, "utf8").replace(
+      /(\bfrom\s*)(['"])janela\/host\2/g,
+      "$1$2./janela$2",
+    ),
+  );
 
   const html = frontendHtml(root, conf, devUrl);
   writeFileSync(
@@ -616,6 +629,7 @@ function init(name, template) {
     const extra = JSON.parse(readFileSync(join(tdir, "deps.json"), "utf8"));
     pkg.type = "module";
     Object.assign(pkg.devDependencies, extra.devDependencies ?? {});
+    Object.assign(pkg.scripts, extra.scripts ?? {});
     if (extra.dependencies) pkg.dependencies = extra.dependencies;
   }
 

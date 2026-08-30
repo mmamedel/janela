@@ -30,8 +30,10 @@
     <ul id="events"></ul>
 
     <script>
-      // `janela.invoke(name, args)` and `janela.listen(event, cb)` are injected by
-      // janela before the page loads — the Tauri-shaped frontend API.
+      // This template has no bundler, so it uses the `janela` global that the
+      // host injects before the page loads. Projects with a build step should
+      // `import { invoke, listen } from "janela/api"` instead — same functions,
+      // but typed and resolvable by the bundler.
       window.onload = async () => {
         const out = document.getElementById("out");
         const events = document.getElementById("events");

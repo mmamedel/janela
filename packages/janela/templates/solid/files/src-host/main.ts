@@ -8,7 +8,7 @@
 // complete variable initializer — wrap it in any expression (`+ 0`). Plain
 // TypeScript like everything in this file is unaffected.
 
-import type { JanelaApp } from "./janela";
+import type { JanelaApp } from "janela/host";
 
 export function setup(app: JanelaApp): void {
   app.command("add", (args) => {
