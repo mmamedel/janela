@@ -553,8 +553,10 @@ janela dev   --target ios     # build, boot a simulator, install, launch
 ```
 
 It is **not part of a release yet** and is simulator-only. Commands, the typed
-contract, events and Vite frontends all work; the async surface, file access
-and dialogs are not on iOS yet and report clearly when called. See
+contract, events, Vite frontends, async commands (`commandAsync`, `defer`,
+`sleep`) and file I/O all work the same as on desktop — the shell owns the
+clock and the file queue on both. File dialogs are not on iOS yet and report
+clearly when called; window control is a no-op there by nature. See
 [docs/ios.md](../../docs/ios.md).
 
 ## Status

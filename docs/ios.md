@@ -45,9 +45,12 @@ You do not write any of that. The CLI picks a lane by which runtime it
 compiles your project against, so nothing in your app has to know which target
 it is being built for — no `isIOS` branches, no alternate API.
 
-One consequence is visible, though: a library build links **no event loop of
-its own** (scriptc rejects an async module graph in library mode, `SC4005`).
-UIKit's loop is there, but the library cannot schedule onto it yet.
+A library build links **no event loop of its own** (scriptc rejects an async
+module graph in library mode, `SC4005`) — but that is not a limitation you
+meet, because janela never asks the compiled TypeScript to hold a timer on
+either platform. It parks a continuation under an id and the shell owns the
+clock: `dispatch_after` on the main queue here, a timer queue in the shim on
+desktop. Same design, same behaviour.
 
 ## What works today
 
@@ -59,26 +62,36 @@ UIKit's loop is there, but the library cannot schedule onto it yet.
 | Vite frontends (vue/react/svelte/solid) | yes |
 | Plain `index.html` | yes |
 | UTF-8 including emoji | yes |
+| `app.commandAsync` | yes |
+| `app.defer`, `app.sleep` | yes |
+| `app.readFileAsync`, `app.writeFileAsync` | yes |
 
 ## Not yet on iOS
 
 These exist and compile — your desktop code still builds for iOS — but each
-one reports clearly when called instead of doing nothing. **Parity is the
-plan, not a decision against them.**
+one reports clearly when called instead of doing nothing.
 
 | | why | reported as |
 |---|---|---|
-| `app.commandAsync` | a library build links no event loop of its own | the command is registered and rejects when the page invokes it |
-| `app.defer`, `app.sleep` | same | logged, then a no-op |
-| `app.readFileAsync`, `app.writeFileAsync` | file access is not wired on iOS | through the callback's error argument |
-| `app.openFileDialog`, `app.saveFileDialog` | iOS needs a document picker | through the callback's error argument |
-| `app.setTitle`, `app.setSize`, `app.setFullscreen` | an iOS app has no window to title or resize | logged, then a no-op |
-| `app.quit` | iOS apps are dismissed by the user, not by code | logged, then a no-op |
+| `app.openFileDialog`, `app.saveFileDialog` | iOS wants `UIDocumentPickerViewController`, which brings its own delegate lifecycle and security-scoped URLs | through the callback's error argument |
+| `app.setTitle`, `app.setSize`, `app.setFullscreen` | an iOS app has no window to title or resize — this one is permanent, not unfinished | logged, then a no-op |
+| `app.quit` | iOS apps are dismissed by the user, not by code — also permanent | logged, then a no-op |
 
-The scheduling family (`commandAsync`, `defer`, `sleep`) is the near-term one:
-UIKit schedules perfectly well, and routing timers through the shell — the host
-schedules, the library is re-entered when they fire — would restore it. In the
-runtime those three share a single guard so that change lands in one place.
+Only the dialogs are pending work; the window-control entries are meaningless
+on a phone and will stay no-ops.
+
+### File paths on iOS
+
+A sandboxed app has no useful working directory and cannot see host paths, so
+a **relative path resolves against the app's Documents directory** — the one
+place it can freely read and write:
+
+```ts
+app.writeFileAsync("notes.txt", body, (err) => { … });   // Documents/notes.txt
+```
+
+An absolute path is used as given, which on a device means somewhere inside
+the app container.
 
 Also not covered yet: real devices (needs a signing identity and a
 provisioning profile), the App Store, and Android (needs the NDK and a JNI
