@@ -7,6 +7,16 @@
     "janela": "bin/janela.mjs",
     "jn": "bin/janela.mjs"
   },
+  "exports": {
+    "./api": {
+      "types": "./api/index.d.ts",
+      "default": "./api/index.js"
+    },
+    "./global": {
+      "types": "./api/global.d.ts"
+    },
+    "./package.json": "./package.json"
+  },
   "dependencies": {
     "scriptc": "0.0.35"
   },
@@ -33,6 +43,7 @@
     "node": ">=24"
   },
   "files": [
+    "api/",
     "bin/",
     "runtime/",
     "shim/",

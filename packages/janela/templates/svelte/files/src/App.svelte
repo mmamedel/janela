@@ -1,17 +1,20 @@
-<script>
+<script lang="ts">
+  import { invoke, listen } from "janela/api";
+
   let greeting = $state("…");
   let a = $state(2);
   let b = $state(40);
-  let sum = $state(null);
-  let events = $state([]);
+  let sum = $state<number | null>(null);
+  let events = $state<string[]>([]);
 
-  // Backend→frontend events. The payload arrives as a value.
-  janela.listen("added", (value) => (events = [`host emitted: ${value}`, ...events]));
+  // Backend→frontend events. The payload arrives as a value, and the generic
+  // says which value.
+  listen<number>("added", (value) => (events = [`host emitted: ${value}`, ...events]));
 
-  janela.invoke("greet", { name: "__NAME__" }).then((g) => (greeting = g));
+  invoke<string>("greet", { name: "__NAME__" }).then((g) => (greeting = g));
 
   async function add() {
-    sum = await janela.invoke("add", { a: Number(a), b: Number(b) });
+    sum = await invoke<number>("add", { a: Number(a), b: Number(b) });
   }
 </script>
 

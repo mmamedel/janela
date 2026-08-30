@@ -1,21 +1,23 @@
-<script setup>
+<script setup lang="ts">
 import { onMounted, ref } from "vue";
+import { invoke, listen } from "janela/api";
 
 const greeting = ref("…");
 const a = ref(2);
 const b = ref(40);
-const sum = ref(null);
-const events = ref([]);
+const sum = ref<number | null>(null);
+const events = ref<string[]>([]);
 
-// Backend→frontend events. The payload arrives as a value, not a JSON string.
-janela.listen("added", (value) => events.value.unshift(`host emitted: ${value}`));
+// Backend→frontend events. The payload arrives as a value, not a JSON string,
+// and the generic says which value.
+listen<number>("added", (value) => events.value.unshift(`host emitted: ${value}`));
 
 onMounted(async () => {
-  greeting.value = await janela.invoke("greet", { name: "__NAME__" });
+  greeting.value = await invoke<string>("greet", { name: "__NAME__" });
 });
 
 async function add() {
-  sum.value = await janela.invoke("add", { a: Number(a.value), b: Number(b.value) });
+  sum.value = await invoke<number>("add", { a: Number(a.value), b: Number(b.value) });
 }
 </script>
 

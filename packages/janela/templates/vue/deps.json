@@ -1,4 +1,14 @@
 {
-  "dependencies": { "vue": "^3.5.13" },
-  "devDependencies": { "@vitejs/plugin-vue": "^5.2.1", "vite": "^6.0.7" }
+  "dependencies": {
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "vite": "^6.0.7",
+    "typescript": "^5.7.3",
+    "vue-tsc": "^2.2.0"
+  },
+  "scripts": {
+    "typecheck": "vue-tsc --noEmit"
+  }
 }

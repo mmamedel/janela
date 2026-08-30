@@ -266,18 +266,17 @@
 }</code></pre>
       </div>
       <div class="codecard">
-        <div class="bar"><span class="dots"><i></i><i></i><i></i></span>index.html <span>— runs in the OS webview</span></div>
-        <pre><code><span class="c">// janela.invoke / janela.listen are injected</span>
-<span class="c">// before the page loads</span>
+        <div class="bar"><span class="dots"><i></i><i></i><i></i></span>src/App.tsx <span>— runs in the OS webview</span></div>
+        <pre><code><span class="k">import</span> { invoke, listen } <span class="k">from</span> <span class="s">"janela/api"</span>;
 
-<span class="k">const</span> sum = <span class="k">await</span> janela.<span class="f">invoke</span>(<span class="s">"add"</span>, { a: <span class="k">2</span>, b: <span class="k">40</span> });
+<span class="k">const</span> sum = <span class="k">await</span> <span class="f">invoke</span>&lt;<span class="k">number</span>&gt;(<span class="s">"add"</span>, { a: <span class="k">2</span>, b: <span class="k">40</span> });
 <span class="c">// → 42, computed in the native TS binary</span>
 
-janela.<span class="f">listen</span>(<span class="s">"added"</span>, (payload) =&gt; {
+<span class="f">listen</span>&lt;<span class="k">number</span>&gt;(<span class="s">"added"</span>, (payload) =&gt; {
   console.<span class="f">log</span>(<span class="s">"host says:"</span>, payload);
 });
 
-<span class="k">const</span> text = <span class="k">await</span> janela.<span class="f">invoke</span>(<span class="s">"readFile"</span>, {
+<span class="k">const</span> text = <span class="k">await</span> <span class="f">invoke</span>&lt;<span class="k">string</span>&gt;(<span class="s">"readFile"</span>, {
   path: <span class="s">"/etc/hosts"</span>,
 });</code></pre>
       </div>
@@ -301,8 +300,9 @@ janela.<span class="f">listen</span>(<span class="s">"added"</span>, (payload) =
       </div>
       <div class="card">
         <h3><span class="mini" aria-hidden="true"><i></i><i></i><i></i><i></i></span>Tauri-shaped API</h3>
-        <p><code>janela.invoke()</code> and <code>janela.listen()</code> in the page;
-          <code>app.command()</code> and <code>app.emit()</code> in the host. Familiar on day one.</p>
+        <p><code>invoke()</code> and <code>listen()</code> in the page;
+          <code>app.command()</code> and <code>app.emit()</code> in the host. Typed end to end,
+          and familiar on day one.</p>
       </div>
       <div class="card">
         <h3><span class="mini" aria-hidden="true"><i></i><i></i><i></i><i></i></span>No plugin layer for fs &amp; friends</h3>

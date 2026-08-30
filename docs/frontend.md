@@ -45,14 +45,65 @@ janela init my-app --template solid
 ```
 
 Every framework template demonstrates the same three things in that framework's
-idiom: calling a host command (`janela.invoke`), receiving a host event
-(`janela.listen`), and an async command that doesn't freeze the window.
+idiom: calling a host command (`invoke`), receiving a host event (`listen`),
+and an async command that doesn't freeze the window.
 
 ```bash
 cd my-app
 npm install     # not needed for vanilla
 janela dev
 ```
+
+## The frontend API
+
+Two ways in, for two kinds of project.
+
+**With a bundler — import it.** This is what the framework templates use:
+
+```ts
+import { invoke, listen } from "janela/api";
+
+const sum = await invoke<number>("add", { a: 2, b: 40 });
+listen<number>("added", (payload) => console.log(payload));
+```
+
+`janela/api` is a subpath of the `janela` package, which is already a
+devDependency of a scaffolded project — there is nothing extra to install. It
+is a few lines of ESM wrapping the injected bridge, so it adds no measurable
+weight to a bundle, and it ships hand-written declarations: the generic is what
+the host command returns, and the payload type flows into a listener callback.
+
+**Without one — use the global.** janela injects `window.janela` before every
+document loads, so a plain `<script>` needs no build step at all. That is what
+the `vanilla` template does, and why it needs no `npm install`:
+
+```js
+const sum = await janela.invoke("add", { a: 2, b: 40 });
+janela.listen("added", (payload) => console.log(payload));
+```
+
+TypeScript users on the global can pull in ambient types with
+`/// <reference types="janela/global" />`, or by adding `"janela/global"` to
+`compilerOptions.types` in tsconfig.json.
+
+Both routes reach the same bridge — the import is a wrapper over the global,
+not a second transport. Importing is the recommendation because a bundler can
+resolve it, an editor can complete it, and `tsc` and ESLint can see it; a bare
+global is invisible to all three.
+
+If the page is opened outside a janela window — in a browser, or under a plain
+`vite dev` you started yourself — the wrapper throws a message saying exactly
+that, rather than `undefined is not an object`.
+
+## TypeScript
+
+The framework templates are TypeScript and scaffold a `typecheck` script:
+
+```bash
+npm run typecheck     # vue-tsc / tsc / svelte-check, per template
+```
+
+`vanilla` stays plain JavaScript so that it keeps working with no toolchain.
 
 ## What `janela dev` does
 

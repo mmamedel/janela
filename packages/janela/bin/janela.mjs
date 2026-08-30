@@ -616,6 +616,7 @@ function init(name, template) {
     const extra = JSON.parse(readFileSync(join(tdir, "deps.json"), "utf8"));
     pkg.type = "module";
     Object.assign(pkg.devDependencies, extra.devDependencies ?? {});
+    Object.assign(pkg.scripts, extra.scripts ?? {});
     if (extra.dependencies) pkg.dependencies = extra.dependencies;
   }
 
