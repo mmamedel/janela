@@ -28,6 +28,7 @@
 
 #if defined(__cplusplus) && !defined(WEBVIEW_HEADER)
 
+#include "detail/backends/android_webkit.hh"
 #include "detail/backends/cocoa_webkit.hh"
 #include "detail/backends/gtk_webkitgtk.hh"
 #include "detail/backends/uikit_webkit.hh"
