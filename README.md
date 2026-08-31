@@ -33,6 +33,14 @@ and an **llvm-mingw** clang on Windows (MSVC cannot build scriptc's runtime; see
 Xcode and `zig` for iOS ([`docs/ios.md`](docs/ios.md)), and a JDK, the Android
 SDK, the NDK and `zig` for Android ([`docs/android.md`](docs/android.md)).
 
+Packaging for other people — icons, a macOS `.dmg`, Android release signing, and
+what needs an Apple or Google account — is in
+[`docs/distribution.md`](docs/distribution.md).
+
+All five frontend templates (`vanilla`, `vue`, `react`, `svelte`, `solid`) are
+built and run on desktop, the iOS simulator and an Android emulator; the matrix
+and sizes are in [`docs/frontend.md`](docs/frontend.md).
+
 ```bash
 pnpm janela init my-app --template vue   # vanilla | vue | react | svelte | solid
 cd my-app && npm install

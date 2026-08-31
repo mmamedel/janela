@@ -5,6 +5,18 @@
 > untested** — they need a signing identity and a provisioning profile, which
 > janela does not set up for you — and the App Store is not covered at all.
 
+**All five frontend templates are verified on iOS** — `vanilla`, `vue`, `react`,
+`svelte` and `solid` were each built, installed and run in the simulator, with
+the framework rendering host data and a typed round trip returning a `number`.
+Sizes are in [frontend.md](./frontend.md).
+
+Host `console.log` reaches the unified log under subsystem `dev.janela`,
+category `host`:
+
+```bash
+xcrun simctl spawn <device> log show --last 60s --predicate 'subsystem == "dev.janela"'
+```
+
 A janela app builds and runs on iOS from the same source as its desktop
 build — the same `src-host/main.ts`, the same typed contract, the same
 frontend.

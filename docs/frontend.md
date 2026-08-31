@@ -13,6 +13,25 @@ Vite config at the project root (`vite.config.js|ts|mjs|mts|cjs|cts`).
 Plain projects are unchanged from earlier janela versions — no toolchain, no
 `npm install` before the first build.
 
+## What "Vite" means here
+
+Any Vite build that produces a **single-page `dist`** — one HTML entry, one
+module graph. That covers the five templates below and the ordinary
+`create-vite` shapes.
+
+Out of scope, because the output is flattened into one document:
+
+- **multi-page / multi-entry builds** (`build.rollupOptions.input` with more
+  than one HTML entry) — only the entry the CLI inlines will ship;
+- **SSR and static-site generators** (Astro, SvelteKit's adapters, Nuxt) — they
+  expect a server or a directory of routed HTML files;
+- **frameworks with their own non-Vite build** (Angular CLI, for example)
+  unless you drive them through Vite yourself.
+
+We test five templates, not "any framework". If your build emits one HTML file
+with its assets, it will very likely work; if it emits a routed tree, it will
+not.
+
 ## Why one document
 
 The shim hands the webview a single HTML string (`webview_set_html`); there is
@@ -120,23 +139,56 @@ exists on the Vite-served page exactly as it does on an inlined one.
 **Frontend edits hot-reload. Host edits do not** — `src-host/main.ts` is
 compiled into the binary, so changing it means re-running `janela dev`.
 
-## Size
+## Verified, and how big
 
-Measured on macOS arm64, stripped, for the scaffolded templates (vanilla and vue
-re-measured at 0.11.0; the rest are from the same run that established the shape):
+Every cell below was scaffolded, built and **run**, with a probe asserting that
+the framework rendered host data into the DOM, that a typed round trip returned
+a `number`, and that `— çãé 🚀` survived intact. Measured at 0.12.0 on an Apple
+Silicon Mac, an iPhone 17 Pro simulator (iOS 26.5) and a `Medium_Phone_API_36`
+emulator (API 36, WebView 133).
 
-| template | binary |
-|---|---|
-| vanilla | ~470 KB |
-| solid | ~470 KB |
-| svelte | ~502 KB |
-| vue | ~519 KB |
-| react | ~648 KB |
+| template | desktop binary | iOS `.app` | Android `.apk` |
+|---|---|---|---|
+| vanilla | 470 KB | 383 KB | 461 KB |
+| solid | 454 KB | 367 KB | 464 KB |
+| svelte | 487 KB | 399 KB | 473 KB |
+| vue | 519 KB | 431 KB | 484 KB |
+| react | 648 KB | 560 KB | 517 KB |
+
+All fifteen cells pass. Sizes are `KiB`; the raw byte counts are in the commit
+that added this table.
+
+Two things worth noticing. **`solid` is smaller than `vanilla`** — not because
+Solid is free, but because the `vanilla` template ships a larger hand-written
+`index.html` (it demonstrates dialogs, file reading and window control inline)
+while Solid's flattened bundle is ~11 KB. And **the APK spread is much
+narrower** than the desktop spread, because an APK is dominated by the shared
+`.so` (~1.39–1.58 MB uncompressed) rather than by the frontend.
 
 The frontend is embedded as a string, so its bundle size lands in the binary
 roughly 1:1 — though small additions can be free, since macOS arm64 segments
-are 16 KB-aligned and a small bundle fits in existing padding (Solid's 11 KB
-costs 8 bytes).
+are 16 KB-aligned and a small bundle fits in existing padding.
+
+## The browser floor
+
+Vite's default `build.target` resolves to
+`["es2020","edge88","firefox78","chrome87","safari14"]` (Vite 6.4), so app code
+is transpiled down to roughly late-2020 engines. janela's injected bootstrap —
+the `window.janela` shim, which Vite never sees — is deliberately **ES5**
+(`var`, `function`, no arrow functions). Nothing in janela itself raises the
+floor.
+
+That matters most on Android, where the System WebView version is the device's,
+not yours: a three-to-four-year-old phone typically carries WebView in the
+Chrome 100–120 range, comfortably above the target. We do not pin
+`build.target` in the templates, because Vite's default is already more
+conservative than any WebView you are likely to meet, and lowering it further
+would only bloat the output.
+
+The residual risk is **runtime APIs, not syntax** — `structuredClone`,
+`Array.prototype.at` and friends are not polyfilled by a `target` setting. If
+you support old devices, check your dependencies' API use, not just their
+syntax level.
 
 ## Limits worth knowing
 

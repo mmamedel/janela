@@ -33,7 +33,7 @@ janela dev                # build + run with logs in the terminal
 janela build              # .janela/out/my-app  (+ my-app.app on macOS)
 ```
 
-Or start from a frontend framework — any Vite-based one:
+Or start from a frontend framework:
 
 ```bash
 janela init my-app --template vue     # or react | svelte | solid | vanilla
@@ -43,8 +43,18 @@ janela dev                            # Vite dev server + HMR, in a native windo
 
 `vanilla` is the default and needs no frontend toolchain at all. With a
 framework, `janela dev` runs your Vite dev server and points the window at it,
-and `janela build` flattens the production bundle into the binary — see
-[docs/frontend.md](../../docs/frontend.md).
+and `janela build` flattens the production bundle into the binary.
+
+All five templates are built and run on desktop, the iOS simulator and an
+Android emulator — the matrix and sizes are in
+[docs/frontend.md](../../docs/frontend.md). Your own Vite project works too, as
+long as it produces a **single-page `dist`**: multi-entry builds, SSR/SSG
+(Astro, Nuxt) and frameworks with their own non-Vite build are out of scope,
+because the output is flattened into one HTML document.
+
+Packaging for distribution — icons, a macOS `.dmg`, Android release signing, and
+what requires an Apple or Google account — is in
+[docs/distribution.md](../../docs/distribution.md).
 
 Requirements: Node 24+ and a C++ toolchain for the platform you are building —
 Xcode CLT on macOS; `g++` + `libwebkit2gtk-4.1-dev` on Linux; an llvm-mingw
