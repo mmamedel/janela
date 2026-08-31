@@ -73,12 +73,52 @@ one reports clearly when called instead of doing nothing.
 
 | | why | reported as |
 |---|---|---|
-| `app.openFileDialog`, `app.saveFileDialog` | iOS wants `UIDocumentPickerViewController`, which brings its own delegate lifecycle and security-scoped URLs | through the callback's error argument |
+| `app.openFileDialog` | needs a new host channel in the library ABI; the picker itself is understood — see [Dialogs: what remains](#dialogs-what-remains) | through the callback's error argument |
+| `app.saveFileDialog` | mobile "save" is *export a file you already have*, which the desktop signature cannot express — see below | through the callback's error argument |
 | `app.setTitle`, `app.setSize`, `app.setFullscreen` | an iOS app has no window to title or resize — this one is permanent, not unfinished | logged, then a no-op |
 | `app.quit` | iOS apps are dismissed by the user, not by code — also permanent | logged, then a no-op |
 
 Only the dialogs are pending work; the window-control entries are meaningless
 on a phone and will stay no-ops.
+
+### Dialogs: what remains
+
+`openFileDialog` is a small, well-understood piece of work that is blocked on
+one thing: the library ABI has no channel for it. The mobile profile declares
+its TS→shell channels (`hostSchedule`, `hostSettle`, `hostReadFile`,
+`hostWriteFile`, `janelaEmit`) and its shell→TS exports (`handleInvoke`,
+`indexHtml`, `onTimer`, `onFsDone`) in the CLI, and a picker needs one of each:
+
+- a channel `hostOpenDialog(jobId, optionsJson)`;
+- an export `onDialogDone(jobId, ok, payloadJson)`.
+
+Once those exist, the shell side is the same deferred-reply shape everything
+else already uses.
+
+**What a picked path will mean.** A picked file arrives as a security-scoped
+URL, readable only between `startAccessingSecurityScopedResource` and its
+`stop` counterpart, and that scope does not survive a relaunch without a
+bookmark. Rather than leak that into the API, the shell will **copy the picked
+file into the app's container** and return that path, so the result is
+something `readFileAsync` already understands and the public API stays
+identical to desktop. The cost is a copy; the benefit is that a picked path
+behaves like every other path in janela.
+
+**Why `saveFileDialog` is a separate question.** On desktop it means "ask the
+user where to put a file, then I will write there". iOS has no such thing:
+`UIDocumentPickerViewController(forExporting:)` requires the file to exist
+*before* the picker opens, and Android's `ACTION_CREATE_DOCUMENT` hands back a
+`content://` URI to write into rather than a path. Both platforms want an
+export-shaped call — "here is a file I have made, let the user place it" —
+which the desktop signature cannot express. Rather than give the same function
+two different meanings per platform, it stays refused until the API question
+is settled.
+
+**Filter support will be partial.** Restricting the picker to extensions needs
+UTIs, and mapping an extension to a UTI needs `UniformTypeIdentifiers` or
+`CoreServices`, neither of which the iOS build links today. A table covering
+common types (`txt`, `png`, `jpeg`, `pdf`, `json`, `html`, `csv`, `zip`) can be
+had for free; anything outside it will widen the picker rather than fail.
 
 ### File paths on iOS
 
@@ -96,6 +136,25 @@ the app container.
 Also not covered yet: real devices (needs a signing identity and a
 provisioning profile), the App Store, and Android (needs the NDK and a JNI
 shell).
+
+## Logging
+
+Host `console.log` goes to **stdout and the unified log**, so you can watch an
+app without attaching a debugger or screenshotting the page:
+
+```console
+$ xcrun simctl spawn booted log stream --predicate 'subsystem == "dev.janela"'
+$ xcrun simctl spawn booted log show --last 2m --predicate 'subsystem == "dev.janela"'
+```
+
+Everything the host prints appears under subsystem `dev.janela`, category
+`host`; `console.error` and anything on stderr is logged at error level. The
+shell tees both descriptors rather than moving them, so a run attached to a
+terminal prints exactly as it always did.
+
+This matters more than it sounds. iOS has no console for stdout, so before
+this the only way to see what a host command printed was to render it into the
+page and take a screenshot — which is slow, lossy, and useless in CI.
 
 ## Evidence
 
