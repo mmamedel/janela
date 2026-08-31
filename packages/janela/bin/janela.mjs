@@ -12,7 +12,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import {
-  cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync,
+  cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
 import { createRequire } from "node:module";
@@ -366,8 +366,15 @@ function libraryProfile() {
   };
 }
 
-function iosPlist(conf) {
+function iosPlist(conf, iconFiles = []) {
   const ios = iosConf(conf);
+  // The asset-catalogue route needs actool; the CFBundleIconFiles list is the
+  // older mechanism and keeps this hand-assembled bundle toolchain-free.
+  const icons = iconFiles.length
+    ? `\n  <key>CFBundleIconFiles</key><array>${iconFiles
+        .map((f) => `<string>${f}</string>`)
+        .join("")}</array>`
+    : "";
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -382,7 +389,7 @@ function iosPlist(conf) {
   <key>LSRequiresIPhoneOS</key><true/>
   <key>UILaunchScreen</key><dict/>
   <key>MinimumOSVersion</key><string>${ios.minimumVersion}</string>
-  <key>CFBundleSupportedPlatforms</key><array><string>iPhoneSimulator</string></array>
+  <key>CFBundleSupportedPlatforms</key><array><string>iPhoneSimulator</string></array>${icons}
 </dict>
 </plist>
 `;
@@ -433,7 +440,16 @@ function buildIos(root, conf, buildDir, outDir) {
     "-o", join(bundle, conf.name),
   ]);
   run(["strip", join(bundle, conf.name)]);
-  writeFileSync(join(bundle, "Info.plist"), iosPlist(conf));
+
+  const icon = iconSource(root, conf);
+  let iconFiles = [];
+  if (icon) {
+    iconFiles = makeIosIcons(icon, bundle);
+    if (!iconFiles.length) {
+      console.warn("janela: could not generate iOS icons (sips unavailable) — building without one");
+    }
+  }
+  writeFileSync(join(bundle, "Info.plist"), iosPlist(conf, iconFiles));
 
   console.log(
     `janela: built ${relative(root, bundle)} ` +
@@ -547,15 +563,16 @@ function javaHome() {
   fail("Android builds need a JDK. Install one (`brew install openjdk`) and set JAVA_HOME");
 }
 
-function androidManifest(conf) {
+function androidManifest(conf, { icon = false } = {}) {
   const a = androidConf(conf);
+  const iconAttr = icon ? ` android:icon="@mipmap/ic_launcher"` : "";
   return `<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="${a.applicationId}"
     android:versionCode="1"
     android:versionName="${conf.version ?? "0.1.0"}">
   <uses-permission android:name="android.permission.INTERNET"/>
-  <application android:label="${a.label}" android:hasCode="true">
+  <application android:label="${a.label}"${iconAttr} android:hasCode="true">
     <activity android:name="dev.janela.host.JanelaActivity" android:exported="true">
       <intent-filter>
         <action android:name="android.intent.action.MAIN"/>
@@ -652,7 +669,22 @@ function buildAndroid(root, conf, buildDir, outDir) {
   collect(classes);
   run([join(sdk.bt, "d8"), "--min-api", a.minSdk, "--output", stage, ...classFiles]);
 
-  writeFileSync(join(buildDir, "AndroidManifest.xml"), androidManifest(conf));
+  // Launcher icons, if the project has one. aapt2 needs resources compiled to
+  // .flat before they can be linked, so this is a two-step detour.
+  const icon = iconSource(root, conf);
+  let resZip = null;
+  if (icon) {
+    const resDir = join(buildDir, "res");
+    rmSync(resDir, { recursive: true, force: true });
+    if (makeAndroidRes(icon, resDir)) {
+      resZip = join(buildDir, "res.zip");
+      run([join(sdk.bt, "aapt2"), "compile", "--dir", resDir, "-o", resZip]);
+    } else {
+      console.warn("janela: could not generate launcher icons (sips unavailable) — building without one");
+    }
+  }
+
+  writeFileSync(join(buildDir, "AndroidManifest.xml"), androidManifest(conf, { icon: Boolean(resZip) }));
 
   console.log("janela: packaging the APK");
   const unsigned = join(buildDir, "unsigned.apk");
@@ -661,6 +693,7 @@ function buildAndroid(root, conf, buildDir, outDir) {
     "--manifest", join(buildDir, "AndroidManifest.xml"),
     "--min-sdk-version", a.minSdk,
     "--target-sdk-version", String(ANDROID_TARGET_SDK),
+    ...(resZip ? [resZip] : []),
   ]);
   // aapt2 emits the manifest and resources; the code and the shared library
   // are added to the same zip afterwards.
@@ -669,12 +702,40 @@ function buildAndroid(root, conf, buildDir, outDir) {
   const aligned = join(buildDir, "aligned.apk");
   run([join(sdk.bt, "zipalign"), "-f", "4", unsigned, aligned]);
   const apk = join(outDir, `${conf.name}.apk`);
-  run([
-    join(sdk.bt, "apksigner"), "sign",
-    "--ks", debugKeystore(cacheDir, jdk),
-    "--ks-pass", "pass:android", "--key-pass", "pass:android",
-    "--out", apk, aligned,
-  ]);
+  // A release keystore is the user's to own: janela never creates one and
+  // never reads a password from the config file. Point `bundle.androidKeystore`
+  // at a .jks and supply the passwords through the environment; absent that,
+  // the APK is signed with a throwaway debug key that Play Store will reject.
+  const ksConf = conf.bundle?.androidKeystore;
+  if (ksConf) {
+    const ksPath = resolve(root, ksConf.path ?? fail("bundle.androidKeystore needs a 'path'"));
+    if (!existsSync(ksPath)) fail(`bundle.androidKeystore.path does not exist: ${ksPath}`);
+    const storeEnv = ksConf.storePasswordEnv ?? "JANELA_ANDROID_STORE_PASSWORD";
+    const keyEnv = ksConf.keyPasswordEnv ?? storeEnv;
+    const storePass = process.env[storeEnv];
+    if (!storePass) {
+      fail(
+        `bundle.androidKeystore is configured but $${storeEnv} is not set.\n` +
+          "  Export the keystore password in the environment; janela will not read it from a file.",
+      );
+    }
+    const keyPass = process.env[keyEnv] ?? storePass;
+    run([
+      join(sdk.bt, "apksigner"), "sign",
+      "--ks", ksPath,
+      ...(ksConf.alias ? ["--ks-key-alias", ksConf.alias] : []),
+      "--ks-pass", `pass:${storePass}`, "--key-pass", `pass:${keyPass}`,
+      "--out", apk, aligned,
+    ]);
+    console.log(`janela: signed with ${relative(root, ksPath)}`);
+  } else {
+    run([
+      join(sdk.bt, "apksigner"), "sign",
+      "--ks", debugKeystore(cacheDir, jdk),
+      "--ks-pass", "pass:android", "--key-pass", "pass:android",
+      "--out", apk, aligned,
+    ]);
+  }
 
   console.log(
     `janela: built ${relative(root, apk)} ` +
@@ -935,6 +996,151 @@ function makeGuiSubsystem(exePath) {
 
 // `devUrl` points the window at a running vite server instead of inlining the
 // frontend; `gui` asks for a GUI-subsystem .exe on Windows (build, not dev).
+// ---- icons and packaging ---------------------------------------------------
+//
+// One square source image becomes whatever each platform wants. Everything
+// here is optional: a project with no icon configured and no icon.png builds
+// exactly as it did before, and a platform whose converter is unavailable is
+// skipped with a warning rather than failing the build.
+//
+// `sips` and `iconutil` ship with macOS, so icon generation currently requires
+// building on a Mac. That is already true of .app/.dmg/iOS output.
+
+/// The configured icon, or `icon.png` beside janela.conf.json, or null.
+function iconSource(root, conf) {
+  const named = conf.bundle?.icon ?? conf.icon;
+  if (named) {
+    const p = resolve(root, named);
+    if (!existsSync(p)) fail(`bundle.icon '${named}' does not exist (resolved to ${p})`);
+    return p;
+  }
+  const fallback = join(root, "icon.png");
+  return existsSync(fallback) ? fallback : null;
+}
+
+function haveTool(name) {
+  return spawnSync("command", ["-v", name], { shell: true, stdio: "ignore" }).status === 0;
+}
+
+/// Square PNG at `size`, written to `dst`. Returns false if sips is missing.
+function resizePng(src, dst, size) {
+  if (!haveTool("sips")) return false;
+  const r = spawnSync("sips", ["-z", String(size), String(size), src, "--out", dst], { stdio: "ignore" });
+  return r.status === 0;
+}
+
+const ICNS_SIZES = [16, 32, 64, 128, 256, 512, 1024];
+
+/// macOS .icns via the iconset convention iconutil expects.
+function makeIcns(src, cacheDir, name) {
+  if (!haveTool("iconutil") || !haveTool("sips")) return null;
+  const iconset = join(cacheDir, `${name}.iconset`);
+  rmSync(iconset, { recursive: true, force: true });
+  mkdirSync(iconset, { recursive: true });
+  // iconutil wants both @1x and @2x names; a 32px @2x is the 64px render.
+  for (const s of ICNS_SIZES) {
+    if (s <= 512) resizePng(src, join(iconset, `icon_${s}x${s}.png`), s);
+    if (s >= 32) resizePng(src, join(iconset, `icon_${s / 2}x${s / 2}@2x.png`), s);
+  }
+  const icns = join(cacheDir, `${name}.icns`);
+  const r = spawnSync("iconutil", ["-c", "icns", iconset, "-o", icns], { stdio: "ignore" });
+  return r.status === 0 && existsSync(icns) ? icns : null;
+}
+
+const ICO_SIZES = [16, 32, 48, 64, 128, 256];
+
+/// Windows .ico. The format allows PNG payloads (Vista+), so this needs no
+/// image library: a 6-byte header, one 16-byte directory entry per image,
+/// then the PNG bytes.
+function makeIco(src, cacheDir, name) {
+  if (!haveTool("sips")) return null;
+  const pngs = [];
+  for (const s of ICO_SIZES) {
+    const p = join(cacheDir, `ico-${s}.png`);
+    if (resizePng(src, p, s)) pngs.push({ size: s, data: readFileSync(p) });
+  }
+  if (!pngs.length) return null;
+
+  const header = Buffer.alloc(6);
+  header.writeUInt16LE(0, 0); // reserved
+  header.writeUInt16LE(1, 2); // type: icon
+  header.writeUInt16LE(pngs.length, 4);
+
+  let offset = 6 + pngs.length * 16;
+  const entries = [];
+  for (const { size, data } of pngs) {
+    const e = Buffer.alloc(16);
+    e.writeUInt8(size >= 256 ? 0 : size, 0); // 0 means 256
+    e.writeUInt8(size >= 256 ? 0 : size, 1);
+    e.writeUInt8(0, 2); // palette
+    e.writeUInt8(0, 3); // reserved
+    e.writeUInt16LE(1, 4); // colour planes
+    e.writeUInt16LE(32, 6); // bits per pixel
+    e.writeUInt32LE(data.length, 8);
+    e.writeUInt32LE(offset, 12);
+    entries.push(e);
+    offset += data.length;
+  }
+  const ico = join(cacheDir, `${name}.ico`);
+  writeFileSync(ico, Buffer.concat([header, ...entries, ...pngs.map((p) => p.data)]));
+  return ico;
+}
+
+/// iOS icons. The modern route is a compiled asset catalogue; the older
+/// CFBundleIconFiles list still works and needs no actool, which keeps the
+/// hand-rolled bundle self-contained.
+const IOS_ICON_SIZES = [40, 58, 60, 80, 87, 120, 180, 1024];
+
+function makeIosIcons(src, bundleDir) {
+  if (!haveTool("sips")) return [];
+  const names = [];
+  for (const s of IOS_ICON_SIZES) {
+    const base = `AppIcon${s}.png`;
+    if (resizePng(src, join(bundleDir, base), s)) names.push(base);
+  }
+  return names;
+}
+
+/// Android launcher icons: one PNG per density bucket under res/mipmap-*.
+const ANDROID_DENSITIES = [["mdpi", 48], ["hdpi", 72], ["xhdpi", 96], ["xxhdpi", 144], ["xxxhdpi", 192]];
+
+function makeAndroidRes(src, resDir) {
+  if (!haveTool("sips")) return false;
+  let any = false;
+  for (const [bucket, size] of ANDROID_DENSITIES) {
+    const dir = join(resDir, `mipmap-${bucket}`);
+    mkdirSync(dir, { recursive: true });
+    if (resizePng(src, join(dir, "ic_launcher.png"), size)) any = true;
+  }
+  return any;
+}
+
+/// A plain drag-to-Applications disk image from an existing .app.
+function makeDmg(appDir, outDir, name, version) {
+  if (!haveTool("hdiutil")) {
+    console.warn("janela: hdiutil not available — skipping .dmg");
+    return null;
+  }
+  const stage = join(outDir, `.dmg-stage-${name}`);
+  rmSync(stage, { recursive: true, force: true });
+  mkdirSync(stage, { recursive: true });
+  cpSync(appDir, join(stage, `${name}.app`), { recursive: true });
+  spawnSync("ln", ["-s", "/Applications", join(stage, "Applications")], { stdio: "ignore" });
+
+  const dmg = join(outDir, `${name}-${version}.dmg`);
+  rmSync(dmg, { force: true });
+  const r = spawnSync("hdiutil", [
+    "create", "-volname", name, "-srcfolder", stage,
+    "-ov", "-format", "UDZO", "-quiet", dmg,
+  ], { stdio: "inherit" });
+  rmSync(stage, { recursive: true, force: true });
+  if (r.status !== 0 || !existsSync(dmg)) {
+    console.warn("janela: hdiutil failed — skipping .dmg");
+    return null;
+  }
+  return dmg;
+}
+
 function build(root, { devUrl = null, gui = true, target = "desktop" } = {}) {
   const conf = loadConf(root);
   const ios = target === "ios";
@@ -1064,10 +1270,39 @@ function build(root, { devUrl = null, gui = true, target = "desktop" } = {}) {
     console.log("janela: linked as a GUI-subsystem .exe (no console window)");
   }
 
+  const icon = iconSource(root, conf);
+
+  if (process.platform === "win32" && icon) {
+    // Embedding into the PE needs a resource compiler we cannot rely on, so
+    // the .ico is written beside the .exe — installers and shortcuts take a
+    // path, and this keeps the build toolchain-free.
+    const ico = makeIco(icon, cacheDir, conf.name);
+    if (ico) {
+      cpSync(ico, join(outDir, `${conf.name}.ico`));
+      console.log(`janela: wrote ${conf.name}.ico beside the .exe`);
+    } else {
+      console.warn("janela: could not generate a .ico (sips unavailable) — skipping the icon");
+    }
+  }
+
   if (process.platform === "darwin") {
     const bundle = join(outDir, `${conf.name}.app`);
+    rmSync(bundle, { recursive: true, force: true });
     mkdirSync(join(bundle, "Contents", "MacOS"), { recursive: true });
     cpSync(bin, join(bundle, "Contents", "MacOS", conf.name));
+
+    let iconKey = "";
+    if (icon) {
+      const icns = makeIcns(icon, cacheDir, conf.name);
+      if (icns) {
+        mkdirSync(join(bundle, "Contents", "Resources"), { recursive: true });
+        cpSync(icns, join(bundle, "Contents", "Resources", `${conf.name}.icns`));
+        iconKey = `\n  <key>CFBundleIconFile</key><string>${conf.name}</string>`;
+      } else {
+        console.warn("janela: could not generate an .icns (iconutil/sips unavailable) — skipping the icon");
+      }
+    }
+
     writeFileSync(
       join(bundle, "Contents", "Info.plist"),
       `<?xml version="1.0" encoding="UTF-8"?>
@@ -1081,13 +1316,21 @@ function build(root, { devUrl = null, gui = true, target = "desktop" } = {}) {
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleVersion</key><string>${conf.version ?? "0.1.0"}</string>
   <key>CFBundleShortVersionString</key><string>${conf.version ?? "0.1.0"}</string>
-  <key>NSHighResolutionCapable</key><true/>
+  <key>NSHighResolutionCapable</key><true/>${iconKey}
 </dict>
 </plist>
 `,
     );
     spawnSync("codesign", ["--force", "--sign", "-", bundle]);
     console.log(`janela: built ${relative(root, bin)} and ${relative(root, bundle)}`);
+
+    // Opt-in: a .dmg is for shipping, not for `janela dev`.
+    if (conf.bundle?.dmg) {
+      const dmg = makeDmg(bundle, outDir, conf.name, conf.version ?? "0.1.0");
+      if (dmg) console.log(`janela: built ${relative(root, dmg)} (${statSync(dmg).size} bytes)`);
+    }
+  } else if (process.platform !== "win32") {
+    console.log(`janela: built ${relative(root, bin)}`);
   } else {
     console.log(`janela: built ${relative(root, bin)}`);
   }
@@ -1112,8 +1355,43 @@ function copyTemplate(from, to, name) {
   }
 }
 
+// A project name becomes an npm package name, a binary name, a bundle
+// identifier segment and a window title, so it is deliberately narrow:
+// start with a letter, then letters, digits, '-' or '_'. Underscores are
+// allowed because people type them and every downstream use accepts them —
+// Android application ids in particular *prefer* them, since a Java package
+// segment cannot contain a hyphen (see androidApplicationId).
+const NAME_RE = /^[a-z][a-z0-9_-]*$/;
+
+// Best-effort repair of a rejected name, so the error can suggest something
+// that would have worked instead of only stating the rule.
+function suggestName(raw) {
+  const s = String(raw)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^[^a-z]+/, "")
+    .replace(/-{2,}/g, "-")
+    .replace(/[-_]+$/, "");
+  return NAME_RE.test(s) ? s : "";
+}
+
 function init(name, template) {
-  if (!name || !/^[a-z][a-z0-9-]*$/.test(name)) fail("usage: janela init <name> [--template <t>] (lowercase, digits, dashes)");
+  if (!name) {
+    fail(
+      "no project name given.\n" +
+        "  usage: janela init <name> [--template vanilla|vue|react|svelte|solid]",
+    );
+  }
+  if (!NAME_RE.test(name)) {
+    const hint = suggestName(name);
+    fail(
+      `'${name}' is not a usable project name.\n` +
+        "  A name must start with a lowercase letter, then contain only\n" +
+        "  lowercase letters, digits, '-' or '_'.\n" +
+        (hint ? `  Try: janela init ${hint}\n` : "") +
+        "  Nothing was created.",
+    );
+  }
   if (!TEMPLATES.includes(template)) fail(`unknown template '${template}' (${TEMPLATES.join(", ")})`);
   const dir = resolve(process.cwd(), name);
   if (existsSync(dir)) fail(`${name}/ already exists`);
@@ -1245,15 +1523,50 @@ function targetOrFail() {
   return t;
 }
 
+// A mistyped flag used to be ignored in silence: `--targt ios` fell back to
+// the desktop default, built the wrong thing and exited 0. Anything a caller
+// did not spell exactly is now an error, because a build that quietly ignores
+// what it was asked for is indistinguishable from success.
+function assertKnownFlags(allowed) {
+  const known = new Set(allowed);
+  for (const a of argv.slice(1)) {
+    if (!a.startsWith("--")) continue;
+    const nm = a.slice(2).split("=")[0];
+    if (!known.has(nm)) {
+      const near = allowed.filter((k) => k.startsWith(nm.slice(0, 3)) || nm.startsWith(k.slice(0, 3)));
+      fail(
+        `unknown option '--${nm}' for 'janela ${cmd}'.\n` +
+          `  Known options: ${allowed.map((k) => `--${k}`).join(", ") || "(none)"}` +
+          (near.length ? `\n  Did you mean --${near[0]}?` : ""),
+      );
+    }
+  }
+}
+
+// Extra positionals were silently dropped, so `janela init a b` created 'a'
+// and said nothing about 'b'.
+function assertPositionals(max) {
+  const p = positionals();
+  if (p.length > max) {
+    fail(`unexpected extra argument '${p[max]}' for 'janela ${cmd}'.\n  Nothing was created.`);
+  }
+}
+
 switch (cmd) {
   case "init":
+    assertKnownFlags(["template"]);
+    assertPositionals(1);
     init(positionals()[0], flag("template", "vanilla"));
     break;
   case "build":
+    assertKnownFlags(["target"]);
+    assertPositionals(0);
     build(process.cwd(), { target: targetOrFail() });
     break;
   case "dev":
     {
+      assertKnownFlags(["target"]);
+      assertPositionals(0);
       const t = targetOrFail();
       if (t === "ios") await devIos(process.cwd());
       else if (t === "android") await devAndroid(process.cwd());
