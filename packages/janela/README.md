@@ -559,6 +559,26 @@ clock and the file queue on both. File dialogs are not on iOS yet and report
 clearly when called; window control is a no-op there by nature. See
 [docs/ios.md](../../docs/ios.md).
 
+## Android
+
+Same again: same `main.ts`, same contract, same frontend.
+
+```bash
+janela build --target android   # -> .janela/out-android/<name>.apk
+janela dev   --target android   # build, boot an emulator, install, launch, follow logcat
+```
+
+Needs a JDK, the Android SDK, the NDK and zig; there is no Gradle in the build.
+Commands, events, `commandAsync`/`sleep`/`defer` and file I/O all behave as
+they do on desktop and iOS — the shell owns the clock on each. Native dialogs
+are not on Android yet and report clearly when called; `setTitle` sets the
+Activity label and the other window controls are no-ops by nature. See
+[docs/android.md](../../docs/android.md).
+
+Unlike every other platform an APK also carries a little Java: the webview
+backend needs a companion class, because `android.webkit.WebView` is a Java API
+whose callbacks native code cannot receive on its own.
+
 ## Status
 
 Early proof of concept, on macOS (arm64), Linux (WebKitGTK) and Windows
