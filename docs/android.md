@@ -1,5 +1,10 @@
 # Android
 
+> **Status: released since janela 0.11.0, emulator-verified.** Everything on
+> this page has been run on an arm64 emulator. Builds are debug-signed;
+> **release signing, the Play Store and physical devices are not covered**, and
+> only the `arm64-v8a` ABI is built today.
+
 janela apps build and run on Android. Commands, events, async and file I/O
 behave exactly as they do on desktop and iOS — the same TypeScript runtime is
 compiled for all three, and only the shell around it differs.
@@ -66,8 +71,21 @@ frontend template.
 Not yet on Android — parity is planned:
 
 - **Native dialogs.** The desktop file pickers have no Android implementation
-  yet; the equivalent is `Intent.ACTION_OPEN_DOCUMENT` with its own result
-  plumbing.
+  yet. The equivalent is the Storage Access Framework —
+  `Intent.ACTION_OPEN_DOCUMENT` — with its own Activity-result plumbing, and it
+  is blocked on the same missing library-ABI channel as iOS: see
+  [Dialogs: what remains](ios.md#dialogs-what-remains), which applies to both
+  platforms.
+
+  Two things are already decided there, and Android sharpens the second.
+  A picked document arrives as a **`content://` URI, not a filesystem path**,
+  so the shell will resolve it into app-private storage and return that path —
+  keeping `openFileDialog` something `readFileAsync` can consume and the public
+  API identical to desktop. And `saveFileDialog` needs an API decision rather
+  than an implementation: `ACTION_CREATE_DOCUMENT` hands back a URI to write
+  *into*, which the desktop "give me a path and I will write there" signature
+  cannot express. iOS reaches the same conclusion for its own reasons, so this
+  is a desktop-vs-mobile difference rather than an Android quirk.
 - **Window control.** `setTitle` sets the Activity label, which shows in the
   task switcher. `setSize` and `setFullscreen` are no-ops: a phone's window is
   the screen. These report success rather than failing so that portable code
