@@ -36,6 +36,7 @@
 #include <vector>
 
 #include <android/log.h>
+#include <unistd.h>
 
 #define JANELA_LOG(...)                                                        \
   __android_log_print(ANDROID_LOG_INFO, "janela", __VA_ARGS__)
@@ -59,6 +60,112 @@ namespace {
 
 webview::webview *g_webview = nullptr;
 std::string g_files_dir; // the app's private storage, resolved at startup
+
+// ---- host output -> logcat -------------------------------------------------
+//
+// Android discards a process's stdout and stderr. `setprop log.redirect-stdio
+// true` is refused on API 36, so a host `console.log` simply vanished and the
+// only way to see what the host printed was to render it and screenshot the
+// screen. That is not a debugging story, and it is the same problem iOS had
+// before its os_log tee.
+//
+// So the shell tees stdout and stderr into logcat line by line under stable
+// tags, and still writes to the original descriptors so nothing is lost:
+//
+//   adb logcat -s janela-host:V              # what the app printed
+//   adb logcat -s janela:V janela-stderr:V   # shell notices and stderr
+//
+// The library may not create threads; the shell may, and does — one reader per
+// descriptor.
+
+/// Replace `fd` with a pipe, forwarding every line to logcat and on to the
+/// original descriptor.
+///
+/// `tag` differs per descriptor on purpose. Replacing fd 2 captures everything
+/// in the process that writes to stderr, not just the library — on the
+/// emulator the GL driver is extremely chatty there — so host output goes to
+/// `janela-host` and stderr to `janela-stderr`, keeping
+/// `adb logcat -s janela-host:V` a clean view of what the app itself printed.
+void tee_fd_to_logcat(int fd, android_LogPriority prio, const char *label,
+                      const char *tag) {
+  int original = dup(fd);
+  if (original < 0) {
+    return;
+  }
+  int fds[2];
+  if (pipe(fds) != 0) {
+    close(original);
+    return;
+  }
+  if (dup2(fds[1], fd) < 0) {
+    close(fds[0]);
+    close(fds[1]);
+    close(original);
+    return;
+  }
+  close(fds[1]);
+
+  int read_fd = fds[0];
+  // A pipe is not a tty, so stdio switches to full buffering and would hold
+  // the library's output until the buffer filled or the process exited. Pin
+  // line buffering back on, or a log line only appears long after the event.
+  if (fd == STDOUT_FILENO) {
+    setvbuf(stdout, nullptr, _IOLBF, 0);
+  } else if (fd == STDERR_FILENO) {
+    setvbuf(stderr, nullptr, _IOLBF, 0);
+  }
+
+  std::thread([read_fd, original, prio, tag] {
+    std::string pending;
+    std::vector<char> buf(4096);
+    for (;;) {
+      ssize_t n = read(read_fd, buf.data(), buf.size());
+      if (n <= 0) {
+        break; // writer closed, or an unrecoverable error
+      }
+      // Pass the bytes through untouched first: stdout must behave as before.
+      ssize_t off = 0;
+      while (off < n) {
+        ssize_t w = write(original, buf.data() + off, (size_t)(n - off));
+        if (w <= 0) {
+          break;
+        }
+        off += w;
+      }
+      // Then split into lines: logcat is line-oriented and truncates long
+      // records, so one write per line rather than per read.
+      pending.append(buf.data(), (size_t)n);
+      size_t nl;
+      while ((nl = pending.find('\n')) != std::string::npos) {
+        std::string line = pending.substr(0, nl);
+        pending.erase(0, nl + 1);
+        if (!line.empty() && line.back() == '\r') {
+          line.pop_back();
+        }
+        if (!line.empty()) {
+          __android_log_write(prio, tag, line.c_str());
+        }
+      }
+      // A very long line with no newline would otherwise grow without bound.
+      if (pending.size() > 64 * 1024) {
+        __android_log_write(prio, tag, pending.c_str());
+        pending.clear();
+      }
+    }
+    if (!pending.empty()) {
+      __android_log_write(prio, tag, pending.c_str());
+    }
+  }).detach();
+
+  JANELA_LOG("%s is mirrored to logcat under tag %s", label, tag);
+}
+
+/// Mirror the library's output into logcat. Called before jl_init(), so
+/// anything setup() prints is already captured.
+void start_logging() {
+  tee_fd_to_logcat(STDOUT_FILENO, ANDROID_LOG_INFO, "stdout", "janela-host");
+  tee_fd_to_logcat(STDERR_FILENO, ANDROID_LOG_ERROR, "stderr", "janela-stderr");
+}
 
 /// Copy a library-owned result out of its arena and release it. Results live
 /// until the next jl_reset(), so nothing may hold the pointer past this call.
@@ -401,6 +508,9 @@ Java_dev_janela_host_JanelaActivity_nativeOnCreate(JNIEnv *env, jclass,
     return;
   }
   g_files_dir = files_dir(env, activity);
+
+  // Before jl_init(), so anything setup() prints reaches logcat.
+  start_logging();
 
   // Registration is a pure store and is legal before init; the panic sink and
   // every channel must be in place before any TypeScript runs, since setup()
