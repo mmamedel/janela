@@ -351,6 +351,15 @@ function libraryProfile() {
         params: ["f64", "bool", "string"],
         returns: "void",
       },
+      // Deliberately its own export rather than reusing onFsDone, whose
+      // signature would fit: a dialog result arriving through the file-I/O
+      // path would read as a bug for as long as the code lived.
+      {
+        export: "onDialogDone",
+        symbol: `${IOS_PREFIX}on_dialog_done`,
+        params: ["f64", "bool", "string"],
+        returns: "void",
+      },
     ],
     // TS -> shell. A channel handler must never re-enter the library (see
     // upstream #263: violations silently appear to work), so every one of
@@ -362,6 +371,7 @@ function libraryProfile() {
       { name: "hostSettle", params: ["f64", "string"], returns: "void" },
       { name: "hostReadFile", params: ["f64", "string"], returns: "void" },
       { name: "hostWriteFile", params: ["f64", "string", "string"], returns: "void" },
+      { name: "hostOpenDialog", params: ["f64", "string"], returns: "void" },
     ],
   };
 }
@@ -1219,6 +1229,9 @@ function build(root, { devUrl = null, gui = true, target = "desktop" } = {}) {
       `/** A file job the shell owns has finished (main queue). */\n` +
       `export function onFsDone(id: number, ok: boolean, payload: string): void {\n` +
       `  app.onFsDone(id, ok, payload);\n` +
+      `}\n` +
+      `export function onDialogDone(id: number, ok: boolean, payload: string): void {\n` +
+      `  app.onDialogDone(id, ok, payload);\n` +
       `}\n`
     : `const app = createApp<CmdsOf<typeof setup>, EvtsOf<typeof setup>>(WINDOW);\n` +
       `setup(app);\n` +

@@ -42,6 +42,7 @@ declare function hostSchedule(id: number, ms: number): void;
 declare function hostSettle(pendingId: number, envelopeJson: string): void;
 declare function hostReadFile(jobId: number, path: string): void;
 declare function hostWriteFile(jobId: number, path: string, data: string): void;
+declare function hostOpenDialog(jobId: number, optionsJson: string): void;
 
 // One job table serves reads and writes; these sentinels say which callback of
 // the pair is the real one. Identity comparison is the whole trick, so they
@@ -68,9 +69,14 @@ function encode(value: unknown): string {
 // an answer. A library build still links no event loop (SC4005); that is why
 // the design routes through the shell rather than a limitation of iOS.
 //
-// What remains behind pending(): the file dialogs (iOS wants a document
-// picker, which is its own delegate lifecycle) and window control, which is
-// permanently meaningless on a phone rather than unfinished.
+// `openFileDialog` now works too: the shell presents the platform picker and
+// copies the chosen file into the app's container, so the path it hands back
+// is one `readFileAsync` can open.
+//
+// What remains behind pending(): `saveFileDialog`, which is not a missing
+// implementation but an unmade API decision (see its doc comment — mobile
+// wants an export-shaped call, not a path to write to), and window control,
+// which is permanently meaningless on a phone rather than unfinished.
 //
 // FAILING LOUDLY WITHOUT KILLING THE APP: an uncaught throw in library mode
 // reaches the panic sink and then ABORTS the process (SC4013). So a stub must
@@ -134,6 +140,14 @@ export class JanelaAppImpl<
   jobCbs: FsCallback[] = [];
   jobWriteCbs: ((err: string | null) => void)[] = [];
   nextJob = 1;
+
+  // In-flight file dialogs. Separate from the file jobs above: a picker is
+  // presented by the shell and answered when the user is done, which may be
+  // never. Kept in its own table so a dialog result can never be mistaken for
+  // a file-I/O result.
+  dialogIds: number[] = [];
+  dialogCbs: ((paths: string[] | null, err?: string) => void)[] = [];
+  nextDialog = 1;
 
   // Kept so the shared WindowConfig shape compiles; iOS has no window to size.
   constructor(_cfg: WindowConfig) {}
@@ -352,20 +366,80 @@ export class JanelaAppImpl<
     }
   }
 
-  /** @remarks Not on iOS yet; reports through the callback. */
+  /**
+   * Present the platform's document picker.
+   *
+   * The paths handed back are **copies inside the app's own storage**, not the
+   * locations the user picked. Neither platform gives an app a durable path to
+   * a file outside its container: iOS returns a security-scoped URL that is
+   * readable only while its access is held and does not survive a relaunch
+   * without a bookmark, and Android returns a `content://` URI that is not a
+   * path at all. Copying is what makes the result something `readFileAsync`
+   * can open, and keeps this API identical to desktop. Nothing tracks the
+   * original afterwards, so a later read sees the file as it was when picked.
+   */
   openFileDialog(
-    _options: OpenDialogOptions,
+    options: OpenDialogOptions,
     cb: (paths: string[] | null, err?: string) => void,
   ): void {
-    cb(null, pending("openFileDialog", "iOS needs a document picker"));
+    const id = this.nextDialog;
+    this.nextDialog = id + 1;
+    this.dialogIds.push(id);
+    this.dialogCbs.push(cb);
+    hostOpenDialog(id, JSON.stringify(options));
   }
 
-  /** @remarks Not on iOS yet; reports through the callback. */
+  /**
+   * Called by the shell on the main queue when a picker closes.
+   *
+   * `ok` false carries an error message in `payload`. `ok` true carries a JSON
+   * array of paths — empty when the user cancelled, which answers `null` to
+   * match desktop.
+   */
+  onDialogDone(id: number, ok: boolean, payload: string): void {
+    for (let i = 0; i < this.dialogIds.length; i++) {
+      if (this.dialogIds[i] === id) {
+        const cb = this.dialogCbs[i];
+        this.dialogIds.splice(i, 1);
+        this.dialogCbs.splice(i, 1);
+        if (!ok) {
+          cb(null, payload);
+          return;
+        }
+        const paths = JSON.parse(payload) as string[];
+        // Cancel is not an error: desktop answers null, so this does too.
+        if (paths.length < 1) cb(null);
+        else cb(paths);
+        return;
+      }
+    }
+  }
+
+  /**
+   * @remarks Not on mobile; reports through the callback.
+   *
+   * Deliberately still absent while `openFileDialog` works, because the two
+   * are not symmetrical here. Desktop's "save" means *tell me where to write*,
+   * and neither mobile platform offers that: iOS's `forExporting:` picker
+   * requires the file to already exist before it opens, and Android's
+   * `ACTION_CREATE_DOCUMENT` hands back a URI to write into rather than a
+   * path. Both want an export-shaped call — "here is a file, put it
+   * somewhere" — which is a different operation, not a different spelling of
+   * this one. Implementing it as `saveFileDialog` would give the same method
+   * two meanings across platforms, so it waits for an API decision.
+   */
   saveFileDialog(
     _options: SaveDialogOptions,
     cb: (path: string | null, err?: string) => void,
   ): void {
-    cb(null, pending("saveFileDialog", "iOS needs a document picker"));
+    cb(
+      null,
+      pending(
+        "saveFileDialog",
+        "a phone has no 'choose a path to write' picker; iOS and Android both " +
+          "want an export-shaped call, which is a different operation",
+      ),
+    );
   }
 
   /** @remarks No-op on iOS: an app has no window title to set. */

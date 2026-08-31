@@ -36,6 +36,7 @@
 #include <vector>
 
 #include <android/log.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #define JANELA_LOG(...)                                                        \
@@ -54,6 +55,8 @@ void jl_handle_invoke(const char *cmd, size_t cmd_len, const char *args,
 void jl_index_html(char **out, size_t *out_len);
 void jl_on_timer(double id);
 void jl_on_fs_done(double id, bool ok, const char *payload, size_t payload_len);
+void jl_on_dialog_done(double id, bool ok, const char *payload,
+                       size_t payload_len);
 }
 
 namespace {
@@ -493,11 +496,273 @@ std::string files_dir(JNIEnv *env, jobject activity) {
 
 JavaVM *g_vm = nullptr;
 
+// ---- the document picker ---------------------------------------------------
+//
+// Android hands back a content:// URI, which is not a path and cannot be given
+// to readFileAsync. So the shell copies the picked bytes into the app's own
+// storage and returns that path, which readFileAsync can already open. The
+// copy is a snapshot; nothing tracks the original afterwards.
+//
+// The picker itself is presented from Java: the Storage Access Framework
+// answers on Activity#onActivityResult, and native code cannot receive that
+// (ART's JNI DefineClass is unimplemented). JanelaActivity owns that half and
+// calls back in through the two JNI entry points at the bottom of this file.
+
+/// A global ref to the Activity, so the picker can be presented from a later
+/// turn. Local refs do not survive the call that produced them.
+jobject g_activity = nullptr;
+
+/// Attach the calling thread if needed and hand back an env for it.
+struct scoped_env {
+  JNIEnv *env = nullptr;
+  bool detach = false;
+  scoped_env() {
+    if (!g_vm) {
+      return;
+    }
+    if (g_vm->GetEnv((void **)&env, JNI_VERSION_1_6) == JNI_EDETACHED) {
+      if (g_vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
+        detach = true;
+      }
+    }
+  }
+  ~scoped_env() {
+    if (detach && g_vm) {
+      g_vm->DetachCurrentThread();
+    }
+  }
+};
+
+/// Read a content:// URI through the ContentResolver and copy it into the
+/// app's storage, returning the new path (empty on failure).
+std::string copy_uri_into_storage(JNIEnv *env, const std::string &uri_str,
+                                 const std::string &display_name) {
+  if (!g_activity) {
+    return {};
+  }
+  jclass uri_cls = env->FindClass("android/net/Uri");
+  jmethodID parse = env->GetStaticMethodID(uri_cls, "parse",
+                                           "(Ljava/lang/String;)Landroid/net/Uri;");
+  jstring juri = env->NewStringUTF(uri_str.c_str());
+  jobject uri = env->CallStaticObjectMethod(uri_cls, parse, juri);
+  env->DeleteLocalRef(juri);
+  if (!uri || env->ExceptionCheck()) {
+    env->ExceptionClear();
+    return {};
+  }
+
+  jclass act_cls = env->GetObjectClass(g_activity);
+  jmethodID get_resolver = env->GetMethodID(act_cls, "getContentResolver",
+                                            "()Landroid/content/ContentResolver;");
+  jobject resolver = env->CallObjectMethod(g_activity, get_resolver);
+  if (!resolver || env->ExceptionCheck()) {
+    env->ExceptionClear();
+    return {};
+  }
+  jclass res_cls = env->GetObjectClass(resolver);
+  jmethodID open = env->GetMethodID(res_cls, "openInputStream",
+                                    "(Landroid/net/Uri;)Ljava/io/InputStream;");
+  jobject stream = env->CallObjectMethod(resolver, open, uri);
+  if (!stream || env->ExceptionCheck()) {
+    env->ExceptionClear();
+    return {};
+  }
+
+  // Prefer the name the user saw. A content:// URI's last segment is an opaque
+  // document id, so falling back to it produces copies called things like
+  // "3A18"; the Activity resolves OpenableColumns.DISPLAY_NAME for us.
+  std::string name = display_name;
+  if (name.empty()) {
+    name = uri_str;
+    size_t slash = name.find_last_of("/%");
+    if (slash != std::string::npos && slash + 1 < name.size()) {
+      name = name.substr(slash + 1);
+    }
+  }
+  // A display name is untrusted input and must not escape the pick directory.
+  for (char &c : name) {
+    if (c == '/' || c == '\\') {
+      c = '_';
+    }
+  }
+  if (name == "." || name == "..") {
+    name = "picked";
+  }
+  for (char &c : name) {
+    if (c == ':' || c == '?' || c == '&' || c == '=') {
+      c = '_';
+    }
+  }
+  if (name.empty()) {
+    name = "picked";
+  }
+  std::string dir = resolve_path("picked");
+  ::mkdir(dir.c_str(), 0755);
+  std::string dest = dir + "/" + name;
+
+  jclass stream_cls = env->GetObjectClass(stream);
+  jmethodID read = env->GetMethodID(stream_cls, "read", "([B)I");
+  jmethodID close = env->GetMethodID(stream_cls, "close", "()V");
+  jbyteArray buf = env->NewByteArray(8192);
+  std::ofstream out(dest, std::ios::binary | std::ios::trunc);
+  bool ok = out.good();
+  while (ok) {
+    jint n = env->CallIntMethod(stream, read, buf);
+    if (env->ExceptionCheck()) {
+      env->ExceptionClear();
+      ok = false;
+      break;
+    }
+    if (n <= 0) {
+      break;
+    }
+    jbyte *bytes = env->GetByteArrayElements(buf, nullptr);
+    out.write(reinterpret_cast<const char *>(bytes), n);
+    env->ReleaseByteArrayElements(buf, bytes, JNI_ABORT);
+  }
+  out.close();
+  env->CallVoidMethod(stream, close);
+  env->ExceptionClear();
+
+  env->DeleteLocalRef(buf);
+  env->DeleteLocalRef(stream_cls);
+  env->DeleteLocalRef(stream);
+  env->DeleteLocalRef(res_cls);
+  env->DeleteLocalRef(resolver);
+  env->DeleteLocalRef(act_cls);
+  env->DeleteLocalRef(uri);
+  env->DeleteLocalRef(uri_cls);
+
+  if (!ok || !out) {
+    return {};
+  }
+  return dest;
+}
+
+void finish_dialog(double job, bool ok, std::string payload) {
+  // BY VALUE and dispatched: never re-enter the library from inside a JNI
+  // callback (upstream #263) — this lands at the top of a later turn.
+  if (g_webview) {
+    g_webview->dispatch([job, ok, payload] {
+      jl_on_dialog_done(job, ok, payload.c_str(), payload.size());
+    });
+  }
+}
+
+/// TS -> shell: present a document picker. Records the request and returns;
+/// the Activity presents it on the UI thread.
+void host_open_dialog(void *, double job, const char *options, size_t len) {
+  std::string opts(options, len);
+  if (!g_webview) {
+    return;
+  }
+  g_webview->dispatch([job, opts] {
+    // Android's SAF has no directory mode through ACTION_OPEN_DOCUMENT;
+    // report rather than quietly opening a file picker instead.
+    if (webview::detail::json_parse(opts, "directory", 0) == "true") {
+      finish_dialog(job, false,
+                    "ENOTSUP: picking a directory is not supported on Android");
+      return;
+    }
+    scoped_env se;
+    if (!se.env || !g_activity) {
+      finish_dialog(job, false, "EINVAL: the app has no Activity to present on");
+      return;
+    }
+    JNIEnv *env = se.env;
+
+    // Filters are MIME types here, so an extension list cannot be honoured
+    // directly; a type given as "image/*" or "text/plain" passes through.
+    std::vector<std::string> mimes;
+    for (size_t i = 0;; i++) {
+      std::string ext = webview::detail::json_parse(opts, "extensions", i);
+      if (ext.empty()) {
+        break;
+      }
+      if (ext.find('/') != std::string::npos) {
+        mimes.push_back(ext);
+      } else {
+        JANELA_LOG("filter '.%s' is an extension, but Android's picker takes "
+                   "MIME types, so the picker is not filtered",
+                   ext.c_str());
+      }
+    }
+
+    jclass str_cls = env->FindClass("java/lang/String");
+    jobjectArray arr =
+        env->NewObjectArray((jsize)mimes.size(), str_cls, nullptr);
+    for (size_t i = 0; i < mimes.size(); i++) {
+      jstring s = env->NewStringUTF(mimes[i].c_str());
+      env->SetObjectArrayElement(arr, (jsize)i, s);
+      env->DeleteLocalRef(s);
+    }
+
+    jclass act_cls = env->GetObjectClass(g_activity);
+    jmethodID mid = env->GetMethodID(act_cls, "openDocumentPicker",
+                                     "(DZ[Ljava/lang/String;)V");
+    if (!mid) {
+      env->ExceptionClear();
+      finish_dialog(job, false,
+                    "EIO: the Activity has no openDocumentPicker method");
+    } else {
+      bool multiple = webview::detail::json_parse(opts, "multiple", 0) == "true";
+      env->CallVoidMethod(g_activity, mid, (jdouble)job, (jboolean)multiple, arr);
+      if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        finish_dialog(job, false, "EIO: could not open a document picker");
+      }
+    }
+    env->DeleteLocalRef(arr);
+    env->DeleteLocalRef(str_cls);
+    env->DeleteLocalRef(act_cls);
+  });
+}
+
 } // namespace
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *) {
   g_vm = vm;
   return JNI_VERSION_1_6;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_dev_janela_host_JanelaActivity_nativeOnDialogResult(JNIEnv *env, jclass,
+                                                         jdouble job,
+                                                         jboolean ok,
+                                                         jstring payload) {
+  std::string p;
+  if (payload) {
+    const char *chars = env->GetStringUTFChars(payload, nullptr);
+    if (chars) {
+      p = chars;
+      env->ReleaseStringUTFChars(payload, chars);
+    }
+  }
+  finish_dialog((double)job, ok == JNI_TRUE, p);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_janela_host_JanelaActivity_nativeCopyUri(JNIEnv *env, jclass,
+                                                  jstring uri,
+                                                  jstring display_name) {
+  std::string u;
+  if (uri) {
+    const char *chars = env->GetStringUTFChars(uri, nullptr);
+    if (chars) {
+      u = chars;
+      env->ReleaseStringUTFChars(uri, chars);
+    }
+  }
+  std::string dn;
+  if (display_name) {
+    const char *chars = env->GetStringUTFChars(display_name, nullptr);
+    if (chars) {
+      dn = chars;
+      env->ReleaseStringUTFChars(display_name, chars);
+    }
+  }
+  std::string path = copy_uri_into_storage(env, u, dn);
+  return env->NewStringUTF(path.c_str());
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -508,6 +773,9 @@ Java_dev_janela_host_JanelaActivity_nativeOnCreate(JNIEnv *env, jclass,
     return;
   }
   g_files_dir = files_dir(env, activity);
+  // A global ref: the picker is presented from a later turn, and a local
+  // ref does not survive the call that produced it.
+  g_activity = env->NewGlobalRef(activity);
 
   // Before jl_init(), so anything setup() prints reaches logcat.
   start_logging();
@@ -520,6 +788,8 @@ Java_dev_janela_host_JanelaActivity_nativeOnCreate(JNIEnv *env, jclass,
       jl_set_callback("hostSettle", (void (*)(void))host_settle, nullptr) ||
       jl_set_callback("hostReadFile", (void (*)(void))host_read_file, nullptr) ||
       jl_set_callback("hostWriteFile", (void (*)(void))host_write_file,
+                      nullptr) ||
+      jl_set_callback("hostOpenDialog", (void (*)(void))host_open_dialog,
                       nullptr) ||
       jl_set_callback("janelaEmit", (void (*)(void))emit_event, nullptr)) {
     JANELA_LOG("could not register a host channel");

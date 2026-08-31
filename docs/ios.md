@@ -86,36 +86,35 @@ one reports clearly when called instead of doing nothing.
 
 | | why | reported as |
 |---|---|---|
-| `app.openFileDialog` | needs a new host channel in the library ABI; the picker itself is understood — see [Dialogs: what remains](#dialogs-what-remains) | through the callback's error argument |
 | `app.saveFileDialog` | mobile "save" is *export a file you already have*, which the desktop signature cannot express — see below | through the callback's error argument |
 | `app.setTitle`, `app.setSize`, `app.setFullscreen` | an iOS app has no window to title or resize — this one is permanent, not unfinished | logged, then a no-op |
 | `app.quit` | iOS apps are dismissed by the user, not by code — also permanent | logged, then a no-op |
 
-Only the dialogs are pending work; the window-control entries are meaningless
-on a phone and will stay no-ops.
+Only `saveFileDialog` is pending work; the window-control entries are
+meaningless on a phone and will stay no-ops.
 
-### Dialogs: what remains
+### The file picker
 
-`openFileDialog` is a small, well-understood piece of work that is blocked on
-one thing: the library ABI has no channel for it. The mobile profile declares
-its TS→shell channels (`hostSchedule`, `hostSettle`, `hostReadFile`,
-`hostWriteFile`, `janelaEmit`) and its shell→TS exports (`handleInvoke`,
-`indexHtml`, `onTimer`, `onFsDone`) in the CLI, and a picker needs one of each:
+`app.openFileDialog` presents `UIDocumentPickerViewController`. One thing about
+the result matters:
 
-- a channel `hostOpenDialog(jobId, optionsJson)`;
-- an export `onDialogDone(jobId, ok, payloadJson)`.
+**The path you get back is a copy inside the app's container**, under
+`picked/`. iOS hands back a security-scoped URL, readable only between
+`startAccessingSecurityScopedResource` and its counterpart and not readable at
+all after a relaunch without a bookmark. So the shell copies the file while the
+scope is held and returns that path, which `readFileAsync` already understands
+and which keeps the public API identical to desktop. The copy is a snapshot;
+nothing tracks the original afterwards.
 
-Once those exist, the shell side is the same deferred-reply shape everything
-else already uses.
+`directory: true` reports `ENOTSUP` — iOS has no directory picker. Cancelling
+answers `null`, exactly as on desktop.
 
-**What a picked path will mean.** A picked file arrives as a security-scoped
-URL, readable only between `startAccessingSecurityScopedResource` and its
-`stop` counterpart, and that scope does not survive a relaunch without a
-bookmark. Rather than leak that into the API, the shell will **copy the picked
-file into the app's container** and return that path, so the result is
-something `readFileAsync` already understands and the public API stays
-identical to desktop. The cost is a copy; the benefit is that a picked path
-behaves like every other path in janela.
+**Filters are partial, by choice.** Restricting the picker needs uniform type
+identifiers, and mapping an extension to one needs `UniformTypeIdentifiers` or
+`CoreServices`, neither of which the iOS build links. A table covers the common
+types (`txt`, `md`, `json`, `csv`, `html`, `pdf`, `png`, `jpeg`, `mp3`, `mp4`,
+`zip` and friends); an extension outside it widens the picker to `public.item`
+and says so on stderr, so a filter is never silently dropped.
 
 **Why `saveFileDialog` is a separate question.** On desktop it means "ask the
 user where to put a file, then I will write there". iOS has no such thing:
