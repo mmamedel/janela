@@ -17,13 +17,17 @@
 #include "webview.h"
 
 #include <dispatch/dispatch.h>
+#include <os/log.h>
+#include <unistd.h>
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <map>
 #include <sstream>
 #include <string>
+#include <vector>
 
 // ---- the scriptc library's C ABI (see the generated profile) ---------------
 extern "C" {
@@ -43,6 +47,113 @@ void jl_on_fs_done(double id, bool ok, const char *payload, size_t payload_len);
 namespace {
 
 webview::webview *g_webview = nullptr;
+
+// ---- logging ---------------------------------------------------------------
+//
+// scriptc's console.log writes to stdout. On a desktop that is where a
+// developer is looking; on iOS nobody is, because the unified log is what
+// `log show`, `log stream` and Console.app read, and it is the only channel
+// `xcrun simctl` can surface. Screenshotting the page to find out what the
+// host printed is not a debugging story.
+//
+// So the shell tees the library's stdout and stderr into os_log, line by line,
+// under a stable subsystem and category so they can be filtered:
+//
+//   xcrun simctl spawn booted log stream --predicate \
+//     'subsystem == "dev.janela"'
+//
+// The original descriptors are kept and still written, so a run attached to a
+// terminal prints exactly as before — the tee adds a destination, it does not
+// move one.
+
+os_log_t janela_log() {
+  static os_log_t log = os_log_create("dev.janela", "host");
+  return log;
+}
+
+/// Replace `fd` with a pipe, forwarding every line to os_log and on to the
+/// original descriptor. One reader queue per fd; the shell may create threads
+/// even though the library may not.
+void tee_fd_to_oslog(int fd, os_log_type_t type, const char *label) {
+  int original = dup(fd);
+  if (original < 0) {
+    return;
+  }
+  int fds[2];
+  if (pipe(fds) != 0) {
+    close(original);
+    return;
+  }
+  if (dup2(fds[1], fd) < 0) {
+    close(fds[0]);
+    close(fds[1]);
+    close(original);
+    return;
+  }
+  close(fds[1]);
+
+  int read_fd = fds[0];
+  // A pipe is not a tty, so stdio would switch to full buffering and hold the
+  // library's output until the buffer filled or the process exited. Neither is
+  // acceptable for a log, so pin line buffering back on.
+  if (fd == STDOUT_FILENO) {
+    setvbuf(stdout, nullptr, _IOLBF, 0);
+  } else if (fd == STDERR_FILENO) {
+    setvbuf(stderr, nullptr, _IOLBF, 0);
+  }
+
+  dispatch_queue_t q = dispatch_queue_create("dev.janela.log", DISPATCH_QUEUE_SERIAL);
+  dispatch_async(q, ^{
+    std::string pending;
+    std::vector<char> buf(4096);
+    for (;;) {
+      ssize_t n = read(read_fd, buf.data(), buf.size());
+      if (n <= 0) {
+        break; // writer closed, or an unrecoverable error
+      }
+      // Pass the bytes through untouched first: stdout must behave as before.
+      ssize_t off = 0;
+      while (off < n) {
+        ssize_t w = write(original, buf.data() + off, (size_t)(n - off));
+        if (w <= 0) {
+          break;
+        }
+        off += w;
+      }
+      // Then split into lines for the unified log, which is line-oriented.
+      // %{public}s is required: os_log redacts a plain %s as <private>.
+      pending.append(buf.data(), (size_t)n);
+      size_t nl;
+      while ((nl = pending.find('\n')) != std::string::npos) {
+        std::string line = pending.substr(0, nl);
+        pending.erase(0, nl + 1);
+        if (!line.empty() && line.back() == '\r') {
+          line.pop_back();
+        }
+        if (!line.empty()) {
+          os_log_with_type(janela_log(), type, "%{public}s", line.c_str());
+        }
+      }
+      // A very long line with no newline would otherwise grow without bound.
+      if (pending.size() > 64 * 1024) {
+        os_log_with_type(janela_log(), type, "%{public}s", pending.c_str());
+        pending.clear();
+      }
+    }
+    if (!pending.empty()) {
+      os_log_with_type(janela_log(), type, "%{public}s", pending.c_str());
+    }
+  });
+  os_log_with_type(janela_log(), OS_LOG_TYPE_INFO,
+                   "janela: %{public}s is mirrored to the unified log", label);
+}
+
+/// Mirror the library's output into the unified log. Called before jl_init(),
+/// so anything setup() prints is already captured.
+void start_logging() {
+  tee_fd_to_oslog(STDOUT_FILENO, OS_LOG_TYPE_DEFAULT, "stdout");
+  tee_fd_to_oslog(STDERR_FILENO, OS_LOG_TYPE_ERROR, "stderr");
+}
 
 /// Copy a library-owned result out of its arena and release it. Results live
 /// until the next jl_reset(), so nothing may hold the pointer past this call.
@@ -301,6 +412,9 @@ void on_invoke(const std::string &binding_id, const std::string &req, void *) {
 } // namespace
 
 int main() {
+  // Before anything else, so setup()'s own output is captured too.
+  start_logging();
+
   // Registration is a pure store and is legal before init; the panic sink and
   // every channel must be in place before any TypeScript runs, since setup()
   // executes during jl_init().
