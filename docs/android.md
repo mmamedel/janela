@@ -5,6 +5,26 @@
 > **release signing, the Play Store and physical devices are not covered**, and
 > only the `arm64-v8a` ABI is built today.
 
+**All five frontend templates are verified on Android** — `vanilla`, `vue`,
+`react`, `svelte` and `solid` were each built, installed and run on an arm64
+emulator (API 36, WebView 133), with the framework rendering host data and a
+typed round trip returning a `number`. Sizes are in
+[frontend.md](./frontend.md).
+
+## Host logging is not wired up yet
+
+Unlike iOS, where host `console.log` goes to the unified log via `os_log`,
+**Android host output goes to stdout, which Android discards.** It does not
+appear in `logcat`, and `setprop log.redirect-stdio true` is refused on modern
+API levels, so there is no workaround from the outside.
+
+Practically, that means host-side `console.log` is invisible on Android today.
+Verify through the page instead (render what you want to check, then
+`adb exec-out screencap -p > shot.png`), or have the host write to app-private
+storage with `app.writeFileAsync` and read it back with
+`adb shell run-as <applicationId> cat files/<name>`. Routing host output through
+`__android_log_write` is the obvious fix and is not done yet.
+
 janela apps build and run on Android. Commands, events, async and file I/O
 behave exactly as they do on desktop and iOS — the same TypeScript runtime is
 compiled for all three, and only the shell around it differs.
