@@ -309,7 +309,7 @@ function iosConf(conf) {
 // The library profile: one export carries every command, so a project's own
 // commands need no ABI of their own. `janelaEmit` is the reverse channel the
 // shell registers before init.
-function iosProfile() {
+function libraryProfile() {
   return {
     profile_format: 1,
     name: "janela",
@@ -400,7 +400,7 @@ function buildIos(root, conf, buildDir, outDir) {
   }
   const ios = iosConf(conf);
 
-  writeFileSync(join(buildDir, "profile.json"), JSON.stringify(iosProfile(), null, 2) + "\n");
+  writeFileSync(join(buildDir, "profile.json"), JSON.stringify(libraryProfile(), null, 2) + "\n");
 
   console.log("janela: compiling TypeScript to an iOS library");
   run(["node", scriptcBin(), "build", "--lib", "--profile", "profile.json"], {
@@ -461,6 +461,264 @@ async function devIos(root) {
     "xcrun", "simctl", "launch", "--console-pty",
     device.udid, iosConf(conf).identifier,
   ]);
+}
+
+
+// ---- Android ---------------------------------------------------------------
+//
+// Android is library-mode like iOS: the system owns the Activity and its
+// Looper, and the app's TypeScript is a linked scriptc library the shell calls
+// into. Unlike every other target the APK also carries Java — the webview
+// backend needs a companion class because android.webkit.WebView is a Java API
+// and native code cannot define a class to receive its callbacks.
+
+const ANDROID_MIN_SDK = 26;
+const ANDROID_TARGET_SDK = 34;
+const ANDROID_ABI = "arm64-v8a";
+
+/// Android package names are Java package names: dot-separated identifiers,
+/// so no hyphens. A janela project may be called `my-app`, which makes the
+/// default identifier `dev.janela.my-app` — legal everywhere else and not
+/// here, so each segment is coerced rather than failing the build.
+function androidPackage(id) {
+  return id
+    .split(".")
+    .map((seg) => {
+      const cleaned = seg.replace(/[^A-Za-z0-9_]/g, "_");
+      return /^[A-Za-z_]/.test(cleaned) ? cleaned : `_${cleaned}`;
+    })
+    .join(".");
+}
+
+function androidConf(conf) {
+  const a = conf.android ?? {};
+  return {
+    applicationId: androidPackage(a.applicationId ?? a.identifier ?? conf.identifier),
+    label: a.label ?? conf.window?.title ?? conf.name,
+    minSdk: String(a.minSdk ?? ANDROID_MIN_SDK),
+    device: a.device ?? null,
+  };
+}
+
+/// The SDK pieces an Android build needs, or a message saying which is absent.
+function androidSdk() {
+  const home =
+    process.env.ANDROID_HOME ??
+    process.env.ANDROID_SDK_ROOT ??
+    join(process.env.HOME ?? "", "Library", "Android", "sdk");
+  if (!existsSync(home)) {
+    fail(
+      "Android builds need the Android SDK. Install it (Android Studio, or " +
+        "`sdkmanager`) and set ANDROID_HOME",
+    );
+  }
+  const ndkRoot = process.env.ANDROID_NDK_ROOT ?? null;
+  const ndks = existsSync(join(home, "ndk"))
+    ? readdirSync(join(home, "ndk")).sort()
+    : [];
+  const ndk = ndkRoot ?? (ndks.length ? join(home, "ndk", ndks[ndks.length - 1]) : null);
+  if (!ndk || !existsSync(ndk)) {
+    fail(
+      "Android builds need the NDK: `sdkmanager --install 'ndk;27.0.12077973'`, " +
+        "or set ANDROID_NDK_ROOT",
+    );
+  }
+  const buildToolsDir = join(home, "build-tools");
+  const versions = existsSync(buildToolsDir) ? readdirSync(buildToolsDir).sort() : [];
+  if (!versions.length) fail("Android builds need build-tools: `sdkmanager --install 'build-tools;36.0.0'`");
+  const bt = join(buildToolsDir, versions[versions.length - 1]);
+
+  const platformsDir = join(home, "platforms");
+  const platforms = existsSync(platformsDir) ? readdirSync(platformsDir).sort() : [];
+  if (!platforms.length) fail("Android builds need a platform: `sdkmanager --install 'platforms;android-36'`");
+  const androidJar = join(platformsDir, platforms[platforms.length - 1], "android.jar");
+
+  // The NDK ships darwin-x86_64 host binaries even on Apple silicon.
+  const hosts = readdirSync(join(ndk, "toolchains", "llvm", "prebuilt"));
+  const toolchain = join(ndk, "toolchains", "llvm", "prebuilt", hosts[0], "bin");
+
+  return { home, ndk, bt, androidJar, toolchain, adb: join(home, "platform-tools", "adb") };
+}
+
+function javaHome() {
+  if (process.env.JAVA_HOME) return process.env.JAVA_HOME;
+  const brew = "/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home";
+  if (existsSync(brew)) return brew;
+  fail("Android builds need a JDK. Install one (`brew install openjdk`) and set JAVA_HOME");
+}
+
+function androidManifest(conf) {
+  const a = androidConf(conf);
+  return `<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="${a.applicationId}"
+    android:versionCode="1"
+    android:versionName="${conf.version ?? "0.1.0"}">
+  <uses-permission android:name="android.permission.INTERNET"/>
+  <application android:label="${a.label}" android:hasCode="true">
+    <activity android:name="dev.janela.host.JanelaActivity" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>
+`;
+}
+
+/// A debug keystore, generated once and cached. Android refuses to install an
+/// unsigned APK; a debug key is enough for a simulator or a developer device.
+function debugKeystore(cacheDir, jdk) {
+  const ks = join(cacheDir, "debug.keystore");
+  if (existsSync(ks)) return ks;
+  run([
+    join(jdk, "bin", "keytool"), "-genkeypair", "-keystore", ks,
+    "-storepass", "android", "-keypass", "android", "-alias", "androiddebugkey",
+    "-dname", "CN=Android Debug,O=janela,C=US",
+    "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",
+  ]);
+  return ks;
+}
+
+function buildAndroid(root, conf, buildDir, outDir) {
+  const sdk = androidSdk();
+  const jdk = javaHome();
+  if (!which("zig")) {
+    fail(
+      "Android builds need zig on PATH: scriptc routes mobile targets through " +
+        "`zig cc`. Install it with `brew install zig`",
+    );
+  }
+  const a = androidConf(conf);
+  const cacheDir = join(root, ".janela", "cache");
+
+  writeFileSync(join(buildDir, "profile.json"), JSON.stringify(libraryProfile(), null, 2) + "\n");
+
+  console.log("janela: compiling TypeScript to an Android library");
+  run(["node", scriptcBin(), "build", "--lib", "--profile", "profile.json"], {
+    cwd: buildDir,
+    env: {
+      ...process.env,
+      SCRIPTC_CC: "zigcc",
+      SCRIPTC_TARGET: "aarch64-linux-android",
+      ANDROID_NDK_ROOT: sdk.ndk,
+    },
+  });
+  const lib = join(buildDir, ".scriptc", "entry.lib.a");
+  if (!existsSync(lib)) fail(`scriptc produced no library at ${lib}`);
+
+  // The shell is a shared library the Activity loads; Android has no main().
+  console.log("janela: compiling the Android shell");
+  const stage = join(buildDir, "apk");
+  const jniDir = join(stage, "lib", ANDROID_ABI);
+  mkdirSync(jniDir, { recursive: true });
+  const so = join(jniDir, "libjanela.so");
+  run([
+    join(sdk.toolchain, `aarch64-linux-android${a.minSdk}-clang++`),
+    join(KIT, "shim", "android", "app.cc"),
+    "-shared", "-fPIC", "-std=c++17", "-O2",
+    // The NDK links libc++ dynamically by default, which would mean shipping
+    // libc++_shared.so beside ours; static keeps the APK to one library.
+    "-static-libstdc++",
+    `-I${join(KIT, "vendor-webview", "core", "include")}`,
+    lib, "-llog", "-o", so,
+  ]);
+  run([join(sdk.toolchain, "llvm-strip"), so]);
+
+  // The companion Java class the backend requires, plus janela's Activity.
+  console.log("janela: compiling the Java bridge");
+  const classes = join(buildDir, "classes");
+  mkdirSync(classes, { recursive: true });
+  const javaSrc = join(KIT, "shim", "android", "java");
+  const sources = [
+    join(javaSrc, "dev", "webview", "WebviewBridge.java"),
+    join(javaSrc, "dev", "janela", "host", "JanelaActivity.java"),
+  ];
+  run([
+    join(jdk, "bin", "javac"), "-source", "11", "-target", "11", "-nowarn",
+    "-classpath", sdk.androidJar, "-d", classes, ...sources,
+  ]);
+  // d8 needs every class file named, including the inner classes javac
+  // emitted for the @JavascriptInterface object and the WebViewClient.
+  const classFiles = [];
+  const collect = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name);
+      if (entry.isDirectory()) collect(p);
+      else if (entry.name.endsWith(".class")) classFiles.push(p);
+    }
+  };
+  collect(classes);
+  run([join(sdk.bt, "d8"), "--min-api", a.minSdk, "--output", stage, ...classFiles]);
+
+  writeFileSync(join(buildDir, "AndroidManifest.xml"), androidManifest(conf));
+
+  console.log("janela: packaging the APK");
+  const unsigned = join(buildDir, "unsigned.apk");
+  run([
+    join(sdk.bt, "aapt2"), "link", "-o", unsigned, "-I", sdk.androidJar,
+    "--manifest", join(buildDir, "AndroidManifest.xml"),
+    "--min-sdk-version", a.minSdk,
+    "--target-sdk-version", String(ANDROID_TARGET_SDK),
+  ]);
+  // aapt2 emits the manifest and resources; the code and the shared library
+  // are added to the same zip afterwards.
+  run(["zip", "-q", "-r", unsigned, "classes.dex", "lib"], { cwd: stage });
+
+  const aligned = join(buildDir, "aligned.apk");
+  run([join(sdk.bt, "zipalign"), "-f", "4", unsigned, aligned]);
+  const apk = join(outDir, `${conf.name}.apk`);
+  run([
+    join(sdk.bt, "apksigner"), "sign",
+    "--ks", debugKeystore(cacheDir, jdk),
+    "--ks-pass", "pass:android", "--key-pass", "pass:android",
+    "--out", apk, aligned,
+  ]);
+
+  console.log(
+    `janela: built ${relative(root, apk)} ` +
+      `(${statSync(apk).size} bytes, ${ANDROID_ABI}; .so ${statSync(so).size} bytes)`,
+  );
+  return apk;
+}
+
+/// Boots an emulator if none is running, then installs and launches.
+async function devAndroid(root) {
+  const sdk = androidSdk();
+  const conf = loadConf(root);
+  const a = androidConf(conf);
+  const apk = build(root, { target: "android" });
+
+  const devices = capture([sdk.adb, "devices"]).split("\n").slice(1)
+    .filter((l) => l.trim().endsWith("device"));
+  if (!devices.length) {
+    const avds = capture([join(sdk.home, "emulator", "emulator"), "-list-avds"])
+      .split("\n").map((s) => s.trim()).filter(Boolean);
+    if (!avds.length) {
+      fail("no Android device or emulator. Create an AVD in Android Studio, or attach a device");
+    }
+    const avd = a.device ?? avds[0];
+    console.log(`janela: booting ${avd}`);
+    spawn(join(sdk.home, "emulator", "emulator"), ["-avd", avd, "-no-snapshot-save"], {
+      detached: true, stdio: "ignore",
+    }).unref();
+    run([sdk.adb, "wait-for-device"]);
+    // wait-for-device returns as soon as adb can talk to it; the package
+    // manager is not up until the boot animation has finished.
+    for (;;) {
+      const done = capture([sdk.adb, "shell", "getprop", "sys.boot_completed"]).trim();
+      if (done === "1") break;
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+
+  console.log("janela: installing");
+  run([sdk.adb, "install", "-r", apk]);
+  run([sdk.adb, "shell", "am", "start", "-n",
+       `${a.applicationId}/dev.janela.host.JanelaActivity`]);
+  console.log("janela: running (Ctrl-C to stop following the log)");
+  run([sdk.adb, "logcat", "-s", "janela:*", "chromium:*", "AndroidRuntime:*"]);
 }
 
 // ---- shim ----------------------------------------------------------------
@@ -680,20 +938,28 @@ function makeGuiSubsystem(exePath) {
 function build(root, { devUrl = null, gui = true, target = "desktop" } = {}) {
   const conf = loadConf(root);
   const ios = target === "ios";
-  const buildDir = join(root, ".janela", ios ? "build-ios" : "build");
+  const android = target === "android";
+  // Both mobile targets are library-mode: the platform owns the loop and the
+  // shell calls into a linked scriptc library. Everything above the shell is
+  // shared between them.
+  const mobile = ios || android;
+  const suffix = ios ? "-ios" : android ? "-android" : "";
+  const buildDir = join(root, ".janela", `build${suffix}`);
   const cacheDir = join(root, ".janela", "cache");
-  const outDir = join(root, ".janela", ios ? "out-ios" : "out");
+  const outDir = join(root, ".janela", `out${suffix}`);
   for (const d of [buildDir, cacheDir, outDir]) mkdirSync(d, { recursive: true });
 
   // Desktop links a C shim over webview.h; iOS links no shim at all — the
   // UIKit shell is the program, and it links this build's output instead.
-  const shimLib = ios ? null : buildShim(cacheDir);
+  const shimLib = mobile ? null : buildShim(cacheDir);
 
   // Assemble the compile unit: runtime + user's commands + generated modules.
   // Which runtime lane lands here as "./janela" is the whole difference
   // between the two targets — a project's main.ts is compiled unchanged
   // against either.
-  cpSync(join(KIT, "runtime", ios ? "ios.ts" : "janela.ts"), join(buildDir, "janela.ts"));
+  // ios.ts is the library-mode runtime: Android uses it unchanged, which is
+  // the point — the same TypeScript serves both mobile shells.
+  cpSync(join(KIT, "runtime", mobile ? "ios.ts" : "janela.ts"), join(buildDir, "janela.ts"));
   cpSync(join(KIT, "runtime", "types.ts"), join(buildDir, "types.ts"));
   const mainSrc = join(root, "src-host", "main.ts");
   if (!existsSync(mainSrc)) fail("missing src-host/main.ts");
@@ -728,7 +994,7 @@ function build(root, { devUrl = null, gui = true, target = "desktop" } = {}) {
   // The iOS entry exports the library's two entry points instead of running a
   // loop: UIKit owns the loop and calls in. Everything above this line — the
   // contract, main.ts, the flattened frontend — is identical to desktop.
-  const entryTail = ios
+  const entryTail = mobile
     ? `const app = createApp<CmdsOf<typeof setup>, EvtsOf<typeof setup>>(WINDOW);\n` +
       `setup(app);\n` +
       `app.setHtml(INDEX_HTML);\n\n` +
@@ -774,6 +1040,7 @@ function build(root, { devUrl = null, gui = true, target = "desktop" } = {}) {
   );
 
   if (ios) return buildIos(root, conf, buildDir, outDir);
+  if (android) return buildAndroid(root, conf, buildDir, outDir);
 
   writeFileSync(join(buildDir, "janela.ffi.json"), JSON.stringify(ffiManifest(shimLib), null, 2) + "\n");
 
@@ -970,7 +1237,7 @@ function positionals() {
   return out;
 }
 
-const TARGETS = ["desktop", "ios"];
+const TARGETS = ["desktop", "ios", "android"];
 
 function targetOrFail() {
   const t = flag("target", "desktop");
@@ -986,14 +1253,18 @@ switch (cmd) {
     build(process.cwd(), { target: targetOrFail() });
     break;
   case "dev":
-    if (targetOrFail() === "ios") await devIos(process.cwd());
-    else await dev(process.cwd());
+    {
+      const t = targetOrFail();
+      if (t === "ios") await devIos(process.cwd());
+      else if (t === "android") await devAndroid(process.cwd());
+      else await dev(process.cwd());
+    }
     break;
   default:
     console.log(
       "usage: janela init <name> [--template vanilla|vue|react|svelte|solid]\n" +
-        "       janela build [--target desktop|ios]\n" +
-        "       janela dev   [--target desktop|ios]",
+        "       janela build [--target desktop|ios|android]\n" +
+        "       janela dev   [--target desktop|ios|android]",
     );
     process.exit(cmd ? 1 : 0);
 }
