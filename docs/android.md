@@ -11,19 +11,22 @@ emulator (API 36, WebView 133), with the framework rendering host data and a
 typed round trip returning a `number`. Sizes are in
 [frontend.md](./frontend.md).
 
-## Host logging is not wired up yet
+## Host logging
 
-Unlike iOS, where host `console.log` goes to the unified log via `os_log`,
-**Android host output goes to stdout, which Android discards.** It does not
-appear in `logcat`, and `setprop log.redirect-stdio true` is refused on modern
-API levels, so there is no workaround from the outside.
+Host `console.log` reaches `logcat`. Android discards a process's stdout, and
+`setprop log.redirect-stdio true` is refused on modern API levels, so the shell
+tees stdout and stderr through `__android_log_write` while still writing to the
+original descriptors.
 
-Practically, that means host-side `console.log` is invisible on Android today.
-Verify through the page instead (render what you want to check, then
-`adb exec-out screencap -p > shot.png`), or have the host write to app-private
-storage with `app.writeFileAsync` and read it back with
-`adb shell run-as <applicationId> cat files/<name>`. Routing host output through
-`__android_log_write` is the obvious fix and is not done yet.
+```console
+adb logcat -s janela-host:V              # what the app printed
+adb logcat -s janela:V janela-stderr:V   # shell notices and stderr
+```
+
+The tags are split deliberately. Replacing file descriptor 2 captures
+everything in the process that writes to stderr, not only the library, and the
+emulator's GL driver is extremely chatty there — so app output stays on
+`janela-host` and the rest goes to `janela-stderr`.
 
 janela apps build and run on Android. Commands, events, async and file I/O
 behave exactly as they do on desktop and iOS — the same TypeScript runtime is
@@ -88,24 +91,29 @@ Working: typed commands, `app.emit` → `janela.listen`, `commandAsync`,
 `app.sleep`, `app.defer`, `readFileAsync` / `writeFileAsync`, and every
 frontend template.
 
+`app.openFileDialog` presents the Storage Access Framework picker
+(`ACTION_OPEN_DOCUMENT`). Two things about the result are worth knowing:
+
+- **The path you get back is a copy inside the app's own storage**, under
+  `files/picked/`, named after the file the user saw. Android hands an app a
+  `content://` URI rather than a path, and a URI is not something
+  `readFileAsync` can open, so the shell copies the bytes across and returns
+  that path. The copy is a snapshot: nothing tracks the original afterwards.
+- **Filters are MIME types here**, not extensions — `"image/*"` or
+  `"text/plain"` pass through as `EXTRA_MIME_TYPES`. An extension is logged and
+  the picker is left unfiltered rather than silently dropping the filter.
+
+`directory: true` reports `ENOTSUP`: `ACTION_OPEN_DOCUMENT` has no directory
+mode. Cancelling answers `null`, exactly as on desktop.
+
 Not yet on Android — parity is planned:
 
-- **Native dialogs.** The desktop file pickers have no Android implementation
-  yet. The equivalent is the Storage Access Framework —
-  `Intent.ACTION_OPEN_DOCUMENT` — with its own Activity-result plumbing, and it
-  is blocked on the same missing library-ABI channel as iOS: see
-  [Dialogs: what remains](ios.md#dialogs-what-remains), which applies to both
-  platforms.
-
-  Two things are already decided there, and Android sharpens the second.
-  A picked document arrives as a **`content://` URI, not a filesystem path**,
-  so the shell will resolve it into app-private storage and return that path —
-  keeping `openFileDialog` something `readFileAsync` can consume and the public
-  API identical to desktop. And `saveFileDialog` needs an API decision rather
-  than an implementation: `ACTION_CREATE_DOCUMENT` hands back a URI to write
-  *into*, which the desktop "give me a path and I will write there" signature
-  cannot express. iOS reaches the same conclusion for its own reasons, so this
-  is a desktop-vs-mobile difference rather than an Android quirk.
+- **`saveFileDialog`.** `openFileDialog` works (see below); saving does not,
+  and it is an unmade API decision rather than a missing implementation.
+  `ACTION_CREATE_DOCUMENT` hands back a URI to write *into*, which the desktop
+  "give me a path and I will write there" signature cannot express. iOS reaches
+  the same conclusion for its own reasons, so this is a desktop-vs-mobile
+  difference rather than an Android quirk.
 - **Window control.** `setTitle` sets the Activity label, which shows in the
   task switcher. `setSize` and `setFullscreen` are no-ops: a phone's window is
   the screen. These report success rather than failing so that portable code

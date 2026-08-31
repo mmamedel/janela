@@ -18,6 +18,7 @@
 
 #include <dispatch/dispatch.h>
 #include <os/log.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <cstdio>
@@ -42,6 +43,8 @@ void jl_handle_invoke(const char *cmd, size_t cmd_len, const char *args,
 void jl_index_html(char **out, size_t *out_len);
 void jl_on_timer(double id);
 void jl_on_fs_done(double id, bool ok, const char *payload, size_t payload_len);
+void jl_on_dialog_done(double id, bool ok, const char *payload,
+                       size_t payload_len);
 }
 
 namespace {
@@ -305,6 +308,275 @@ void host_write_file(void *, double id, const char *path, size_t path_len,
   });
 }
 
+// ---- the document picker ---------------------------------------------------
+//
+// A picked file cannot simply be handed to readFileAsync. iOS returns a
+// security-scoped URL: readable only between startAccessingSecurityScopedResource
+// and its counterpart, and not readable at all after a relaunch without a
+// bookmark. So the shell copies the file into the app's container while the
+// scope is held and hands back that path, which readFileAsync can already
+// open. The copy is a snapshot; nothing tracks the original afterwards.
+
+std::string js_quote(const std::string &raw); // defined with the event channel
+
+namespace objc = webview::detail::objc;
+
+id ns_string(const std::string &s) {
+  return objc::msg_send<id>(objc::get_class("NSString"),
+                            objc::selector("stringWithUTF8String:"), s.c_str());
+}
+
+std::string from_ns_string(id s) {
+  if (!s) {
+    return {};
+  }
+  const char *c = objc::msg_send<const char *>(s, objc::selector("UTF8String"));
+  return c ? std::string(c) : std::string{};
+}
+
+/// Extension -> uniform type identifier.
+///
+/// UIDocumentPickerViewController wants UTIs, and turning an arbitrary
+/// extension into one needs UniformTypeIdentifiers or CoreServices. Rather
+/// than link a framework for a lookup table, this covers the common cases; an
+/// extension that is not here widens the picker to public.item and says so in
+/// the log, so a filter is never silently dropped.
+const char *uti_for_extension(const std::string &ext) {
+  static const std::map<std::string, const char *> kUtis = {
+      {"txt", "public.plain-text"},   {"text", "public.plain-text"},
+      {"md", "net.daringfireball.markdown"},
+      {"json", "public.json"},        {"csv", "public.comma-separated-values-text"},
+      {"xml", "public.xml"},          {"html", "public.html"},
+      {"htm", "public.html"},         {"pdf", "com.adobe.pdf"},
+      {"png", "public.png"},          {"jpg", "public.jpeg"},
+      {"jpeg", "public.jpeg"},        {"gif", "com.compuserve.gif"},
+      {"heic", "public.heic"},        {"mp3", "public.mp3"},
+      {"wav", "com.microsoft.waveform-audio"},
+      {"mp4", "public.mpeg-4"},       {"mov", "com.apple.quicktime-movie"},
+      {"zip", "public.zip-archive"},  {"js", "com.netscape.javascript-source"},
+      {"ts", "public.plain-text"},    {"css", "public.css"},
+      {"yaml", "public.yaml"},        {"yml", "public.yaml"},
+  };
+  auto it = kUtis.find(ext);
+  return it == kUtis.end() ? nullptr : it->second;
+}
+
+std::string lower(std::string s) {
+  for (char &c : s) {
+    if (c >= 'A' && c <= 'Z') {
+      c = (char)(c - 'A' + 'a');
+    }
+  }
+  return s;
+}
+
+/// Copy a picked file into the app's container, returning the new path.
+/// Called with the security scope already held.
+std::string copy_into_container(const std::string &src) {
+  std::string name = src;
+  size_t slash = name.find_last_of('/');
+  if (slash != std::string::npos) {
+    name = name.substr(slash + 1);
+  }
+  if (name.empty()) {
+    name = "picked";
+  }
+  std::string dest = resolve_path("picked/" + name);
+  size_t cut = dest.find_last_of('/');
+  if (cut != std::string::npos) {
+    // The pick directory may not exist yet; mkdir -p one level is enough.
+    std::string dir = dest.substr(0, cut);
+    ::mkdir(dir.c_str(), 0755);
+  }
+  std::ifstream in(src, std::ios::binary);
+  if (!in) {
+    return {};
+  }
+  std::ofstream out(dest, std::ios::binary | std::ios::trunc);
+  if (!out) {
+    return {};
+  }
+  out << in.rdbuf();
+  out.close();
+  return out ? dest : std::string{};
+}
+
+/// The dialog job the picker delegate answers. Only ever touched on the main
+/// queue, where UIKit presents and dismisses.
+double g_dialog_id = 0;
+bool g_dialog_open = false;
+
+void finish_dialog(double id, bool ok, std::string payload) {
+  // BY VALUE, and dispatched: never re-enter the library from inside a UIKit
+  // callback (upstream #263) — this lands at the top of a later turn.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    g_dialog_open = false;
+    jl_on_dialog_done(id, ok, payload.c_str(), payload.size());
+  });
+}
+
+/// Turn the picked URLs into a JSON array of container paths.
+void deliver_picked(id urls) {
+  double id_ = g_dialog_id;
+  if (!urls) {
+    finish_dialog(id_, true, "[]");
+    return;
+  }
+  auto count = objc::msg_send<unsigned long>(urls, objc::selector("count"));
+  std::string json = "[";
+  for (unsigned long i = 0; i < count; i++) {
+    id url = objc::msg_send<id>(urls, objc::selector("objectAtIndex:"), i);
+    if (!url) {
+      continue;
+    }
+    // The scope must be held across the copy, and released even on failure.
+    bool scoped = objc::msg_send<bool>(
+        url, objc::selector("startAccessingSecurityScopedResource"));
+    std::string path =
+        from_ns_string(objc::msg_send<id>(url, objc::selector("path")));
+    std::string copied = copy_into_container(path);
+    if (scoped) {
+      objc::msg_send<void>(url,
+                           objc::selector("stopAccessingSecurityScopedResource"));
+    }
+    if (copied.empty()) {
+      finish_dialog(id_, false,
+                    "EIO: could not copy the picked file into the app's "
+                    "container ('" + path + "')");
+      return;
+    }
+    if (json.size() > 1) {
+      json += ",";
+    }
+    json += js_quote(copied);
+  }
+  json += "]";
+  finish_dialog(id_, true, json);
+}
+
+/// The picker's delegate, built at runtime.
+///
+/// UIKit needs a real Objective-C class to send the delegate messages to, and
+/// this shell is plain C++, so the class is registered once with the runtime
+/// and its two methods are plain C functions. One shared instance is enough:
+/// only one picker can be up at a time, which g_dialog_open enforces.
+Class picker_delegate_class() {
+  static Class cls = nullptr;
+  if (cls) {
+    return cls;
+  }
+  cls = objc_allocateClassPair(objc::get_class("NSObject"),
+                               "JanelaPickerDelegate", 0);
+  class_addMethod(
+      cls, objc::selector("documentPicker:didPickDocumentsAtURLs:"),
+      (IMP)(+[](id, SEL, id, id urls) { deliver_picked(urls); }), "v@:@@");
+  class_addMethod(cls, objc::selector("documentPickerWasCancelled:"),
+                  (IMP)(+[](id, SEL, id) {
+                    // Cancel is not an error: an empty list becomes null.
+                    finish_dialog(g_dialog_id, true, "[]");
+                  }),
+                  "v@:@");
+  objc_registerClassPair(cls);
+  return cls;
+}
+
+id picker_delegate() {
+  static id instance = objc::msg_send<id>(
+      objc::msg_send<id>((id)picker_delegate_class(), objc::selector("alloc")),
+      objc::selector("init"));
+  return instance;
+}
+
+/// TS -> shell: present a document picker. Records the request and returns;
+/// UIKit work happens on the main queue, never inside this handler.
+void host_open_dialog(void *, double job, const char *options, size_t len) {
+  std::string opts(options, len);
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (g_dialog_open) {
+      finish_dialog(job, false,
+                    "EBUSY: a file dialog is already open on this app");
+      return;
+    }
+
+    // `directory` has no picker on iOS; report rather than quietly opening a
+    // file picker instead, which is what desktop does for unsupported options.
+    if (webview::detail::json_parse(opts, "directory", 0) == "true") {
+      finish_dialog(job, false,
+                    "ENOTSUP: picking a directory is not supported on iOS");
+      return;
+    }
+
+    // Build the UTI list from the filters' extensions. An unmapped extension
+    // widens to public.item and is logged, so a filter is never silently lost.
+    id types = objc::msg_send<id>(objc::get_class("NSMutableArray"),
+                                  objc::selector("array"));
+    bool widened = false;
+    for (size_t i = 0;; i++) {
+      std::string ext = webview::detail::json_parse(opts, "extensions", i);
+      if (ext.empty()) {
+        break;
+      }
+      const char *uti = uti_for_extension(lower(ext));
+      if (uti) {
+        objc::msg_send<void>(types, objc::selector("addObject:"),
+                             ns_string(uti));
+      } else if (!widened) {
+        widened = true;
+        std::fprintf(stderr,
+                     "[janela] no uniform type identifier is mapped for '.%s', "
+                     "so the picker is not filtered\n",
+                     ext.c_str());
+      }
+    }
+    auto count = objc::msg_send<unsigned long>(types, objc::selector("count"));
+    if (count == 0 || widened) {
+      objc::msg_send<void>(types, objc::selector("addObject:"),
+                           ns_string("public.item"));
+    }
+
+    // initWithDocumentTypes:inMode: rather than the UTType-based initialiser,
+    // which would mean linking UniformTypeIdentifiers for a lookup table.
+    id picker = objc::msg_send<id>(
+        objc::msg_send<id>(
+            objc::get_class("UIDocumentPickerViewController"),
+            objc::selector("alloc")),
+        objc::selector("initWithDocumentTypes:inMode:"), types,
+        (unsigned long)0 /* UIDocumentPickerModeImport: hands us a copy */);
+    if (!picker) {
+      finish_dialog(job, false, "EIO: could not create a document picker");
+      return;
+    }
+    objc::msg_send<void>(picker, objc::selector("setDelegate:"),
+                         picker_delegate());
+    if (webview::detail::json_parse(opts, "multiple", 0) == "true") {
+      objc::msg_send<void>(picker, objc::selector("setAllowsMultipleSelection:"),
+                           true);
+    }
+
+    id window = nullptr;
+    if (g_webview) {
+      auto w = g_webview->window();
+      if (w.ok()) {
+        window = (id)w.value();
+      }
+    }
+    id root = window ? objc::msg_send<id>(
+                           window, objc::selector("rootViewController"))
+                     : nullptr;
+    if (!root) {
+      finish_dialog(job, false,
+                    "EINVAL: the app has no root view controller to present on");
+      return;
+    }
+
+    g_dialog_id = job;
+    g_dialog_open = true;
+    objc::msg_send<void>(root,
+                         objc::selector("presentViewController:animated:completion:"),
+                         picker, true, nullptr);
+  });
+}
+
 // ---- host -> page: the event channel ---------------------------------------
 
 /// Minimal JSON string quoting, for splicing an event name into a JS call.
@@ -423,6 +695,8 @@ int main() {
       jl_set_callback("hostSettle", (void (*)(void))host_settle, nullptr) ||
       jl_set_callback("hostReadFile", (void (*)(void))host_read_file, nullptr) ||
       jl_set_callback("hostWriteFile", (void (*)(void))host_write_file,
+                      nullptr) ||
+      jl_set_callback("hostOpenDialog", (void (*)(void))host_open_dialog,
                       nullptr) ||
       jl_set_callback("janelaEmit", (void (*)(void))emit_event, nullptr)) {
     std::fprintf(stderr, "[janela] could not register a host channel\n");
