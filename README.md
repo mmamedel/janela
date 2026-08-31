@@ -1,6 +1,7 @@
 # janela — monorepo
 
-> Desktop apps in pure TypeScript, compiled to native. No Rust, no Node, no Electron.
+> Desktop and mobile apps in pure TypeScript, compiled to native. No Rust, no Node, no Electron.
+> macOS · Linux · Windows · iOS · Android — one runtime, ~400–500 KB binaries.
 > **[janela.dev docs → mmamedel.github.io/janela](https://mmamedel.github.io/janela/)** ·
 > **[npm](https://www.npmjs.com/package/janela)**
 
@@ -12,7 +13,7 @@ This is the workspace. The framework itself, its README, and its docs live in
 | [`packages/janela`](packages/janela) | the framework: CLI, TypeScript runtime, C shim over webview.h, project templates | yes — [`janela`](https://www.npmjs.com/package/janela) on npm |
 | [`examples/demo`](examples/demo) | a worked app: commands, events, async, a file reader | no |
 | [`website`](website) | the landing page, deployed to GitHub Pages | no |
-| [`docs`](docs) | design notes: scriptc findings, the async model, the Windows port | no |
+| [`docs`](docs) | design notes: the typed contract, the async model, the iOS and Android ports, scriptc findings | no |
 
 ## Working in the repo
 
@@ -25,10 +26,20 @@ pnpm build:demo          # just build it
 pnpm janela init my-app  # scaffold a new app anywhere
 ```
 
-Requirements: Node 18+ and a C++ compiler — Xcode Command Line Tools on macOS,
-`g++` + `libwebkit2gtk-4.1-dev` on Linux, and an **llvm-mingw** clang on
-Windows (MSVC cannot build scriptc's runtime; see
-[`docs/windows-notes.md`](docs/windows-notes.md)).
+Requirements: Node 24+ and a C++ toolchain for the platform you are building —
+Xcode Command Line Tools on macOS, `g++` + `libwebkit2gtk-4.1-dev` on Linux,
+and an **llvm-mingw** clang on Windows (MSVC cannot build scriptc's runtime; see
+[`docs/windows-notes.md`](docs/windows-notes.md)). Mobile builds need more:
+Xcode and `zig` for iOS ([`docs/ios.md`](docs/ios.md)), and a JDK, the Android
+SDK, the NDK and `zig` for Android ([`docs/android.md`](docs/android.md)).
+
+```bash
+pnpm janela init my-app --template vue   # vanilla | vue | react | svelte | solid
+cd my-app && npm install
+janela dev                               # desktop, with Vite HMR
+janela dev --target ios                  # simulator: build, boot, install, launch
+janela dev --target android              # emulator: same, plus logcat
+```
 
 ## Releasing
 

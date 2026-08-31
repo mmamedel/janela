@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>janela — desktop apps in pure TypeScript, compiled to native</title>
-<meta name="description" content="janela (Portuguese for window): desktop apps in pure TypeScript, compiled to native binaries. No Rust, no Node, no Electron. ~500 KB.">
+<title>janela — desktop and mobile apps in pure TypeScript, compiled to native</title>
+<meta name="description" content="janela (Portuguese for window): desktop, iOS and Android apps in pure TypeScript, compiled to native. No Rust, no Node, no Electron. Around 400-500 KB.">
 <style>
   :root {
     --bg: #0d1117;
@@ -165,6 +165,17 @@
   .card p { margin: 0; color: var(--ink-dim); font-size: 14.5px; }
   .card p code { font-size: 13px; background: var(--bg-inset); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
 
+  /* ---- platform / size tables ---- */
+  .tbl-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-raise); }
+  table.tbl { border-collapse: collapse; width: 100%; font-size: 14.5px; min-width: 520px; }
+  table.tbl th, table.tbl td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--line); }
+  table.tbl thead th { color: var(--ink-dim); font-weight: 600; font-size: 13px; letter-spacing: .02em; text-transform: uppercase; background: var(--bg-inset); }
+  table.tbl tbody tr:last-child td { border-bottom: 0; }
+  table.tbl td.plat { font-weight: 600; white-space: nowrap; }
+  table.tbl td code { font-size: 13px; background: var(--bg-inset); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+  table.tbl td.num { font-family: ui-monospace, Menlo, monospace; white-space: nowrap; }
+  .tbl-note { color: var(--ink-dim); font-size: 13.5px; margin: 12px 0 0; }
+
   /* ---- quick start ---- */
   .qs { border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-inset); padding: 4px 0; }
   .qs pre { font-size: 14.5px; }
@@ -195,6 +206,7 @@
     </a>
     <nav>
       <a class="anchor" href="#how">How it works</a>
+      <a class="anchor" href="#platforms">Platforms</a>
       <a class="anchor" href="#code">Code</a>
       <a class="anchor" href="#features">Features</a>
       <a href="https://github.com/mmamedel/janela">GitHub</a>
@@ -205,9 +217,10 @@
   <div class="hero">
     <h1>j<span class="a">a</span>nela</h1>
     <p class="etym">/ʒaˈnɛlɐ/ — Portuguese for <em>window</em></p>
-    <p class="tagline">Desktop apps in pure TypeScript, compiled to native.</p>
+    <p class="tagline">Desktop and mobile apps in pure TypeScript, compiled to native.</p>
     <p class="subtag">No Rust. No Node. No Electron. Your backend is TypeScript compiled to a real
-      native binary; your frontend runs in the OS webview. <strong>Binaries come out around 500&nbsp;KB.</strong></p>
+      native binary; your frontend runs in the OS webview. macOS, Linux, Windows, iOS and Android —
+      <strong>one runtime, and binaries around 400–500&nbsp;KB.</strong></p>
     <div class="install"><span class="p">$</span> npm install -g janela</div>
     <div class="cta">
       <a class="btn primary" href="https://github.com/mmamedel/janela">
@@ -229,9 +242,9 @@
       <div class="pipe-arrow">→</div>
       <div class="pipe-step"><b>scriptc</b><small>TS → native compiler</small></div>
       <div class="pipe-arrow">→</div>
-      <div class="pipe-step"><b>native binary</b><small>~500 KB, no runtime</small></div>
+      <div class="pipe-step"><b>native binary</b><small>no runtime shipped</small></div>
       <div class="pipe-arrow">+</div>
-      <div class="pipe-step"><b>OS webview</b><small>WKWebView / WebKitGTK</small></div>
+      <div class="pipe-step"><b>OS webview</b><small>five platforms, one API</small></div>
     </div>
     <p class="pipe-note">The only JavaScript engine in the room is the one already inside the system webview —
       <b>no V8, no Node, no bundled Chromium</b>.</p>
@@ -239,6 +252,30 @@
 </div>
 
 <div class="wrap">
+  <section id="platforms">
+    <h2>Five targets, one runtime</h2>
+    <p class="lede">The same <code>main.ts</code>, the same typed contract and the same frontend build
+      for every platform. Only the shell underneath differs — each one drives the webview the OS
+      already ships.</p>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead>
+          <tr><th>Platform</th><th>Webview</th><th>Build</th><th>Output</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="plat">macOS</td><td>WKWebView</td><td><code>janela build</code></td><td>binary + <code>.app</code></td></tr>
+          <tr><td class="plat">Linux</td><td>WebKitGTK</td><td><code>janela build</code></td><td>binary</td></tr>
+          <tr><td class="plat">Windows</td><td>WebView2</td><td><code>janela build</code></td><td><code>.exe</code> (GUI subsystem)</td></tr>
+          <tr><td class="plat">iOS</td><td>UIKit + WKWebView</td><td><code>janela build --target ios</code></td><td>simulator <code>.app</code></td></tr>
+          <tr><td class="plat">Android</td><td><code>android.webkit.WebView</code></td><td><code>janela build --target android</code></td><td><code>.apk</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="tbl-note">Commands, the typed contract, events, async commands and file I/O behave the
+      same on all five — the shell owns the clock and the file queue on each. Native file dialogs and
+      runtime window control are desktop-only for now; on mobile they report clearly when called.</p>
+  </section>
+
   <section id="code">
     <h2>One language, both sides of the window</h2>
     <p class="lede">Register commands in TypeScript that compiles to native code. Call them from the page
@@ -290,8 +327,8 @@
     <div class="cards">
       <div class="card">
         <h3><span class="mini" aria-hidden="true"><i></i><i></i><i></i><i></i></span>Tiny binaries</h3>
-        <p>Around 500&nbsp;KB per app. No bundled browser, no bundled runtime — the window is the
-          webview your OS already ships.</p>
+        <p>Roughly 380–520&nbsp;KB per app, desktop or mobile. No bundled browser, no bundled
+          runtime — the window is the webview your OS already ships. Sizes below.</p>
       </div>
       <div class="card">
         <h3><span class="mini" aria-hidden="true"><i></i><i></i><i></i><i></i></span>Pure TypeScript, front and back</h3>
@@ -306,14 +343,16 @@
           with no code generation.</p>
       </div>
       <div class="card">
-        <h3><span class="mini" aria-hidden="true"><i></i><i></i><i></i><i></i></span>No plugin layer for fs &amp; friends</h3>
-        <p>The backend speaks a <code>node:fs</code> subset out of the box — reading a file or calling
-          an API is just code in a command handler.</p>
+        <h3><span class="mini" aria-hidden="true"><i></i><i></i><i></i><i></i></span>Non-blocking file I/O</h3>
+        <p><code>app.readFileAsync</code> does the work off the UI thread and drains under a time
+          budget, so a 100&nbsp;MB read holds page round-trips at a 1&nbsp;ms p99 instead of freezing
+          the window.</p>
       </div>
       <div class="card">
         <h3><span class="mini" aria-hidden="true"><i></i><i></i><i></i><i></i></span>Real app bundles</h3>
-        <p><code>janela build</code> produces the native binary, and on macOS wraps it into an
-          ad-hoc-signed <code>.app</code> you can double-click.</p>
+        <p><code>janela build</code> produces the native binary — plus an ad-hoc-signed
+          <code>.app</code> on macOS, a GUI-subsystem <code>.exe</code> on Windows, and an
+          <code>.apk</code> or simulator <code>.app</code> for mobile.</p>
       </div>
       <div class="card">
         <h3><span class="mini" aria-hidden="true"><i></i><i></i><i></i><i></i></span>MIT licensed</h3>
@@ -325,25 +364,48 @@
 
   <section id="quickstart">
     <h2>Quick start</h2>
-    <p class="lede">Node 18+ and a C++ compiler (Xcode Command Line Tools on macOS;
-      <code>g++</code> + <code>libwebkit2gtk-4.1-dev</code> on Linux).</p>
+    <p class="lede">Node 24+ and a C++ toolchain for the platform you are building:
+      Xcode Command Line Tools on macOS, <code>g++</code> + <code>libwebkit2gtk-4.1-dev</code> on
+      Linux, an <strong>llvm-mingw</strong> clang on Windows. iOS additionally needs Xcode and
+      <code>zig</code>; Android needs a JDK, the Android SDK, the NDK and <code>zig</code>.</p>
     <div class="qs">
       <pre><code><span class="c">$</span> npm install -g janela
-<span class="c">$</span> janela init my-app
-<span class="c">$</span> cd my-app
-<span class="c">$</span> janela dev      <span class="c"># build + run with logs in the terminal</span>
-<span class="c">$</span> janela build    <span class="c"># .janela/out/my-app  (+ my-app.app on macOS)</span></code></pre>
+<span class="c">$</span> janela init my-app <span class="c">--template vue   # or react | svelte | solid | vanilla</span>
+<span class="c">$</span> cd my-app &amp;&amp; npm install
+<span class="c">$</span> janela dev                        <span class="c"># Vite dev server + HMR, in a native window</span>
+<span class="c">$</span> janela build                      <span class="c"># .janela/out/my-app  (+ .app on macOS)</span>
+<span class="c">$</span> janela build --target ios         <span class="c"># simulator .app</span>
+<span class="c">$</span> janela build --target android     <span class="c"># .apk</span></code></pre>
     </div>
+    <p class="lede" style="margin:34px 0 14px">What comes out, measured on an Apple Silicon Mac:</p>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>Target</th><th>Vanilla</th><th>With Vue</th></tr></thead>
+        <tbody>
+          <tr><td class="plat">Desktop (macOS arm64)</td><td class="num">≈470 KB</td><td class="num">≈519 KB</td></tr>
+          <tr><td class="plat">iOS (simulator)</td><td class="num">≈380 KB</td><td class="num">≈430 KB</td></tr>
+          <tr><td class="plat">Android (APK)</td><td class="num">≈465 KB</td><td class="num">≈485 KB</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="tbl-note">Desktop figures measured directly; mobile figures from the reference
+      simulator and emulator builds. A React frontend adds roughly 130&nbsp;KB over Vue.</p>
   </section>
 
   <section id="status">
     <h2>Where it stands</h2>
     <div class="status">
-      <b>janela is an early proof of concept.</b> Today it runs on macOS (Apple Silicon) and
-      Linux (WebKitGTK). Not there yet: Windows, async commands (the run loop is single-threaded),
-      native dialogs, tray and menus, multi-window, and icons/installers/notarization.
-      The design notes behind it are in
-      <a href="https://github.com/mmamedel/janela/blob/main/docs/findings.md">docs/findings.md</a>.
+      <b>janela is young and pre-1.0.</b> Desktop is the most exercised path; iOS and Android are
+      new, and iOS is simulator-only so far. Async commands interleave rather than run in parallel —
+      host code is single-threaded by design, so a CPU-bound handler still needs slicing.
+      Not there yet: native dialogs and window control on mobile, device builds and code signing,
+      icons, installers and notarization, tray icons and menus, multi-window, and an async HTTP
+      client. Directory picking is unsupported on Windows.
+      The design notes and the compiler findings behind all of it are in
+      <a href="https://github.com/mmamedel/janela/blob/main/docs/findings.md">docs/findings.md</a>,
+      with per-platform notes in
+      <a href="https://github.com/mmamedel/janela/blob/main/docs/ios.md">docs/ios.md</a> and
+      <a href="https://github.com/mmamedel/janela/blob/main/docs/android.md">docs/android.md</a>.
     </div>
   </section>
 
