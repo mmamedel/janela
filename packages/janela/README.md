@@ -2,11 +2,26 @@
 
 > *janela* — Portuguese for **window**.
 
-Desktop apps in pure TypeScript, compiled to native. No Rust, no Node, no
-Electron. The backend is TypeScript compiled to a native binary by
+Desktop and mobile apps in pure TypeScript, compiled to native. No Rust, no
+Node, no Electron. The backend is TypeScript compiled to a native binary by
 [scriptc](https://scriptc.dev); the window is the OS webview via
-[webview/webview](https://github.com/webview/webview) (WKWebView on macOS,
-WebKitGTK on Linux). Binaries come out ~500 KB.
+[webview/webview](https://github.com/webview/webview). Binaries come out
+around 400–500 KB, with no bundled browser and no bundled runtime.
+
+Five targets, one runtime — the same `main.ts`, the same typed contract and the
+same frontend build for each:
+
+| Platform | Webview | Build | Output |
+|---|---|---|---|
+| macOS | WKWebView | `janela build` | binary + `.app` |
+| Linux | WebKitGTK | `janela build` | binary |
+| Windows | WebView2 | `janela build` | `.exe` (GUI subsystem) |
+| iOS | UIKit + WKWebView | `janela build --target ios` | simulator `.app` |
+| Android | `android.webkit.WebView` | `janela build --target android` | `.apk` |
+
+Commands, the typed contract, events, async commands and file I/O behave the
+same on all five. Native file dialogs and runtime window control are
+desktop-only for now; on mobile they report clearly when called.
 
 ## Quick start
 
@@ -31,8 +46,10 @@ framework, `janela dev` runs your Vite dev server and points the window at it,
 and `janela build` flattens the production bundle into the binary — see
 [docs/frontend.md](../../docs/frontend.md).
 
-Requirements: Node 18+, a C++ compiler (Xcode CLT on macOS; g++ +
-`libwebkit2gtk-4.1-dev` on Linux; see [Windows](#windows) below). A worked
+Requirements: Node 24+ and a C++ toolchain for the platform you are building —
+Xcode CLT on macOS; `g++` + `libwebkit2gtk-4.1-dev` on Linux; an llvm-mingw
+clang on Windows (see [Windows](#windows) below). iOS additionally needs Xcode
+and `zig`; Android needs a JDK, the Android SDK, the NDK and `zig`. A worked
 example lives in [`examples/demo`](examples/demo) — commands, events, and a
 file reader.
 
@@ -552,7 +569,8 @@ janela build --target ios     # -> .janela/out-ios/<name>.app  (simulator)
 janela dev   --target ios     # build, boot a simulator, install, launch
 ```
 
-It is **not part of a release yet** and is simulator-only. Commands, the typed
+It is **simulator-only** so far — device builds and code signing are not
+wired up yet. Commands, the typed
 contract, events, Vite frontends, async commands (`commandAsync`, `defer`,
 `sleep`) and file I/O all work the same as on desktop — the shell owns the
 clock and the file queue on both. File dialogs are not on iOS yet and report
@@ -581,13 +599,17 @@ whose callbacks native code cannot receive on its own.
 
 ## Status
 
-Early proof of concept, on macOS (arm64), Linux (WebKitGTK) and Windows
-(WebView2), with iOS on a branch (above). The design notes and scriptc
-findings behind it are in
-[docs/findings.md](../../docs/findings.md). Not yet: async commands that run in
-parallel (host code is single-threaded; `commandAsync` interleaves instead),
-tray icons and menus, multi-window, directory picking on Windows,
-`app.center()`, and icons/installers/notarization.
+Young and pre-1.0. Desktop (macOS arm64, Linux/WebKitGTK, Windows/WebView2) is
+the most exercised path; iOS and Android are newer, and iOS is simulator-only.
+The design notes and scriptc findings behind it are in
+[docs/findings.md](../../docs/findings.md), with per-platform notes in
+[docs/ios.md](../../docs/ios.md) and [docs/android.md](../../docs/android.md).
+
+Not yet: native dialogs and window control on mobile; device builds and code
+signing; icons, installers and notarization; async commands that run in
+parallel (host code is single-threaded, so `commandAsync` interleaves and a
+CPU-bound handler still needs slicing); an async HTTP client; tray icons and
+menus; multi-window; directory picking on Windows; and `app.center()`.
 
 ## Releasing
 

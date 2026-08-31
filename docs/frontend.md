@@ -122,15 +122,16 @@ compiled into the binary, so changing it means re-running `janela dev`.
 
 ## Size
 
-Measured on macOS arm64, stripped, for the scaffolded templates:
+Measured on macOS arm64, stripped, for the scaffolded templates (vanilla and vue
+re-measured at 0.11.0; the rest are from the same run that established the shape):
 
 | template | binary |
 |---|---|
-| vanilla | 448 KB |
-| solid | 448 KB |
-| svelte | 481 KB |
-| vue | 514 KB |
-| react | 646 KB |
+| vanilla | ~470 KB |
+| solid | ~470 KB |
+| svelte | ~502 KB |
+| vue | ~519 KB |
+| react | ~648 KB |
 
 The frontend is embedded as a string, so its bundle size lands in the binary
 roughly 1:1 — though small additions can be free, since macOS arm64 segments
