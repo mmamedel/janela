@@ -1112,8 +1112,43 @@ function copyTemplate(from, to, name) {
   }
 }
 
+// A project name becomes an npm package name, a binary name, a bundle
+// identifier segment and a window title, so it is deliberately narrow:
+// start with a letter, then letters, digits, '-' or '_'. Underscores are
+// allowed because people type them and every downstream use accepts them —
+// Android application ids in particular *prefer* them, since a Java package
+// segment cannot contain a hyphen (see androidApplicationId).
+const NAME_RE = /^[a-z][a-z0-9_-]*$/;
+
+// Best-effort repair of a rejected name, so the error can suggest something
+// that would have worked instead of only stating the rule.
+function suggestName(raw) {
+  const s = String(raw)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^[^a-z]+/, "")
+    .replace(/-{2,}/g, "-")
+    .replace(/[-_]+$/, "");
+  return NAME_RE.test(s) ? s : "";
+}
+
 function init(name, template) {
-  if (!name || !/^[a-z][a-z0-9-]*$/.test(name)) fail("usage: janela init <name> [--template <t>] (lowercase, digits, dashes)");
+  if (!name) {
+    fail(
+      "no project name given.\n" +
+        "  usage: janela init <name> [--template vanilla|vue|react|svelte|solid]",
+    );
+  }
+  if (!NAME_RE.test(name)) {
+    const hint = suggestName(name);
+    fail(
+      `'${name}' is not a usable project name.\n` +
+        "  A name must start with a lowercase letter, then contain only\n" +
+        "  lowercase letters, digits, '-' or '_'.\n" +
+        (hint ? `  Try: janela init ${hint}\n` : "") +
+        "  Nothing was created.",
+    );
+  }
   if (!TEMPLATES.includes(template)) fail(`unknown template '${template}' (${TEMPLATES.join(", ")})`);
   const dir = resolve(process.cwd(), name);
   if (existsSync(dir)) fail(`${name}/ already exists`);
@@ -1245,15 +1280,50 @@ function targetOrFail() {
   return t;
 }
 
+// A mistyped flag used to be ignored in silence: `--targt ios` fell back to
+// the desktop default, built the wrong thing and exited 0. Anything a caller
+// did not spell exactly is now an error, because a build that quietly ignores
+// what it was asked for is indistinguishable from success.
+function assertKnownFlags(allowed) {
+  const known = new Set(allowed);
+  for (const a of argv.slice(1)) {
+    if (!a.startsWith("--")) continue;
+    const nm = a.slice(2).split("=")[0];
+    if (!known.has(nm)) {
+      const near = allowed.filter((k) => k.startsWith(nm.slice(0, 3)) || nm.startsWith(k.slice(0, 3)));
+      fail(
+        `unknown option '--${nm}' for 'janela ${cmd}'.\n` +
+          `  Known options: ${allowed.map((k) => `--${k}`).join(", ") || "(none)"}` +
+          (near.length ? `\n  Did you mean --${near[0]}?` : ""),
+      );
+    }
+  }
+}
+
+// Extra positionals were silently dropped, so `janela init a b` created 'a'
+// and said nothing about 'b'.
+function assertPositionals(max) {
+  const p = positionals();
+  if (p.length > max) {
+    fail(`unexpected extra argument '${p[max]}' for 'janela ${cmd}'.\n  Nothing was created.`);
+  }
+}
+
 switch (cmd) {
   case "init":
+    assertKnownFlags(["template"]);
+    assertPositionals(1);
     init(positionals()[0], flag("template", "vanilla"));
     break;
   case "build":
+    assertKnownFlags(["target"]);
+    assertPositionals(0);
     build(process.cwd(), { target: targetOrFail() });
     break;
   case "dev":
     {
+      assertKnownFlags(["target"]);
+      assertPositionals(0);
       const t = targetOrFail();
       if (t === "ios") await devIos(process.cwd());
       else if (t === "android") await devAndroid(process.cwd());
