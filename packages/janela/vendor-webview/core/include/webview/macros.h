@@ -89,6 +89,10 @@
 #if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
 #define WEBVIEW_PLATFORM_DARWIN_UIKIT
 #endif
+#elif defined(__ANDROID__)
+// Checked before __unix__: Android's toolchain defines that too, but the
+// platform has no GTK and its web view is a Java API rather than a C one.
+#define WEBVIEW_PLATFORM_ANDROID
 #elif defined(__unix__)
 #define WEBVIEW_PLATFORM_LINUX
 #elif defined(_WIN32)
@@ -98,11 +102,14 @@
 #endif
 
 #if !defined(WEBVIEW_GTK) && !defined(WEBVIEW_COCOA) &&                        \
-    !defined(WEBVIEW_UIKIT) && !defined(WEBVIEW_EDGE)
+    !defined(WEBVIEW_UIKIT) && !defined(WEBVIEW_ANDROID) &&                    \
+    !defined(WEBVIEW_EDGE)
 #if defined(WEBVIEW_PLATFORM_DARWIN_UIKIT)
 #define WEBVIEW_UIKIT
 #elif defined(WEBVIEW_PLATFORM_DARWIN)
 #define WEBVIEW_COCOA
+#elif defined(WEBVIEW_PLATFORM_ANDROID)
+#define WEBVIEW_ANDROID
 #elif defined(WEBVIEW_PLATFORM_LINUX)
 #define WEBVIEW_GTK
 #elif defined(WEBVIEW_PLATFORM_WINDOWS)
