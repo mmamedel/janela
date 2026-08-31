@@ -1,8 +1,9 @@
 # iOS
 
-> **Status: branch only, not released.** This works end to end in the iOS
-> simulator, but it is not part of a published janela version yet. Device
-> builds, signing and the App Store are not covered.
+> **Status: released since janela 0.10.0, simulator-verified.** Everything on
+> this page has been run end to end in the iOS simulator. **Device builds are
+> untested** — they need a signing identity and a provisioning profile, which
+> janela does not set up for you — and the App Store is not covered at all.
 
 A janela app builds and runs on iOS from the same source as its desktop
 build — the same `src-host/main.ts`, the same typed contract, the same
@@ -134,8 +135,8 @@ An absolute path is used as given, which on a device means somewhere inside
 the app container.
 
 Also not covered yet: real devices (needs a signing identity and a
-provisioning profile), the App Store, and Android (needs the NDK and a JNI
-shell).
+provisioning profile) and the App Store. Android ships too — see
+[android.md](android.md).
 
 ## Logging
 
