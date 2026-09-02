@@ -70,6 +70,14 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Fast gates first: these need no toolchain and fail in seconds, so a
+      # broken contract or a bad CLI argument does not wait on a full build.
+      - name: Unit tests
+        run: pnpm --filter janela test:unit
+
+      - name: Typed-contract compile-fail suite
+        run: pnpm --filter janela test:types
+
       # The desktop lane supplies its own Xvfb display when DISPLAY is unset,
       # so this needs no wrapper.
       - name: End-to-end suite
