@@ -3,3 +3,6 @@ node_modules/
 node_modules
 *.log
 .DS_Store
+
+# end-to-end fixture projects (generated at run time)
+.janela-tests/
