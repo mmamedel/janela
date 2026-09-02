@@ -71,24 +71,34 @@ export function prepareProject({ template = "vanilla", name, page = "battery.js"
   const args = ["init", name];
   if (template !== "vanilla") args.push("--template", template);
   const made = cli(args);
-  if (made.status !== 0) {
-    throw new Error(`janela init failed (${made.status}):\n${made.stdout}\n${made.stderr}`);
+  if (made.error || made.status !== 0) {
+    throw new Error(
+      `janela init failed (${made.error?.message ?? made.status}):\n${made.stdout ?? ""}\n${made.stderr ?? ""}`,
+    );
   }
   if (!existsSync(dir)) throw new Error(`janela init reported success but ${dir} is missing`);
 
   // The framework templates need their own dependencies.
   if (existsSync(join(dir, "package.json")) && template !== "vanilla") {
-    // `npm` is a .cmd shim on Windows, and Node no longer resolves those from
-    // spawnSync without a shell — naming it explicitly keeps this shell-free.
-    const npmBin = process.platform === "win32" ? "npm.cmd" : "npm";
-    const npm = spawnSync(npmBin, ["install", "--silent", "--no-audit", "--no-fund"], {
+    // `npm` is a .cmd shim on Windows, and since the CVE-2024-27980 fix Node
+    // refuses to spawn .cmd/.bat without a shell — it fails with EINVAL before
+    // npm ever starts. The arguments are fixed literals, so the shell adds no
+    // injection surface.
+    const npm = spawnSync("npm", ["install", "--no-audit", "--no-fund"], {
       cwd: dir,
       encoding: "utf8",
+      shell: process.platform === "win32",
       timeout: 15 * 60_000,
       maxBuffer: 64 * 1024 * 1024,
     });
-    if (npm.status !== 0) {
-      throw new Error(`${npmBin} install failed in ${dir}:\n${npm.stdout}\n${npm.stderr}`);
+    // `error` matters as much as `status`: a spawn that never ran leaves
+    // status null and both streams undefined, which is how the Windows lane
+    // first reported "npm install failed: undefined undefined".
+    if (npm.error || npm.status !== 0) {
+      throw new Error(
+        `npm install failed in ${dir} (${npm.error?.message ?? `exit ${npm.status}`}):\n` +
+          `${npm.stdout ?? ""}\n${npm.stderr ?? ""}`,
+      );
     }
   }
 
@@ -134,8 +144,11 @@ export function build(dir, target) {
   const args = ["build"];
   if (target) args.push("--target", target);
   const out = cli(args, { cwd: dir });
-  if (out.status !== 0) {
-    throw new Error(`janela build${target ? ` --target ${target}` : ""} failed:\n${out.stdout}\n${out.stderr}`);
+  if (out.error || out.status !== 0) {
+    throw new Error(
+      `janela build${target ? ` --target ${target}` : ""} failed ` +
+        `(${out.error?.message ?? `exit ${out.status}`}):\n${out.stdout ?? ""}\n${out.stderr ?? ""}`,
+    );
   }
   return out.stdout;
 }
