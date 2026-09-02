@@ -9,7 +9,9 @@
   "scripts": {
     "dev": "pnpm --filter demo dev",
     "build:demo": "pnpm --filter demo build",
-    "janela": "node packages/janela/bin/janela.mjs"
+    "janela": "node packages/janela/bin/janela.mjs",
+    "test:e2e": "node --test tests/e2e/e2e.test.mjs",
+    "test": "pnpm test:e2e"
   },
   "license": "MIT",
   "repository": {

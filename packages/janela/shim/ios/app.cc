@@ -277,6 +277,16 @@ void finish_fs(double id, bool ok, std::string payload) {
 void host_read_file(void *, double id, const char *path, size_t path_len) {
   std::string p = resolve_path(std::string(path, path_len));
   dispatch_async(fs_queue(), ^{
+    // A directory opens cleanly as an ifstream on Apple platforms and then
+    // reads as empty, so without this check readFileAsync would report
+    // success with no content. Desktop already answers EISDIR here; the
+    // message is kept identical so app code can treat the platforms alike.
+    struct stat st;
+    if (::stat(p.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+      finish_fs(id, false,
+                "EISDIR: illegal operation on a directory, read '" + p + "'");
+      return;
+    }
     std::ifstream in(p, std::ios::binary);
     if (!in) {
       finish_fs(id, false, "ENOENT: no such file or directory, open '" + p + "'");
