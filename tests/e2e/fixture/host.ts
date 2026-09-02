@@ -44,7 +44,7 @@ export type AppCommands = {
   /** Reads a large file and reports how long the whole operation took. */
   bigRead: (args: { path: string }) => { ok: boolean; ms: number; length: number };
   /** Starts a long read and a long timer, then returns immediately. */
-  startWork: (args: { path: string }) => null;
+  startWork: (args: { path: string; runId: string }) => null;
 };
 
 export type AppEvents = {
@@ -163,11 +163,12 @@ export function setup(app: App): void {
   // For the clean-exit scenario: leave real work in flight, then let the page
   // quit immediately. Neither continuation should keep the process alive.
   app.command("startWork", (args) => {
+    const tag = " " + args.runId;
     app.readFileAsync(args.path, (_err, _text) => {
-      console.log("JANELA_TEST_LATE read-finished");
+      console.log("JANELA_TEST_LATE read-finished" + tag);
     });
     app.sleep(5000, () => {
-      console.log("JANELA_TEST_LATE timer-finished");
+      console.log("JANELA_TEST_LATE timer-finished" + tag);
     });
     return null;
   });

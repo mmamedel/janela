@@ -21,7 +21,9 @@
 
   function report(name, pass, value) {
     seen.push(name);
-    var line = "JANELA_TEST " + JSON.stringify({ name: name, pass: !!pass, value: value });
+    var line =
+      "JANELA_TEST " +
+      JSON.stringify({ run: cfg.runId, name: name, pass: !!pass, value: value });
     return window.janela.invoke("log", line);
   }
 
@@ -40,7 +42,10 @@
   window.addEventListener("load", function () {
     run().then(
       function () {
-        return window.janela.invoke("log", "JANELA_TEST_DONE " + JSON.stringify(seen));
+        return window.janela.invoke(
+          "log",
+          "JANELA_TEST_DONE " + JSON.stringify({ run: cfg.runId, seen: seen }),
+        );
       },
       function (e) {
         // Never let a throw end the run silently: name the failure, then still
@@ -48,7 +53,10 @@
         return window.janela
           .invoke("log", "JANELA_TEST_ERROR " + JSON.stringify(String(e && e.stack ? e.stack : e)))
           .then(function () {
-            return window.janela.invoke("log", "JANELA_TEST_DONE " + JSON.stringify(seen));
+            return window.janela.invoke(
+              "log",
+              "JANELA_TEST_DONE " + JSON.stringify({ run: cfg.runId, seen: seen }),
+            );
           });
       },
     ).then(function () {
@@ -154,23 +162,52 @@
       got: String(readBack.text).slice(0, 40),
     });
 
-    // 11/12. Errors arrive as values, not throws.
+    // 11/12. Errors arrive as values, not throws — and they carry the node
+    // code, identically on all three platforms. Asserting merely "some error"
+    // is not enough: a mutation that mapped a directory read to EIO passed a
+    // looser version of this check, which is how the harness itself was
+    // caught being weaker than its own assertion name claimed.
     var missing = await window.janela.invoke("fsRead", { path: cfg.missingFile });
     await report(
       "fs-missing-error",
-      missing.ok === false && typeof missing.error === "string" && missing.error.length > 0,
+      missing.ok === false &&
+        typeof missing.error === "string" &&
+        missing.error.indexOf("ENOENT: no such file or directory") === 0 &&
+        missing.error.indexOf(cfg.missingFile) > 0,
       missing.error,
     );
 
     var dir = await window.janela.invoke("fsRead", { path: cfg.scratchDir });
     await report(
       "fs-directory-error",
-      dir.ok === false && typeof dir.error === "string" && dir.error.length > 0,
-      dir.error,
+      dir.ok === false &&
+        typeof dir.error === "string" &&
+        dir.error.indexOf("EISDIR: illegal operation on a directory") === 0 &&
+        dir.length === 0 &&
+        !dir.text,
+      { ok: dir.ok, error: dir.error, length: dir.length, text: String(dir.text).slice(0, 30) },
     );
 
     // 13/14. A large read must not stall the window: keep pinging throughout
-    // and bound the tail, rather than pinning an exact figure.
+    // and bound the tail, rather than pinning an exact figure. The app writes
+    // the file itself so the assertion needs nothing staged from the host —
+    // a phone cannot see the developer's filesystem.
+    var big1mb = new Array(1024 * 1024 + 1).join("x");
+    var bigParts = [];
+    for (var bi = 0; bi < Math.max(1, Math.floor(cfg.bigBytes / (1024 * 1024))); bi++) {
+      bigParts.push(big1mb);
+    }
+    var bigPayload = bigParts.join("");
+    var bigWrote = await window.janela.invoke("fsWrite", {
+      path: cfg.bigFile,
+      data: bigPayload,
+    });
+    await report("large-file-staged", bigWrote.ok === true, {
+      ok: bigWrote.ok,
+      error: bigWrote.error,
+      bytes: bigPayload.length,
+    });
+
     var lat = [];
     var reading = window.janela.invoke("bigRead", { path: cfg.bigFile });
     var stop = false;
@@ -184,9 +221,9 @@
       lat.push(Date.now() - s);
     }
     var big = await reading;
-    await report("large-read-correct", big.ok === true && big.length === cfg.bigFileLength, {
+    await report("large-read-correct", big.ok === true && big.length === bigPayload.length, {
       length: big.length,
-      expected: cfg.bigFileLength,
+      expected: bigPayload.length,
       readMs: big.ms,
     });
 

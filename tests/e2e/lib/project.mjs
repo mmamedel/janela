@@ -33,20 +33,6 @@ export function cli(args, opts = {}) {
   });
 }
 
-/**
- * Generate the large file the drain assertions read. Written at run time and
- * never committed; size is configurable because CI machines are slower than
- * a laptop.
- */
-export function makeBigFile(path, megabytes) {
-  const chunk = "x".repeat(1024 * 1024);
-  const parts = [];
-  for (let i = 0; i < megabytes; i++) parts.push(chunk);
-  const data = parts.join("");
-  writeFileSync(path, data, "utf8");
-  return data.length;
-}
-
 function patchIndexHtml(projectDir, pageScript, config) {
   const file = join(projectDir, "index.html");
   const before = readFileSync(file, "utf8");
@@ -92,14 +78,17 @@ export function prepareProject({ template = "vanilla", name, page = "battery.js"
 
   // The framework templates need their own dependencies.
   if (existsSync(join(dir, "package.json")) && template !== "vanilla") {
-    const npm = spawnSync("npm", ["install", "--silent", "--no-audit", "--no-fund"], {
+    // `npm` is a .cmd shim on Windows, and Node no longer resolves those from
+    // spawnSync without a shell — naming it explicitly keeps this shell-free.
+    const npmBin = process.platform === "win32" ? "npm.cmd" : "npm";
+    const npm = spawnSync(npmBin, ["install", "--silent", "--no-audit", "--no-fund"], {
       cwd: dir,
       encoding: "utf8",
       timeout: 15 * 60_000,
       maxBuffer: 64 * 1024 * 1024,
     });
     if (npm.status !== 0) {
-      throw new Error(`npm install failed in ${dir}:\n${npm.stdout}\n${npm.stderr}`);
+      throw new Error(`${npmBin} install failed in ${dir}:\n${npm.stdout}\n${npm.stderr}`);
     }
   }
 
@@ -111,16 +100,26 @@ export function prepareProject({ template = "vanilla", name, page = "battery.js"
     throw new Error("fixture host did not land");
   }
 
+  // Paths are RELATIVE on purpose. Desktop runs with the project as its cwd;
+  // the mobile shells map a relative path into the app's own container. An
+  // absolute host path exists on neither phone, which is exactly how this
+  // fixture first failed on Android.
   const megabytes = bigMb ?? Number(process.env.JANELA_TEST_BIG_MB ?? 32);
-  const bigFile = join(dir, "big.txt");
-  const bigFileLength = makeBigFile(bigFile, megabytes);
+  // Every reported line carries this, and the parser accepts nothing else:
+  // the device lanes read a log over a time window and would otherwise parse
+  // a previous run's results.
+  const runId = `${name}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
   const config = {
-    scratchFile: join(dir, "roundtrip.txt"),
-    missingFile: join(dir, "definitely", "not", "here.txt"),
-    scratchDir: dir,
-    bigFile,
-    bigFileLength,
+    runId,
+    scratchFile: "roundtrip.txt",
+    missingFile: "definitely/not/here.txt",
+    scratchDir: ".",
+    bigFile: "big.txt",
+    // The app writes this file itself before reading it, so the large-read
+    // assertions need nothing staged from outside and behave identically on
+    // every lane.
+    bigBytes: megabytes * 1024 * 1024,
     framework: template !== "vanilla",
     asyncMs: Number(process.env.JANELA_TEST_ASYNC_MS ?? 300),
     syncLatencyMaxMs: Number(process.env.JANELA_TEST_SYNC_MAX_MS ?? 150),

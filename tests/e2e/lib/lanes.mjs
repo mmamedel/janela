@@ -16,6 +16,18 @@ import { build } from "./project.mjs";
 
 const BIG_BUFFER = { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 };
 
+/**
+ * The device lanes read a log over a time window, so they must wait for the
+ * marker belonging to THIS run. Matching a bare JANELA_TEST_DONE snapshots the
+ * log while the current run is still starting and reports the previous run's
+ * results — which this harness did until the run id was threaded through.
+ */
+function finishedRe(project) {
+  const id = project.config.runId;
+  if (!id) throw new Error("lane needs project.config.runId");
+  return new RegExp(`JANELA_TEST_(?:DONE|WORK_STARTED)[^\n]*${id}`);
+}
+
 function conf(dir) {
   return JSON.parse(readFileSync(join(dir, "janela.conf.json"), "utf8"));
 }
@@ -81,6 +93,7 @@ export const IOS = {
 
     // The app quits itself; poll the log until DONE shows up or we time out.
     const budget = Number(process.env.JANELA_TEST_RUN_TIMEOUT_MS ?? 300_000);
+    const done = finishedRe(project);
     let output = "";
     while (Date.now() - started < budget) {
       const log = spawnSync(
@@ -90,7 +103,7 @@ export const IOS = {
         BIG_BUFFER,
       );
       output = log.stdout ?? "";
-      if (/JANELA_TEST_DONE/.test(output)) break;
+      if (done.test(output)) break;
       spawnSync("sleep", ["2"]);
     }
     // The simulator app's exit code is not observable this way; the suite
@@ -131,11 +144,12 @@ export const ANDROID = {
 
     const budget = Number(process.env.JANELA_TEST_RUN_TIMEOUT_MS ?? 300_000);
     const started = Date.now();
+    const done = finishedRe(project);
     let output = "";
     while (Date.now() - started < budget) {
       const log = spawnSync(adb, ["logcat", "-d", "-s", "janela-host:V"], BIG_BUFFER);
       output = log.stdout ?? "";
-      if (/JANELA_TEST_DONE/.test(output)) break;
+      if (done.test(output)) break;
       spawnSync("sleep", ["2"]);
     }
     return { output, exitCode: 0, signal: null };

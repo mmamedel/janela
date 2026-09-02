@@ -7,7 +7,7 @@
 // treating exit 0 as a pass.
 
 const LINE = /JANELA_TEST (\{.*\})\s*$/;
-const DONE = /JANELA_TEST_DONE (\[.*\])\s*$/;
+const DONE = /JANELA_TEST_DONE (\{.*\})\s*$/;
 const ERROR = /JANELA_TEST_ERROR (".*")\s*$/;
 const LATE = /JANELA_TEST_LATE (.*)$/;
 
@@ -25,6 +25,7 @@ export const CORE_ASSERTIONS = [
   "fs-unicode",
   "fs-missing-error",
   "fs-directory-error",
+  "large-file-staged",
   "large-read-correct",
   "large-read-bounded",
 ];
@@ -32,7 +33,16 @@ export const CORE_ASSERTIONS = [
 /** Emitted only where a framework actually renders (the Vite templates). */
 export const FRAMEWORK_ASSERTION = "framework-mounted";
 
-export function parse(output) {
+/**
+ * Parse the battery's output for ONE run.
+ *
+ * `runId` is required and every accepted line must carry it. Without this the
+ * mobile lanes read the device log over a time window and will happily parse a
+ * PREVIOUS run's results — which is how this harness briefly reported a stale
+ * pass while a real regression sat in front of it.
+ */
+export function parse(output, runId) {
+  if (!runId) throw new Error("parse() requires the run id");
   const results = [];
   let done = null;
   const errors = [];
@@ -43,7 +53,8 @@ export function parse(output) {
     let m = LINE.exec(line);
     if (m) {
       try {
-        results.push(JSON.parse(m[1]));
+        const r = JSON.parse(m[1]);
+        if (r.run === runId) results.push(r);
       } catch (e) {
         errors.push(`unparseable result line: ${line}`);
       }
@@ -52,9 +63,10 @@ export function parse(output) {
     m = DONE.exec(line);
     if (m) {
       try {
-        done = JSON.parse(m[1]);
+        const d = JSON.parse(m[1]);
+        if (d.run === runId) done = d.seen ?? [];
       } catch {
-        done = [];
+        /* ignore a malformed DONE line; the missing-assertion check covers it */
       }
       continue;
     }
@@ -64,7 +76,7 @@ export function parse(output) {
       continue;
     }
     m = LATE.exec(line);
-    if (m) late.push(m[1].trim());
+    if (m && m[1].includes(runId)) late.push(m[1].replace(runId, "").trim());
   }
 
   return { results, done, errors, late };

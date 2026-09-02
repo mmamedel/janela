@@ -9,9 +9,9 @@
   var cfg = window.__JANELA_TEST_CONFIG || {};
   window.addEventListener("load", function () {
     window.janela
-      .invoke("startWork", { path: cfg.bigFile })
+      .invoke("startWork", { path: cfg.bigFile, runId: cfg.runId })
       .then(function () {
-        return window.janela.invoke("log", "JANELA_TEST_WORK_STARTED");
+        return window.janela.invoke("log", "JANELA_TEST_WORK_STARTED " + cfg.runId);
       })
       .then(function () {
         return window.janela.invoke("quit", null);

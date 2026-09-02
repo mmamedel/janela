@@ -8,13 +8,36 @@ on:
 permissions:
   contents: read
 
+# Runs the end-to-end suite (tests/e2e) on every desktop platform janela
+# claims. The suite scaffolds real projects with the real CLI, builds them
+# with the real toolchain, runs the produced binary, and judges the run on
+# assertions the page reports — a missing assertion is a failure, so a binary
+# that starts and exits 0 without doing anything cannot pass.
+#
+# The iOS and Android lanes need a booted simulator or emulator, so they are
+# not run here; they are opt-in locally (JANELA_TEST_LANES=ios,android) and
+# documented in docs/testing.md. `lane.available()` skips them rather than
+# failing, so nothing here is silently broken by their absence.
 jobs:
-  smoke:
+  e2e:
+    name: e2e (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # Shared CI runners cannot honestly hold the local latency bounds (a
+      # 50 ms drain p99 on a contended box measures the neighbours, not
+      # janela), so the timing assertions are relaxed here. They still catch
+      # the regression they exist for — a blocking read that stalls the UI
+      # thread for whole seconds — while the tight local defaults stay the
+      # real performance gate.
+      JANELA_TEST_SYNC_MAX_MS: 750
+      JANELA_TEST_DRAIN_P99_MAX_MS: 300
+      # Enough to need staged reads without spending CI minutes on I/O.
+      JANELA_TEST_BIG_MB: 16
+      JANELA_TEST_TEMPLATES: vanilla,vue
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -22,11 +45,13 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+
       - name: Install webview build dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev xvfb
+
       # scriptc's Windows runtime needs a full mingw-w64 (ssize_t, nanosleep,
       # clock_gettime), so the Windows leg uses llvm-mingw's clang rather than
       # the runner's MSVC-targeting one. Prepended to PATH so it wins.
@@ -42,68 +67,24 @@ jobs:
           $bin = (Get-ChildItem "$env:RUNNER_TEMP\llvm-mingw" -Directory | Select-Object -First 1).FullName + '\bin'
           $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           & "$bin\clang" -dumpmachine
+
       - run: pnpm install --frozen-lockfile
-      - name: Scaffold a smoke project
-        run: node packages/janela/bin/janela.mjs init smoke
-      - name: Make the smoke page self-terminating
-        shell: bash
-        run: |
-          cat > smoke/index.html <<'EOF'
-          <!doctype html><html><body>
-          <script>
-          window.onload = async () => {
-            await janela.invoke("log", "ci smoke page loaded");
-            await janela.invoke("quit");
-          };
-          </script></body></html>
-          EOF
-      - name: Build the smoke app
-        working-directory: smoke
-        run: node ../packages/janela/bin/janela.mjs build
-      # macOS runners have no reliable window session for WKWebView, so the
-      # macOS leg is build-only. Linux runs under Xvfb and Windows runs
-      # directly — WebView2 comes up headless on the runner image.
-      - name: Run the smoke app headless (Linux, must exit 0)
-        if: runner.os == 'Linux'
-        working-directory: smoke
-        run: xvfb-run -a ./.janela/out/smoke
-      - name: Run the smoke app (Windows, must exit 0)
-        if: runner.os == 'Windows'
-        working-directory: smoke
-        shell: bash
-        run: |
-          test -f ./.janela/out/smoke.exe
-          ls -l ./.janela/out/smoke.exe
-          ./.janela/out/smoke.exe
-      # --- vite frontend: one framework template must build AND run end to
-      # end, proving the vite build really is flattened into the binary and
-      # that janela.invoke reaches the host from inside a component. Linux
-      # only: this exercises the vite pipeline, not the platform backends,
-      # which the smoke steps above already cover on all three.
-      - name: Build and run a Vite (Vue) app
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          node packages/janela/bin/janela.mjs init vueci --template vue
-          cd vueci
-          npm install --no-audit --no-fund
-          cat > src/App.vue <<'EOF'
-          <script setup>
-          import { nextTick, onMounted, ref } from "vue";
-          const greeting = ref("…");
-          onMounted(async () => {
-            greeting.value = await janela.invoke("greet", { name: "vueci" });
-            // Vue patches the DOM asynchronously; without this the assertion
-            // below would read the placeholder and pass for the wrong reason.
-            await nextTick();
-            await janela.invoke("log", "vue rendered: " + document.querySelector("h1").textContent);
-            await janela.invoke("quit");
-          });
-          </script>
-          <template><h1>{{ greeting }}</h1></template>
-          EOF
-          node ../packages/janela/bin/janela.mjs build
-          xvfb-run -a ./.janela/out/vueci | tee run.log
-          # The component must have rendered the host's reply, not the "…"
-          # placeholder — otherwise the round trip silently did nothing.
-          grep -q "vue rendered: Hello, vueci — from the native TS binary" run.log
+
+      # The desktop lane supplies its own Xvfb display when DISPLAY is unset,
+      # so this needs no wrapper.
+      - name: End-to-end suite
+        run: pnpm test:e2e
+
+      # The fixture projects are deleted on success; on failure they are the
+      # only way to see what was actually built and run.
+      - name: Keep failed fixtures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-fixtures-${{ matrix.os }}
+          path: |
+            .janela-tests/**/index.html
+            .janela-tests/**/src-host/**
+            .janela-tests/**/janela.conf.json
+          if-no-files-found: ignore
+          retention-days: 7

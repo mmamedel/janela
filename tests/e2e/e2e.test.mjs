@@ -37,9 +37,12 @@ for (const lane of lanes) {
         template,
         name: `e2e-${lane.name}-${template}`,
       });
+      // Kept on failure: the built project is the only record of what was
+      // actually compiled and run, and CI uploads it as an artifact.
+      let passed = false;
       try {
         const { output, exitCode, signal } = lane.run(project);
-        const parsed = parse(output);
+        const parsed = parse(output, project.config.runId);
         const expected = [...CORE_ASSERTIONS];
         if (project.config.framework) expected.push(FRAMEWORK_ASSERTION);
         const v = verdict(parsed, expected);
@@ -58,8 +61,9 @@ for (const lane of lanes) {
         // throws still exits 0 — but a crash or a signal still matters.
         assert.equal(signal, null, `app terminated by signal ${signal}`);
         if (lane.name === "desktop") assert.equal(exitCode, 0, `app exited ${exitCode}`);
+        passed = true;
       } finally {
-        cleanup(project.dir);
+        if (passed) cleanup(project.dir);
       }
     });
   }
@@ -73,12 +77,16 @@ for (const lane of lanes) {
       page: "quit-with-work.js",
       bigMb: Number(process.env.JANELA_TEST_BIG_MB ?? 32),
     });
+    let passed = false;
     try {
       const startedAt = Date.now();
       const { output, exitCode, signal } = lane.run(project);
       const elapsed = Date.now() - startedAt;
-      assert.match(output, /JANELA_TEST_WORK_STARTED/, "the page never started the work");
-      const parsed = parse(output);
+      assert.ok(
+        output.includes(`JANELA_TEST_WORK_STARTED ${project.config.runId}`),
+        "the page never started the work (or the log belongs to an earlier run)",
+      );
+      const parsed = parse(output, project.config.runId);
 
       // What janela actually promises here is that quitting does not hang and
       // does not abandon the process to a pending timer. It deliberately
@@ -95,8 +103,9 @@ for (const lane of lanes) {
       );
       assert.equal(signal, null, `app terminated by signal ${signal}`);
       if (lane.name === "desktop") assert.equal(exitCode, 0, `app exited ${exitCode}`);
+      passed = true;
     } finally {
-      cleanup(project.dir);
+      if (passed) cleanup(project.dir);
     }
   });
 }
