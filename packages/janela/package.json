@@ -56,5 +56,13 @@
     "templates/",
     "vendor-webview/core/include/",
     "vendor-webview/LICENSE"
-  ]
+  ],
+  "scripts": {
+    "test": "npm run test:unit && npm run test:types",
+    "test:unit": "node --test test/unit/*.test.mjs",
+    "test:types": "node test/types/run.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
 }

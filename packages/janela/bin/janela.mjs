@@ -18,6 +18,11 @@ import { createServer } from "node:net";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  ANDROID_ABI, ANDROID_TARGET_SDK, androidConf, ffiManifest, iosConf,
+  libraryProfile, mimeFor, NAME_RE, patchPeSubsystem, PeError,
+  rewriteHostSpecifier, suggestName,
+} from "./lib.mjs";
 
 const KIT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(join(KIT, "package.json"));
@@ -92,19 +97,6 @@ function viteBin(root) {
   return p;
 }
 
-const MIME = {
-  ".css": "text/css", ".js": "text/javascript", ".json": "application/json",
-  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-  ".gif": "image/gif", ".webp": "image/webp", ".avif": "image/avif",
-  ".svg": "image/svg+xml", ".ico": "image/x-icon",
-  ".woff": "font/woff", ".woff2": "font/woff2", ".ttf": "font/ttf", ".otf": "font/otf",
-  ".mp3": "audio/mpeg", ".mp4": "video/mp4", ".webm": "video/webm",
-};
-
-function mimeFor(p) {
-  const dot = p.lastIndexOf(".");
-  return (dot < 0 ? null : MIME[p.slice(dot).toLowerCase()]) ?? "application/octet-stream";
-}
 
 // A dist-relative reference ("/assets/x.js", "./assets/x.js") → absolute path,
 // or null when it points outside the build (a CDN URL, a data: URI, an anchor).
@@ -274,8 +266,6 @@ function webview2Include(cacheDir) {
 // Everything below is simulator-only: a device build additionally needs a
 // signing identity and a provisioning profile, which is its own project.
 
-const IOS_MIN_VERSION = "15.0";
-const IOS_PREFIX = "jl_";
 
 function iosDeviceOrFail(name) {
   const json = capture(["xcrun", "simctl", "list", "devices", "available", "--json"]);
@@ -296,86 +286,9 @@ function iosDeviceOrFail(name) {
   return pick;
 }
 
-function iosConf(conf) {
-  const ios = conf.ios ?? {};
-  return {
-    identifier: ios.identifier ?? conf.identifier,
-    displayName: ios.displayName ?? conf.window?.title ?? conf.name,
-    minimumVersion: String(ios.minimumVersion ?? IOS_MIN_VERSION),
-    device: ios.device ?? null,
-  };
-}
-
 // The library profile: one export carries every command, so a project's own
 // commands need no ABI of their own. `janelaEmit` is the reverse channel the
 // shell registers before init.
-function libraryProfile() {
-  return {
-    profile_format: 1,
-    name: "janela",
-    entry: "./entry.ts",
-    emission: "llvm",
-    abi: {
-      prefix: IOS_PREFIX,
-      init_symbol: `${IOS_PREFIX}init`,
-      sink_register_symbol: `${IOS_PREFIX}set_panic_sink`,
-      collect_symbol: `${IOS_PREFIX}collect`,
-      result_reset_symbol: `${IOS_PREFIX}reset`,
-      callback_register_symbol: `${IOS_PREFIX}set_callback`,
-    },
-    exports: [
-      {
-        export: "handleInvoke",
-        symbol: `${IOS_PREFIX}handle_invoke`,
-        params: ["string", "string"],
-        returns: "string",
-      },
-      {
-        export: "indexHtml",
-        symbol: `${IOS_PREFIX}index_html`,
-        params: [],
-        returns: "string",
-      },
-      // The shell calls these back on the main queue when work it owns comes
-      // due. They are the mirror of the desktop shim's wv_on_timer: the
-      // library parks a continuation under an id and is re-entered with it.
-      {
-        export: "onTimer",
-        symbol: `${IOS_PREFIX}on_timer`,
-        params: ["f64"],
-        returns: "void",
-      },
-      {
-        export: "onFsDone",
-        symbol: `${IOS_PREFIX}on_fs_done`,
-        params: ["f64", "bool", "string"],
-        returns: "void",
-      },
-      // Deliberately its own export rather than reusing onFsDone, whose
-      // signature would fit: a dialog result arriving through the file-I/O
-      // path would read as a bug for as long as the code lived.
-      {
-        export: "onDialogDone",
-        symbol: `${IOS_PREFIX}on_dialog_done`,
-        params: ["f64", "bool", "string"],
-        returns: "void",
-      },
-    ],
-    // TS -> shell. A channel handler must never re-enter the library (see
-    // upstream #263: violations silently appear to work), so every one of
-    // these only records the request; the shell acts on its own queue and
-    // re-enters through an export above on a later turn.
-    callbacks: [
-      { name: "janelaEmit", params: ["string", "string"], returns: "void" },
-      { name: "hostSchedule", params: ["f64", "f64"], returns: "void" },
-      { name: "hostSettle", params: ["f64", "string"], returns: "void" },
-      { name: "hostReadFile", params: ["f64", "string"], returns: "void" },
-      { name: "hostWriteFile", params: ["f64", "string", "string"], returns: "void" },
-      { name: "hostOpenDialog", params: ["f64", "string"], returns: "void" },
-    ],
-  };
-}
-
 function iosPlist(conf, iconFiles = []) {
   const ios = iosConf(conf);
   // The asset-catalogue route needs actool; the CFBundleIconFiles list is the
@@ -498,34 +411,11 @@ async function devIos(root) {
 // backend needs a companion class because android.webkit.WebView is a Java API
 // and native code cannot define a class to receive its callbacks.
 
-const ANDROID_MIN_SDK = 26;
-const ANDROID_TARGET_SDK = 34;
-const ANDROID_ABI = "arm64-v8a";
 
 /// Android package names are Java package names: dot-separated identifiers,
 /// so no hyphens. A janela project may be called `my-app`, which makes the
 /// default identifier `dev.janela.my-app` — legal everywhere else and not
 /// here, so each segment is coerced rather than failing the build.
-function androidPackage(id) {
-  return id
-    .split(".")
-    .map((seg) => {
-      const cleaned = seg.replace(/[^A-Za-z0-9_]/g, "_");
-      return /^[A-Za-z_]/.test(cleaned) ? cleaned : `_${cleaned}`;
-    })
-    .join(".");
-}
-
-function androidConf(conf) {
-  const a = conf.android ?? {};
-  return {
-    applicationId: androidPackage(a.applicationId ?? a.identifier ?? conf.identifier),
-    label: a.label ?? conf.window?.title ?? conf.name,
-    minSdk: String(a.minSdk ?? ANDROID_MIN_SDK),
-    device: a.device ?? null,
-  };
-}
-
 /// The SDK pieces an Android build needs, or a message saying which is absent.
 function androidSdk() {
   const home =
@@ -835,128 +725,6 @@ function buildShim(cacheDir) {
 
 // ---- FFI manifest ---------------------------------------------------------
 
-const STR = (name, symbol) => ({ name, symbol, params: ["i32", "string"], returns: "i32" });
-
-function ffiManifest(shimLib) {
-  const functions = [
-    { name: "wvCreate", symbol: "wv_create", params: ["i32"], returns: "i32" },
-    STR("wvSetTitle", "wv_set_title"),
-    { name: "wvSetSize", symbol: "wv_set_size", params: ["i32", "i32", "i32", "i32"], returns: "i32" },
-    STR("wvSetHtml", "wv_set_html"),
-    STR("wvInit", "wv_init"),
-    STR("wvEval", "wv_eval"),
-    STR("wvBind", "wv_bind"),
-    STR("wvReply", "wv_reply"),
-    // Retained handlers (format 4): registered once, valid for the app's
-    // lifetime, so wv_run is a plain blocking call. The request rides in as a
-    // `string` param (format 3) rather than a byte-at-a-time drain.
-    {
-      name: "wvOnInvoke", symbol: "wv_on_invoke",
-      params: [
-        "i32",
-        { callback: { id: "inv", params: ["string", { context: "inv" }], returns: "i32", lifetime: "retained" } },
-        { context: "inv" },
-      ],
-      returns: "i32",
-    },
-    {
-      name: "wvOnTimer", symbol: "wv_on_timer",
-      params: [
-        "i32",
-        { callback: { id: "timer", params: ["i32", { context: "timer" }], returns: "void", lifetime: "retained" } },
-        { context: "timer" },
-      ],
-      returns: "i32",
-    },
-    { name: "wvRun", symbol: "wv_run", params: ["i32"], returns: "i32" },
-    { name: "wvTerminate", symbol: "wv_terminate", params: ["i32"], returns: "i32" },
-    // async: the held-reply table (deferred returns) plus shell-owned
-    // scheduling — TS parks a continuation id, the shell calls it back due.
-    { name: "wvDefer", symbol: "wv_defer", params: ["i32"], returns: "i32" },
-    { name: "wvResolve", symbol: "wv_resolve", params: ["i32", "i32", "i32"], returns: "i32" },
-    { name: "wvSchedule", symbol: "wv_schedule", params: ["i32", "i32", "i32"], returns: "i32" },
-    // async file I/O: the blocking syscall runs on a shim worker thread
-    { name: "wvFsRead", symbol: "wv_fs_read", params: ["i32", "string"], returns: "i32" },
-    { name: "wvFsWrite", symbol: "wv_fs_write", params: ["i32", "string", "string"], returns: "i32" },
-    // Job accessors, shared by file I/O and dialogs: both are work whose
-    // answer cannot be produced during the FFI call that starts it.
-    { name: "wvJobStatus", symbol: "wv_job_status", params: ["i32", "i32"], returns: "i32" },
-    { name: "wvJobSize", symbol: "wv_job_size", params: ["i32", "i32"], returns: "f64" },
-    {
-      // One slice per call, so a large payload decodes across several UI turns
-      // instead of stalling on all of it at once. Returns the bytes covered.
-      name: "wvJobTakeAt", symbol: "wv_job_take_at",
-      params: [
-        "i32", "i32", "f64", "f64",
-        { callback: { id: "sink", params: ["string", { context: "sink" }], returns: "void", lifetime: "call" } },
-        { context: "sink" },
-      ],
-      returns: "f64",
-    },
-    { name: "wvJobFree", symbol: "wv_job_free", params: ["i32", "i32"], returns: "i32" },
-    // Native dialogs: the modal runs on a later UI-thread turn, so asking for
-    // one never blocks the invoke that asked. Options ride as plain params
-    // (kind, flags, title, defaultPath, defaultName, filters).
-    {
-      name: "wvDialog", symbol: "wv_dialog",
-      params: ["i32", "i32", "i32", "string", "string", "string", "string"],
-      returns: "i32",
-    },
-    { name: "wvSetFullscreen", symbol: "wv_set_fullscreen", params: ["i32", "i32"], returns: "i32" },
-  ];
-
-  if (process.platform === "win32") {
-    // MinGW ignores MSVC's #pragma comment(lib, ...), so the Win32 imports the
-    // WebView2 backend needs are named explicitly. scriptc's own win32 lane
-    // already adds advapi32/iphlpapi/ws2_32, so those are omitted here.
-    // `c++` pulls libc++ for the shim's std::string/exceptions.
-    //
-    // `pthread` (mingw's libwinpthread) is here to work around an upstream
-    // scriptc bug: its runtime calls clock_gettime/nanosleep, which mingw
-    // declares in <time.h> but implements in winpthreads, and scriptc's win32
-    // link never adds it. Without this the link dies with
-    // "undefined symbol: clock_gettime" — reproducible with a plain
-    // `scriptc build hello.ts` on Windows, no FFI involved.
-    return {
-      ffi_format: 4,
-      functions,
-      libraries: [shimLib],
-      system_libraries: [
-        "c++", "pthread",
-        "ole32", "oleaut32", "shlwapi", "shell32", "user32", "version", "gdi32",
-        // GetOpenFileNameW / GetSaveFileNameW for the native file dialogs.
-        "comdlg32",
-      ],
-    };
-  }
-
-  if (process.platform === "darwin") {
-    // scriptc has no -framework support, but `libraries` entries are passed to
-    // the link as plain input files and ld64 accepts .tbd stubs.
-    const sdk = capture(["xcrun", "--sdk", "macosx", "--show-sdk-path"]);
-    return {
-      ffi_format: 4,
-      functions,
-      libraries: [
-        shimLib,
-        join(sdk, "System/Library/Frameworks/WebKit.framework/WebKit.tbd"),
-        join(sdk, "System/Library/Frameworks/Cocoa.framework/Cocoa.tbd"),
-      ],
-      system_libraries: ["c++"],
-    };
-  }
-  return {
-    ffi_format: 4,
-    functions,
-    libraries: [shimLib],
-    system_libraries: [
-      "stdc++", "webkit2gtk-4.1", "javascriptcoregtk-4.1", "gtk-3", "gdk-3",
-      "soup-3.0", "gio-2.0", "gobject-2.0", "glib-2.0", "gmodule-2.0",
-      "pango-1.0", "pangocairo-1.0", "harfbuzz", "atk-1.0", "cairo",
-      "cairo-gobject", "gdk_pixbuf-2.0", "z", "pthread",
-    ],
-  };
-}
 
 // ---- Windows subsystem ------------------------------------------------------
 
@@ -972,34 +740,16 @@ function ffiManifest(shimLib) {
 // the loader whether to allocate a console. Every offset is checked before
 // anything is written, and a file that does not look like a console-subsystem
 // PE is left alone.
-const IMAGE_SUBSYSTEM_WINDOWS_GUI = 2;
-const IMAGE_SUBSYSTEM_WINDOWS_CUI = 3;
 
 function makeGuiSubsystem(exePath) {
-  const buf = readFileSync(exePath);
-  if (buf.length < 0x40 || buf.readUInt16LE(0) !== 0x5a4d) {
-    fail(`${exePath} is not a PE image (no MZ header)`);
+  let result;
+  try {
+    result = patchPeSubsystem(readFileSync(exePath));
+  } catch (e) {
+    if (e instanceof PeError) fail(`${exePath} ${e.message}`);
+    throw e;
   }
-  const peOff = buf.readUInt32LE(0x3c);
-  if (peOff + 24 > buf.length || buf.readUInt32LE(peOff) !== 0x00004550) {
-    fail(`${exePath} has no PE signature at ${peOff}`);
-  }
-  // Optional header starts after the 4-byte signature and 20-byte COFF header;
-  // Subsystem sits at +68 in both PE32 (0x10b) and PE32+ (0x20b).
-  const optOff = peOff + 24;
-  const magic = buf.readUInt16LE(optOff);
-  if (magic !== 0x10b && magic !== 0x20b) {
-    fail(`${exePath} has an unrecognised optional header magic 0x${magic.toString(16)}`);
-  }
-  const subOff = optOff + 68;
-  if (subOff + 2 > buf.length) fail(`${exePath} is truncated before its Subsystem field`);
-  const current = buf.readUInt16LE(subOff);
-  if (current === IMAGE_SUBSYSTEM_WINDOWS_GUI) return;
-  if (current !== IMAGE_SUBSYSTEM_WINDOWS_CUI) {
-    fail(`${exePath} has an unexpected subsystem ${current}; refusing to rewrite it`);
-  }
-  buf.writeUInt16LE(IMAGE_SUBSYSTEM_WINDOWS_GUI, subOff);
-  writeFileSync(exePath, buf);
+  if (result.patched) writeFileSync(exePath, result.buf);
 }
 
 // ---- build ----------------------------------------------------------------
@@ -1187,10 +937,7 @@ function build(root, { devUrl = null, gui = true, target = "desktop" } = {}) {
   // as well.
   writeFileSync(
     join(buildDir, "main.ts"),
-    readFileSync(mainSrc, "utf8").replace(
-      /(\bfrom\s*)(['"])janela\/host\2/g,
-      "$1$2./janela$2",
-    ),
+    rewriteHostSpecifier(readFileSync(mainSrc, "utf8")),
   );
 
   const html = frontendHtml(root, conf, devUrl);
@@ -1261,7 +1008,12 @@ function build(root, { devUrl = null, gui = true, target = "desktop" } = {}) {
   if (ios) return buildIos(root, conf, buildDir, outDir);
   if (android) return buildAndroid(root, conf, buildDir, outDir);
 
-  writeFileSync(join(buildDir, "janela.ffi.json"), JSON.stringify(ffiManifest(shimLib), null, 2) + "\n");
+  writeFileSync(join(buildDir, "janela.ffi.json"), JSON.stringify(ffiManifest(shimLib, {
+      macSdkPath:
+        process.platform === "darwin"
+          ? capture(["xcrun", "--sdk", "macosx", "--show-sdk-path"])
+          : null,
+    }), null, 2) + "\n");
 
   console.log("janela: compiling TypeScript to a native binary");
   // An explicit --out is used verbatim, so the PE suffix is ours to add.
@@ -1374,20 +1126,9 @@ function copyTemplate(from, to, name) {
 // allowed because people type them and every downstream use accepts them —
 // Android application ids in particular *prefer* them, since a Java package
 // segment cannot contain a hyphen (see androidApplicationId).
-const NAME_RE = /^[a-z][a-z0-9_-]*$/;
 
 // Best-effort repair of a rejected name, so the error can suggest something
 // that would have worked instead of only stating the rule.
-function suggestName(raw) {
-  const s = String(raw)
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^[^a-z]+/, "")
-    .replace(/-{2,}/g, "-")
-    .replace(/[-_]+$/, "");
-  return NAME_RE.test(s) ? s : "";
-}
-
 function init(name, template) {
   if (!name) {
     fail(
