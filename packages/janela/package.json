@@ -58,8 +58,8 @@
     "vendor-webview/LICENSE"
   ],
   "scripts": {
-    "test": "node --test test/unit/ && node test/types/run.mjs",
-    "test:unit": "node --test test/unit/",
+    "test": "npm run test:unit && npm run test:types",
+    "test:unit": "node --test test/unit/*.test.mjs",
     "test:types": "node test/types/run.mjs"
   },
   "devDependencies": {
