@@ -110,9 +110,17 @@ the path is what made the mutation fail. When adding an assertion, prefer the
 exact contract over a truthiness check — otherwise the mutation table above
 will keep growing rows that pass.
 
-The suite also has one product bug to its name: `readFileAsync` on a directory
-resolved with an empty string on iOS and Android instead of failing
-(fixed in `c7c6867` — desktop already answered `EISDIR`).
+The suite also has two product bugs to its name, both of which the previous
+inline CI smoke could not have seen:
+
+- `readFileAsync` on a directory resolved with an empty string on iOS and
+  Android instead of failing — desktop already answered `EISDIR`.
+- **`janela build` was broken on Windows for every Vite template.** The CLI
+  spawned `node_modules/.bin/vite.cmd`, and since the CVE-2024-27980 fix Node
+  refuses to spawn a `.cmd` without a shell, so the build died with `EINVAL`.
+  `janela dev` passed `shell: true` and worked, which is why nothing noticed.
+  It now runs vite's own JS entry with this Node — no shim, no shell, the same
+  on every platform.
 
 ## CI
 

@@ -86,5 +86,8 @@ jobs:
             .janela-tests/**/index.html
             .janela-tests/**/src-host/**
             .janela-tests/**/janela.conf.json
+          # `.janela-tests` is dot-prefixed, and upload-artifact treats that
+          # as hidden and silently skips it.
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7

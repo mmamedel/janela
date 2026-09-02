@@ -81,15 +81,26 @@ function viteConfigPath(root) {
   return null;
 }
 
-function viteBin(root) {
-  const p = join(root, "node_modules", ".bin", process.platform === "win32" ? "vite.cmd" : "vite");
-  if (!existsSync(p)) {
-    fail(
-      "this project has a vite config but no local vite — run your package manager's " +
-        "install first (npm install / pnpm install)",
-    );
-  }
-  return p;
+// How to run the project's own vite.
+//
+// The `.bin` entry is a .cmd shim on Windows and, since the CVE-2024-27980
+// fix, Node refuses to spawn a .cmd without a shell. `janela dev` passed
+// `shell: true` and worked; `janela build` did not, so building any Vite
+// template on Windows died with `spawnSync ...\vite.cmd EINVAL`. Prefer
+// vite's own JS entry run with this Node: no shim, no shell, and identical on
+// every platform. The shim stays as a fallback for layouts that hide the
+// package but keep the bin.
+function viteCommand(root) {
+  const js = join(root, "node_modules", "vite", "bin", "vite.js");
+  if (existsSync(js)) return { argv: [process.execPath, js], shell: false };
+
+  const shim = join(root, "node_modules", ".bin", process.platform === "win32" ? "vite.cmd" : "vite");
+  if (existsSync(shim)) return { argv: [shim], shell: process.platform === "win32" };
+
+  fail(
+    "this project has a vite config but no local vite — run your package manager's " +
+      "install first (npm install / pnpm install)",
+  );
 }
 
 const MIME = {
@@ -186,7 +197,8 @@ function frontendHtml(root, conf, devUrl) {
 
   if (viteConfigPath(root)) {
     console.log("janela: building the frontend with vite");
-    run([viteBin(root), "build"], { cwd: root });
+    const viteCmd = viteCommand(root);
+    run([...viteCmd.argv, "build"], { cwd: root, shell: viteCmd.shell });
     const distDir = resolve(root, conf.frontend?.dist ?? "dist");
     const html = inlineDist(distDir);
     console.log(`janela: frontend inlined (${(Buffer.byteLength(html) / 1024).toFixed(0)} kB)`);
@@ -1484,11 +1496,11 @@ async function dev(root) {
     const port = await freePort();
     devUrl = `http://localhost:${port}/`;
     console.log(`janela: starting the vite dev server on ${devUrl}`);
-    vite = spawn(viteBin(root), ["--port", String(port), "--strictPort"], {
+    const viteCmd = viteCommand(root);
+    vite = spawn(viteCmd.argv[0], [...viteCmd.argv.slice(1), "--port", String(port), "--strictPort"], {
       cwd: root,
       stdio: "inherit",
-      // Windows resolves .cmd shims through the shell.
-      shell: process.platform === "win32",
+      shell: viteCmd.shell,
     });
     const stop = () => { if (vite && vite.exitCode === null) vite.kill(); };
     process.on("exit", stop);
