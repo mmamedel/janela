@@ -206,10 +206,12 @@ what the shell never reaches:
 | vue | 459,553 | 282,493 | 1,462,536 | 908,832 |
 | react | 591,673 | 414,613 | 1,592,184 | 1,038,480 |
 
-The saving is a **constant** — 177,056 B off every iOS binary and ~553,700 B off
-every `.so`, within a few bytes across all five templates — which is what it
-should be: the dead weight is the same unreachable runtime in every build, not
-anything template-specific. Runtime symbols in the iOS binary fall 807 → 227 and
+The saving is **flat across templates** — 177,024–177,072 B off the iOS binary
+and 553,688–553,768 B off the `.so`, so a spread of 48 and 80 bytes over a
+five-template range that itself spans 200 KB. It is not literally one constant
+(section padding shifts by a few bytes), but it is independent of the frontend,
+which is what it should be: the dead weight is the same unreachable runtime in
+every build, not anything template-specific. Runtime symbols in the iOS binary fall 807 → 227 and
 Android's dynamic exports 2,751 → 154. The `scr_path_win32_*` / `scr_exec_*`
 symbols that the desktop link had already dropped are now gone from both mobile
 lanes too. See [`shims-to-retire.md`](shims-to-retire.md).
