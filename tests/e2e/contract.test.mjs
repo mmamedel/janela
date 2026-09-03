@@ -144,7 +144,10 @@ test("templates: the default is two, and every known template is selectable", ()
  * templates the CLI does not accept.
  */
 test("the derived template list matches the CLI's own", () => {
-  const src = readFileSync(join(REPO, "packages", "janela", "bin", "janela.mjs"), "utf8");
+  // Normalised: Windows checks the repo out with CRLF, and the `$` anchor
+  // below matches before \n but not before \r, so this would find nothing
+  // there and fail on a difference that does not exist.
+  const src = readFileSync(join(REPO, "packages", "janela", "bin", "janela.mjs"), "utf8").replace(/\r\n/g, "\n");
   const m = /^const TEMPLATES = (\[[^\]]*\]);$/m.exec(src);
   assert.ok(m, "could not find TEMPLATES in the CLI — update this test's parser");
   const cli = JSON.parse(m[1].replace(/'/g, '"'));
@@ -258,7 +261,7 @@ test("the unescaper leaves everything else alone, including UTF-8", () => {
  * possible guard: the doc and the gate must name the same set.
  */
 test("docs/testing.md documents exactly the knobs the suite reads", () => {
-  const doc = readFileSync(join(REPO, "docs", "testing.md"), "utf8");
+  const doc = readFileSync(join(REPO, "docs", "testing.md"), "utf8").replace(/\r\n/g, "\n");
   const table = doc.slice(doc.indexOf("## Knobs"));
   const documented = new Set([...table.matchAll(/^\| `(JANELA_[A-Z0-9_]+)`/gm)].map((m) => m[1]));
   const read = new Set(Object.keys(KNOBS));

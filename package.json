@@ -10,7 +10,7 @@
     "dev": "pnpm --filter demo dev",
     "build:demo": "pnpm --filter demo build",
     "janela": "node packages/janela/bin/janela.mjs",
-    "test:e2e": "node --test tests/e2e/*.test.mjs",
+    "test:e2e": "node --test \"tests/e2e/*.test.mjs\"",
     "check:sizes": "node scripts/measure-sizes.mjs --check",
     "measure:sizes": "node scripts/measure-sizes.mjs --measure",
     "test": "pnpm test:e2e"

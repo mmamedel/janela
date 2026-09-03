@@ -35,6 +35,17 @@ const SCRATCH = process.env.JANELA_SIZES_SCRATCH
 const MARK_START = "<!-- sizes:start -->";
 const MARK_END = "<!-- sizes:end -->";
 
+/**
+ * Read a text file with line endings normalised.
+ *
+ * Windows checks these files out with CRLF, so a comparison against a string
+ * this script joined with "\n" reports drift that does not exist — which is
+ * exactly how --check failed on windows-latest while passing on the other two
+ * runners. Nothing here cares about line endings; everything here cares about
+ * the numbers.
+ */
+const readText = (path) => readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+
 const die = (msg) => {
   console.error(`measure-sizes: ${msg}`);
   process.exit(1);
@@ -219,7 +230,7 @@ function renderTables(rec) {
 }
 
 function replaceBlock(file, block) {
-  const text = readFileSync(file, "utf8");
+  const text = readText(file);
   const a = text.indexOf(MARK_START);
   const b = text.indexOf(MARK_END);
   if (a === -1 || b === -1) die(`${file} has no ${MARK_START} / ${MARK_END} block`);
@@ -276,7 +287,7 @@ function checkProse(rec) {
   const problems = [];
   const candidates = spans(rec);
   for (const file of PROSE_FILES) {
-    const text = readFileSync(join(REPO, file), "utf8");
+    const text = readText(join(REPO, file));
     const ranges = quotedRanges(text);
     if (ranges.length === 0) {
       problems.push(`${file}: no "N–M KB" range found — did the wording change?`);
@@ -361,7 +372,7 @@ function cmdCheck({ measure, strict }) {
   // 1. the generated block matches the record
   const file = join(REPO, "docs", "frontend.md");
   const want = renderTables(rec);
-  const text = readFileSync(file, "utf8");
+  const text = readText(file);
   const a = text.indexOf(MARK_START);
   const b = text.indexOf(MARK_END);
   if (a === -1 || b === -1) problems.push(`docs/frontend.md has no generated sizes block`);
@@ -431,7 +442,7 @@ const known = ["--measure", "--write", "--check", "--strict", "--help", "-h"];
 for (const a of argv) if (!known.includes(a)) die(`unknown option '${a}'. Known: ${known.join(", ")}`);
 
 if (argv.includes("--help") || argv.includes("-h") || argv.length === 0) {
-  console.error(readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(1, 21).join("\n").replace(/^\/\/ ?/gm, ""));
+  console.error(readText(fileURLToPath(import.meta.url)).split("\n").slice(1, 21).join("\n").replace(/^\/\/ ?/gm, ""));
   process.exit(argv.length === 0 ? 1 : 0);
 }
 const strict = argv.includes("--strict");
