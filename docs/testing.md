@@ -226,6 +226,39 @@ still catch the regression they exist for, a blocking read that stalls the UI
 thread for whole seconds, and the tight local defaults remain the real
 performance gate.
 
+## Size figures
+
+`pnpm check:sizes` gates the published numbers against `docs/sizes.json`, at
+three levels of strictness — and the levels exist because the surfaces differ
+in how much a script can legitimately own:
+
+| surface | how it is held | what fails |
+|---|---|---|
+| the table in `docs/frontend.md` | **generated** from the record | any hand-edit — run `--write` |
+| every `N–M KB` span in the READMEs, the site and the docs | **checked**: each must bracket a real spread | a range that brackets nothing, or one so wide it says nothing |
+| the site's per-platform table | **checked cell by cell** against the record | a drifted figure, a dropped cell, a retitled row, a platform the record has and the page doesn't |
+
+The third one is `checkSiteFigures`, and it was added because the second one
+cannot see single absolute figures. The landing page quotes six of them, they
+were correct when written, and nothing would have noticed them coming loose —
+on the one surface a reader actually sees. It reads the page rather than
+generating it, because the markup and its classes are design, not data; so a
+row it does not recognise is an error rather than a row it skips.
+
+`tests/e2e/sizes.test.mjs` covers that checker the way this suite covers
+itself: eleven tests that mutate the page in memory and require the guard to go
+red *for the stated reason*. Verified against a weakened checker — neutering
+the cell comparison reddens 3, letting an unknown row fall through to the first
+platform reddens 1, and making the checker return nothing reddens 9.
+
+**What is still not gated:** the byte-level figures in the prose of
+[`frontend.md`](frontend.md) — `177,024–177,072 B off the iOS binary`, `409,232
+-> 232,208`, the 178 KB upstream prize. Those are *deltas against
+pre-strip artifacts*, and the record holds only what the current version
+measures, so there is nothing to check them against without keeping a history
+of every past build. They are correct as measured on 2026-09-03; treat them as
+prose that dates, and re-derive rather than copy them.
+
 ## Not covered
 
 Worth knowing before trusting a green run:
@@ -238,6 +271,8 @@ Worth knowing before trusting a green run:
   asserted through the bridge.
 - **Dialogs, distribution and packaging** are not covered; they need a user or
   a signing identity.
+- **Byte-level size deltas in prose are not gated** — only ranges and the
+  site's absolute table are. See [Size figures](#size-figures).
 - **Warm-up is excluded from the latency numbers.** The battery pings 20 times
   before measuring, because the first invoke includes webview startup and has
   masqueraded as the metric before.
