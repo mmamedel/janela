@@ -23,6 +23,13 @@ behind the claims.
 | [`android.md`](android.md) | Building an APK, the toolchain you need, and why an APK carries a little Java that no other platform needs. |
 | [`windows-notes.md`](windows-notes.md) | What the Windows lane required, including the two upstream landmines found along the way. |
 
+## Testing
+
+| Page | What's in it |
+|---|---|
+| [`testing.md`](testing.md) | The end-to-end suite: what a lane is, how to run desktop, the iOS simulator and an Android emulator, every `JANELA_TEST_*` knob, and why the suite never treats a zero exit code as a pass. |
+| [`testing-types.md`](testing-types.md) | The two suites in `packages/janela/test/`: the compile-fail fixtures that assert the typed contract rejects the wrong shapes with the right diagnostic, and the CLI unit tests. |
+
 ## Under the hood
 
 | Page | What's in it |

@@ -11,7 +11,7 @@ pointer, so a JS frontend can call back into TypeScript?**
 compiler is more restrictive than the published docs, and the shape of the
 shim is dictated by those restrictions.
 
-Environment: `scriptc` 0.0.35 (npm, published 2026-08-22), `webview/webview`
+Environment: `scriptc` 0.0.32, `webview/webview`
 @ `cbbdee4`, Ubuntu 24.04, WebKitGTK 4.1, clang 18, headless via Xvfb.
 
 ## What works
@@ -29,9 +29,28 @@ The re-entrancy result is what makes the whole design viable: while C is
 inside the TS callback, TS can call *back* into C. That is how the request
 payload gets across a boundary that only passes scalars.
 
-## Hard limits in 0.0.35 (docs describe formats 1–5; only 1–2 are implemented)
+## Hard limits in 0.0.32 — SUPERSEDED, do not design against this
 
-From `dist/ffi/profile.d.ts`:
+> **Corrected 2026-09-03.** Everything in this subsection was true of the
+> compiler the PoC ran against (0.0.32, which implemented only FFI formats
+> 1–2) and is **false today**. It is kept because it explains why the
+> earliest shim marshalled bytes one at a time and why `wv_run` had to hold
+> the callback — not as a description of scriptc's FFI.
+>
+> On the current pin (0.0.36) the compiler reads formats 1–5, and janela's
+> own generated manifest declares **`ffi_format: 4`** with
+> `lifetime: "retained"` and `"string"` callback params — see
+> `.janela/build/janela.ffi.json` in any built project. `cstring`, `string`
+> and `bytes` are all valid callback param classes. That is what let 0.2.0
+> delete the byte-at-a-time marshalling and the `wv_run`-holds-the-callback
+> trick.
+>
+> The one limit below that **still holds**: return classes are still
+> scalar-only (`f64 bool u8 u32 i32 void`), with no pointer or `u64`. A
+> `webview_t` still cannot cross the boundary, which is why the shim keeps
+> native handles in its own table and hands TypeScript a small integer.
+
+From `dist/ffi/profile.d.ts` **as of 0.0.32**:
 
 - Callback params: **numeric only** — `f64 bool u8 u32 i32`. No `string`,
   no `bytes`. So `webview_bind`'s `(const char *id, const char *req, void *)`
@@ -43,10 +62,12 @@ From `dist/ffi/profile.d.ts`:
 - No `cstring`; strings arrive as `(const uint8_t *, size_t)`, **not
   NUL-terminated** — the shim must copy before calling any C string API.
 
-The published guide at scriptc.dev/ffi documents `"lifetime": "retained"`
-(format 4+), `cstring`, string/bytes callback params, and `"invoke":
-"foreign"`. **None of those exist in the shipped compiler.** Don't design
-against the docs.
+At the time, the published guide at scriptc.dev/ffi documented
+`"lifetime": "retained"` (format 4+), `cstring`, string/bytes callback params
+and `"invoke": "foreign"` while none of it existed in the shipped compiler —
+which is where "don't design against the docs" came from. **That gap is
+closed:** all of those are implemented on the current pin, and janela uses
+`retained` and `string` in production.
 
 ## Compiler bug found
 
@@ -70,6 +91,13 @@ nativeScale(21);                  // ✓ statement position
 This affects *all* FFI functions, not just callback-taking ones. It bites
 immediately because the docs' own worked example only happens to work by being
 inline. Worth filing upstream. Workaround used throughout `app/app.ts`: `+ 0`.
+
+> **Fixed.** Filed as
+> [#21](https://github.com/vercel-labs/scriptc/issues/21) and fixed by their
+> PR #268, released in **scriptc 0.0.36**. janela pins that release, and the
+> `+ 0` convention has been deleted from the runtime, the generated entry, the
+> templates and the demo. The snippets above are the historical record of the
+> bug, not current advice.
 
 ## The design that works
 

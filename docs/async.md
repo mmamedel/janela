@@ -1,7 +1,10 @@
 # Async commands: what the platform actually allows
 
-Measured against scriptc 0.0.32 + webview.h, 2026-08-29 (the design still holds on 0.0.35). Every claim here was
-verified with a probe binary, not inferred from documentation.
+Measured against scriptc 0.0.32 + webview.h, 2026-08-29; the design still
+holds on 0.0.36 (re-checked 2026-09-03 — library mode still refuses `async`
+and microtasks still do not drain across host re-entries, so the shell still
+owns the clock). Every claim here was verified with a probe binary, not
+inferred from documentation.
 
 ## The blocking finding
 

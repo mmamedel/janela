@@ -9,9 +9,6 @@
 // (add / greet / log / wait / quit, plus the `added` event), so the template's
 // own page still type-checks, renders and round-trips while the appended
 // battery script drives the assertions.
-//
-// Gotcha inherited from scriptc: never use a bare FFI-backed call as a
-// complete variable initializer — wrap it in any expression (`+ 0`).
 
 import type { JanelaApp } from "janela/host";
 
@@ -150,7 +147,7 @@ export function setup(app: App): void {
   });
 
   app.commandAsync("bigRead", (args, resolve) => {
-    const started = Date.now() + 0;
+    const started = Date.now();
     app.readFileAsync(args.path, (err, text) => {
       resolve({
         ok: err === null,

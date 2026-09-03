@@ -143,27 +143,69 @@ compiled into the binary, so changing it means re-running `janela dev`.
 
 Every cell below was scaffolded, built and **run**, with a probe asserting that
 the framework rendered host data into the DOM, that a typed round trip returned
-a `number`, and that `— çãé 🚀` survived intact. Measured at 0.12.0 on an Apple
-Silicon Mac, an iPhone 17 Pro simulator (iOS 26.5) and a `Medium_Phone_API_36`
-emulator (API 36, WebView 133).
+a `number`, and that `— çãé 🚀` survived intact. Re-measured 2026-09-03 at
+janela 0.13.1 on **scriptc 0.0.36**, on an Apple Silicon Mac, an iPhone 17 Pro
+simulator (iOS 26.5) and a `Medium_Phone_API_36` emulator (API 36,
+WebView 133).
 
 | template | desktop binary | iOS `.app` | Android `.apk` |
 |---|---|---|---|
-| vanilla | 470 KB | 383 KB | 461 KB |
-| solid | 454 KB | 367 KB | 464 KB |
-| svelte | 487 KB | 399 KB | 473 KB |
-| vue | 519 KB | 431 KB | 484 KB |
-| react | 648 KB | 560 KB | 517 KB |
+| solid | 191 KB | 384 KB | 473 KB |
+| svelte | 223 KB | 417 KB | 480 KB |
+| vanilla | 225 KB | 400 KB | 473 KB |
+| vue | 256 KB | 449 KB | 493 KB |
+| react | 385 KB | 578 KB | 529 KB |
 
-All fifteen cells pass. Sizes are `KiB`; the raw byte counts are in the commit
-that added this table.
+All fifteen cells pass. Sizes are `KiB` of the whole artifact — the stripped
+executable, the summed `.app` bundle, the `.apk` as shipped. Raw byte counts:
+
+| template | desktop | iOS `.app` | iOS binary | Android `.apk` | Android `.so` |
+|---|---|---|---|---|---|
+| solid | 195,768 | 393,513 | 392,712 | 483,851 | 1,407,912 |
+| svelte | 228,808 | 426,541 | 425,736 | 492,043 | 1,436,104 |
+| vanilla | 230,600 | 410,049 | 409,240 | 483,851 | 1,406,536 |
+| vue | 261,832 | 459,553 | 458,760 | 504,331 | 1,462,536 |
+| react | 393,944 | 591,673 | 590,872 | 541,195 | 1,592,184 |
+
+### What scriptc 0.0.36 did to the desktop column
+
+0.0.36 shipped per-program stdlib tree-shaking
+([#256](https://github.com/vercel-labs/scriptc/issues/256), their PR #271).
+Both sides below are our own measurements of the same five scaffolded projects,
+rebuilt across the pin bump and nothing else:
+
+| template | 0.0.35 | 0.0.36 | change |
+|---|---|---|---|
+| solid | 465,272 | 195,768 | **−58%** |
+| svelte | 498,296 | 228,808 | **−54%** |
+| vanilla | 481,832 | 230,600 | **−52%** |
+| vue | 531,320 | 261,832 | **−51%** |
+| react | 663,416 | 393,944 | **−41%** |
+
+**Mobile did not move.** iOS grew by 64 B and the Android APK by one 4 KB
+alignment block. The elimination is section-based dead-stripping applied at
+scriptc's own *executable* link step; iOS and Android are the only lanes that
+build in library mode, where scriptc emits a static archive and Xcode or Gradle
+does the final link. Measured: the desktop executable carries **0** dead
+`scr_path_win32_*` / `scr_exec_*` symbols, the iOS archive still carries **11**.
+See [`shims-to-retire.md`](shims-to-retire.md).
+
+Two notes on the table's history. The desktop column above replaces figures
+that were correct when written — the previous 470 / 519 / 648 / 487 / 454 KB
+row reproduces our 0.0.35 baseline exactly. The **mobile** columns were already
+stale before this bump: 0.13.x added native file dialogs and `os_log`, which
+grew the iOS shell by ~16 KB and the APK by ~8 KB, and the table had not been
+re-measured since 0.12.0.
 
 Two things worth noticing. **`solid` is smaller than `vanilla`** — not because
 Solid is free, but because the `vanilla` template ships a larger hand-written
 `index.html` (it demonstrates dialogs, file reading and window control inline)
 while Solid's flattened bundle is ~11 KB. And **the APK spread is much
-narrower** than the desktop spread, because an APK is dominated by the shared
-`.so` (~1.39–1.58 MB uncompressed) rather than by the frontend.
+narrower** than the desktop spread — 473–529 KB against 191–385 KB — because an
+APK is dominated by the shared `.so` (~1.41–1.59 MB uncompressed) rather than
+by the frontend. Tree-shaking widened that gap: `solid` and `vanilla` now ship
+byte-identical APKs (483,851) despite `.so` files 1,376 B apart, because zip
+alignment absorbs the difference.
 
 The frontend is embedded as a string, so its bundle size lands in the binary
 roughly 1:1 — though small additions can be free, since macOS arm64 segments

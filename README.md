@@ -1,7 +1,7 @@
 # janela — monorepo
 
 > Desktop and mobile apps in pure TypeScript, compiled to native. No Rust, no Node, no Electron.
-> macOS · Linux · Windows · iOS · Android — one runtime, ~400–500 KB binaries.
+> macOS · Linux · Windows · iOS · Android — one runtime, ~200–400 KB desktop binaries.
 > **[janela.dev docs → mmamedel.github.io/janela](https://mmamedel.github.io/janela/)** ·
 > **[npm](https://www.npmjs.com/package/janela)**
 
@@ -13,7 +13,7 @@ This is the workspace. The framework itself, its README, and its docs live in
 | [`packages/janela`](packages/janela) | the framework: CLI, TypeScript runtime, C shim over webview.h, project templates | yes — [`janela`](https://www.npmjs.com/package/janela) on npm |
 | [`examples/demo`](examples/demo) | a worked app: commands, events, async, a file reader | no |
 | [`website`](website) | the landing page, deployed to GitHub Pages | no |
-| [`docs`](docs) | design notes: the typed contract, the async model, the iOS and Android ports, scriptc findings | no |
+| [`docs`](docs) | design notes: the typed contract, the async model, the iOS and Android ports, [how the test suites run](docs/testing.md), scriptc findings | no |
 
 ## Working in the repo
 
@@ -24,7 +24,14 @@ pnpm install
 pnpm dev                 # build + run examples/demo with logs in the terminal
 pnpm build:demo          # just build it
 pnpm janela init my-app  # scaffold a new app anywhere
+
+pnpm test                # end-to-end suite, desktop lane  (docs/testing.md)
+pnpm --filter janela test:unit && pnpm --filter janela test:types
 ```
+
+The three suites, the lane knobs and the compile-fail fixtures are documented
+in [`docs/testing.md`](docs/testing.md) and
+[`docs/testing-types.md`](docs/testing-types.md).
 
 Requirements: Node 24+ and a C++ toolchain for the platform you are building —
 Xcode Command Line Tools on macOS, `g++` + `libwebkit2gtk-4.1-dev` on Linux,

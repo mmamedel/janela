@@ -9,7 +9,6 @@ each one should be deleted when that issue lands, not grown.
 | Ticker thread + tick-driven turn loop (`wv_tick_*`) | scriptc's event loop is parked inside the blocking `wv_run` for the app's life, so `await` / `setTimeout` / promise continuations never resume | [#260](https://github.com/vercel-labs/scriptc/issues/260) ships a pump entry point (`run_once`) — the ticker calls that instead, and host-side `await` starts working |
 | Deferred-job pool (`wv_defer` / `wv_resolve`) | An invoke's answer often cannot be produced during the call that starts it (async commands; modal dialogs, which spin a nested loop) | Partly outlives #260 — dialogs will always need it — but async commands could move to native promises |
 | Worker-thread file I/O (`wv_job_*` read/write) | scriptc's `fs/promises` reads inline (call time scales with file size), and `node:fs` is sync-only | [#260](https://github.com/vercel-labs/scriptc/issues/260) adds thread-pool fs; then `readFileAsync` becomes a thin wrapper |
-| `+ 0` on every FFI call result | A bare FFI call as a complete initializer is silently miscompiled | **FIXED upstream** ([#21](https://github.com/vercel-labs/scriptc/issues/21) / scriptc PR #268), verified against their `main`. Delete when a release past 0.0.35 ships — 24 occurrences across 11 files, of which only `runtime/janela.ts` has real code sites; the rest is documentation and template comments that currently *teach* the gotcha |
 | `pthread` in `system_libraries` on Windows | scriptc's win32 link line omits libwinpthread, so `clock_gettime`/`nanosleep` are undefined | [#255](https://github.com/vercel-labs/scriptc/issues/255) is fixed |
 | Post-link PE `Subsystem` patch | No way to pass `-mwindows`; a console window otherwise sits behind the app | [#259](https://github.com/vercel-labs/scriptc/issues/259) gives us a linker-flag route |
 | `strip` in `janela build` | Symbol tables are ~16% of the binary | Never — this one is legitimately ours |
@@ -24,20 +23,42 @@ a shadow standard library forever, and it diverges from upstream the day
 upstream ships. When a change starts looking like stdlib work, file it instead
 — and if a stopgap is unavoidable, keep it minimal and add a row here.
 
-## Verified against scriptc `main` (2026-08-31, commit 2b6e652)
+## Retired in 0.0.36 (released 2026-09-02, pinned 2026-09-03)
 
-Fixed upstream, awaiting an npm release past 0.0.35:
+These are **fixed upstream, consumed here, and gone from the codebase.** The
+row above each one used to describe is deleted, not softened.
 
-| Upstream fix | Ours | Effect when released |
+| Upstream fix | Issue | What we deleted, and what it bought |
 |---|---|---|
-| PR #268 — FFI calls in variable initializers | [#21](https://github.com/vercel-labs/scriptc/issues/21) | the `+ 0` convention goes away entirely (all three forms verified) |
-| PR #267 — string self-concatenation | [#258](https://github.com/vercel-labs/scriptc/issues/258) | `s = s + c` is now linear, and faster than Node (400k appends: 1692 ms → 4 ms). Our push+join code stays correct; the *constraint* is gone |
-| PR #266 — inline record assertions | [#262](https://github.com/vercel-labs/scriptc/issues/262) (1 of 3) | indexing an inline cast no longer crashes |
-| PR #270 — reject callback re-entry | [#263](https://github.com/vercel-labs/scriptc/issues/263) | illegal re-entry now traps with `SC4026` through the panic sink. **Verified our design is not caught by it**: we only re-enter from a later turn of the host's own loop, which still runs unchanged |
+| PR #268 — FFI calls in variable initializers | [#21](https://github.com/vercel-labs/scriptc/issues/21) | The `+ 0` convention, entirely: 13 code sites in `runtime/janela.ts`, the generated `entry.ts` line in `bin/janela.mjs`, and — the part that mattered — the comment blocks in all five templates and `examples/demo` that *taught* the gotcha to every new project. A scaffolded app no longer contains the string. |
+| PR #271 — per-program stdlib tree-shaking | [#256](https://github.com/vercel-labs/scriptc/issues/256) | Nothing to delete; it is pure payoff. **Desktop binaries fell 41–58%** (see the table in [`frontend.md`](frontend.md)). Desktop only — see the caveat below. |
+| PR #267 — string self-concatenation | [#258](https://github.com/vercel-labs/scriptc/issues/258) | The *constraint* behind the drain's push+join, not the code. `s = s + c` is linear now. Re-measured at the drain's real shape (256 × 128 KB): push+join 4–5 ms vs concat 5–6 ms, so the push+join stays — it is no longer a workaround, just the faster of two correct options. |
+| large-string indexing (0.0.36) | [#261](https://github.com/vercel-labs/scriptc/issues/261) | Indexing a large non-ASCII string is no longer O(index) — re-measured 2026-09-03: 200 probes spread across a 200 000-char `é` string, 0 ms. No shim existed; the runtime simply stops having to avoid the shape. |
+| PR #266 — inline record assertions | [#262](https://github.com/vercel-labs/scriptc/issues/262) (case 1 of 3) | Indexing an inline cast no longer crashes. |
+| PR #270 — reject callback re-entry | [#263](https://github.com/vercel-labs/scriptc/issues/263) | Illegal re-entry traps with `SC4026`. **Verified janela's design is not caught by it**: we only re-enter from a later turn of the host's own loop. |
 
-Still unfixed on `main`, so these stay:
+**Why mobile did not shrink.** The elimination is section-based dead-stripping
+applied **at scriptc's own executable link step** —
+`executableSectionEliminationFlags` in `backend/native-toolchain.js` returns
+`-Wl,-dead_strip` on darwin and `-ffunction-sections -fdata-sections` +
+`-Wl,--gc-sections` on linux. iOS and Android are the only lanes that build in
+*library* mode: scriptc emits a static archive and Xcode or Gradle performs the
+final link, so scriptc's dead-strip never runs on them. Measured: the desktop
+executable carries **0** dead `scr_path_win32_*` / `scr_exec_*` symbols, the
+iOS static archive still carries **11**, and the shipped `.app` / `.apk` did
+not shrink (+64 B on iOS, +4 KB of APK padding on Android). Nothing to retire
+here — it is an upstream lane gap, not a shim.
 
-- `JSON.stringify(null)` and `Object.keys` on a generic mapped type still crash (`SC9001`) — two of #262's three cases; reported again after the close.
-- Indexing a large non-ASCII string is still O(index) ([#261](https://github.com/vercel-labs/scriptc/issues/261)).
-- Library mode still refuses `async`, and microtasks still never drain across host re-entries ([#265](https://github.com/vercel-labs/scriptc/issues/265)) — this is the one that would let `commandAsync` collapse into `command`.
-- The Windows link line still omits winpthread ([#255](https://github.com/vercel-labs/scriptc/issues/255)), so the `pthread` entry stays; and the PE `Subsystem` patch stays until [#259](https://github.com/vercel-labs/scriptc/issues/259) / their PR #269 lands.
+## Still carried, with the issue that would let us delete it
+
+| What we carry | Why | Retire when |
+|---|---|---|
+| Avoid `JSON.stringify(null)` | A bare unit literal still crashes the compiler on 0.0.36: `SC9001: internal compiler error: in %init.0: bare unitLit 'null' outside a unionWrap`. One of [#262](https://github.com/vercel-labs/scriptc/issues/262)'s three cases, reported again after the close | #262's remaining case lands |
+| Avoid `Object.keys` on a *generic mapped type* | Still unsupported, but **no longer a crash** — 0.0.36 reports `SC2020: 'Object.keys' … has no scriptc lowering yet`. Verified 2026-09-03: `{ [K in keyof T]: … }` through a generic fails; `Object.keys` on a plain record compiles and runs | scriptc lowers `Object.keys` for mapped types |
+| Post-link PE `Subsystem` patch | No way to pass `-mwindows`; a console window otherwise sits behind the app | [#259](https://github.com/vercel-labs/scriptc/issues/259) gives us a linker-flag route. Their PR #269 was **closed unmerged**, so this one has no landing date |
+| `pthread` in `system_libraries` on Windows | scriptc's win32 link line still omits libwinpthread, so `clock_gettime` / `nanosleep` are undefined. Re-checked in 0.0.36: `native-toolchain.js` passes `-pthread` for POSIX drivers and `[]` for `win32` (its own code uses `CreateThread`), so our shim's POSIX time calls have nothing to link against | [#255](https://github.com/vercel-labs/scriptc/issues/255) is fixed |
+
+Unchanged from before, and unaffected by 0.0.36: library mode still refuses
+`async`, and microtasks still never drain across host re-entries
+([#265](https://github.com/vercel-labs/scriptc/issues/265)) — that is the one
+that would let `commandAsync` collapse into `command`.

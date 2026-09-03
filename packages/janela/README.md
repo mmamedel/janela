@@ -5,8 +5,11 @@
 Desktop and mobile apps in pure TypeScript, compiled to native. No Rust, no
 Node, no Electron. The backend is TypeScript compiled to a native binary by
 [scriptc](https://scriptc.dev); the window is the OS webview via
-[webview/webview](https://github.com/webview/webview). Binaries come out
-around 400–500 KB, with no bundled browser and no bundled runtime.
+[webview/webview](https://github.com/webview/webview). A desktop binary comes
+out around 200–400 KB — 191 KB for the smallest template — with no bundled
+browser and no bundled runtime; iOS and Android bundles land around
+384–578 KB. Per-template figures are in
+[docs/frontend.md](../../docs/frontend.md).
 
 Five targets, one runtime — the same `main.ts`, the same typed contract and the
 same frontend build for each:
@@ -542,7 +545,7 @@ app.command("add", (args) => {
 Mechanically: drop the `JSON.parse(argsJson)` (cast `args` instead), drop
 every `JSON.stringify` around a result, `resolve`/`reject`/`emit` payload, and
 return nothing at all where you used to return `"null"`. Requires Node 24 to
-build (scriptc 0.0.35's floor).
+build (scriptc 0.0.36's floor).
 
 ## What the CLI hides
 
@@ -559,10 +562,6 @@ no `-framework` support) and the binary is wrapped into an ad-hoc-signed
   the boundary, so anything that survives `JSON.stringify`/`JSON.parse` round
   trips (including full Unicode). `args` is typed `unknown` — cast it to the
   shape you expect.
-- Never use a bare FFI call as a complete variable initializer or assignment
-  RHS — it is silently miscompiled. Wrap it in any expression (`+ 0`). Plain
-  TypeScript is unaffected; only the runtime does FFI, so app code rarely
-  meets this.
 - One window per app for now. Host code is single-threaded: a synchronous
   command blocks the UI while it runs — use `commandAsync` + `defer`/`sleep`
   (see "Async commands") for anything slow.
@@ -583,8 +582,10 @@ It is **simulator-only** so far — device builds and code signing are not
 wired up yet. Commands, the typed
 contract, events, Vite frontends, async commands (`commandAsync`, `defer`,
 `sleep`) and file I/O all work the same as on desktop — the shell owns the
-clock and the file queue on both. File dialogs are not on iOS yet and report
-clearly when called; window control is a no-op there by nature. See
+clock and the file queue on both. `openFileDialog` works as of 0.13.0 — the
+picked file is copied into the app container and that path returned, so
+`readFileAsync` opens it exactly as on desktop. `saveFileDialog` reports
+clearly when called, and window control is a no-op there by nature. See
 [docs/ios.md](../../docs/ios.md).
 
 ## Android
@@ -615,11 +616,18 @@ The design notes and scriptc findings behind it are in
 [docs/findings.md](../../docs/findings.md), with per-platform notes in
 [docs/ios.md](../../docs/ios.md) and [docs/android.md](../../docs/android.md).
 
-Not yet: native dialogs and window control on mobile; device builds and code
-signing; icons, installers and notarization; async commands that run in
-parallel (host code is single-threaded, so `commandAsync` interleaves and a
-CPU-bound handler still needs slicing); an async HTTP client; tray icons and
-menus; multi-window; directory picking on Windows; and `app.center()`.
+Not yet: `saveFileDialog` and window control on mobile (both deliberate —
+mobile "save" means exporting a file that already exists, which the desktop
+signature cannot express, and window geometry is meaningless on a phone);
+iOS device builds and code signing; installers and notarization; async
+commands that run in parallel (host code is single-threaded, so
+`commandAsync` interleaves and a CPU-bound handler still needs slicing); an
+async HTTP client; tray icons and menus; multi-window; directory picking on
+Windows and iOS; and `app.center()`.
+
+`openFileDialog` **does** work on iOS and Android as of 0.13.0 — a picked
+file is copied into the app container and that path returned, so
+`readFileAsync` opens it exactly as on desktop.
 
 ## Releasing
 

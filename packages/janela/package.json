@@ -21,7 +21,7 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "scriptc": "0.0.35"
+    "scriptc": "0.0.36"
   },
   "license": "MIT",
   "author": "Mateus Lage",

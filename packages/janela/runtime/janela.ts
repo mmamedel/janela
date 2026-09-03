@@ -4,11 +4,6 @@
 // (name, argsJson) envelope, dispatched to handlers registered on the app
 // object. Handlers see decoded values — the runtime owns JSON at the boundary.
 // Backend→frontend events ride wv_eval into the injected bootstrap.
-//
-// NOTE ON STYLE: every FFI call whose result initializes a variable is written
-// `f(...) + 0`. scriptc miscompiles a bare FFI call used as a complete
-// initializer/assignment RHS — still true in 0.0.35, and reported upstream as
-// vercel-labs/scriptc#21. Any enclosing expression is the workaround.
 
 declare function wvCreate(debug: number): number;
 declare function wvSetTitle(h: number, title: string): number;
@@ -202,7 +197,7 @@ export class JanelaAppImpl<
   drainSize: number[] = [];
 
   constructor(cfg: WindowConfig) {
-    const h = wvCreate(0) + 0;
+    const h = wvCreate(0);
     this.handle = h;
     wvSetTitle(h, cfg.title);
     wvSetSize(h, cfg.width, cfg.height, 0);
@@ -221,9 +216,7 @@ export class JanelaAppImpl<
     this.contIds.push(id);
     this.contFns.push(fn);
     const delay = ms > 0 ? ms : 0;
-    // `+ 0` per the note at the top of this file: a bare FFI call is not safe
-    // in every position, and this one is silently dropped without it.
-    const rc = wvSchedule(this.handle, id, delay) + 0;
+    const rc = wvSchedule(this.handle, id, delay);
     if (rc < 0) console.log("[janela] could not schedule continuation", id);
   }
 
@@ -254,14 +247,14 @@ export class JanelaAppImpl<
    */
   drainSome(): void {
     if (this.drainIds.length === 0) return;
-    const started = Date.now() + 0;
+    const started = Date.now();
 
     while (this.drainIds.length > 0) {
       let chunk = "";
       const taken =
         wvJobTakeAt(this.handle, this.drainIds[0], this.drainOff[0], DRAIN_SLICE, (text) => {
           chunk = text;
-        }) + 0;
+        });
 
       // A negative count means the job vanished; treat the payload as final
       // rather than spinning on it forever.
@@ -334,7 +327,7 @@ export class JanelaAppImpl<
       const doneCbs: FsCallback[] = [];
       const doneOk: boolean[] = [];
       for (let i = 0; i < this.jobIds.length; i++) {
-        const st = wvJobStatus(this.handle, this.jobIds[i]) + 0;
+        const st = wvJobStatus(this.handle, this.jobIds[i]);
         if (st === JOB_PENDING) {
           keptIds.push(this.jobIds[i]);
           keptCbs.push(this.jobCbs[i]);
@@ -355,7 +348,7 @@ export class JanelaAppImpl<
         this.drainOk.push(doneOk[i]);
         this.drainParts.push([]);
         this.drainOff.push(0);
-        this.drainSize.push(wvJobSize(this.handle, doneIds[i]) + 0);
+        this.drainSize.push(wvJobSize(this.handle, doneIds[i]));
       }
     }
 
@@ -381,7 +374,7 @@ export class JanelaAppImpl<
       defaultPath === undefined ? "" : defaultPath,
       defaultName === undefined ? "" : defaultName,
       encodeFilters(filters),
-    ) + 0;
+    );
     if (id < 0) {
       this.defer(() => cb(null, "EAGAIN: could not open a dialog"));
       return;
@@ -452,7 +445,7 @@ export class JanelaAppImpl<
    * worker thread; the callback lands on the UI thread on a later turn.
    */
   readFileAsync(path: string, cb: FsCallback): void {
-    const id = wvFsRead(this.handle, path) + 0;
+    const id = wvFsRead(this.handle, path);
     if (id < 0) {
       this.defer(() => cb("EAGAIN: could not start a read of '" + path + "'", ""));
       return;
@@ -463,7 +456,7 @@ export class JanelaAppImpl<
 
   /** Write a file without blocking the window; cb(null) on success. */
   writeFileAsync(path: string, data: string, cb: (err: string | null) => void): void {
-    const id = wvFsWrite(this.handle, path, data) + 0;
+    const id = wvFsWrite(this.handle, path, data);
     if (id < 0) {
       this.defer(() => cb("EAGAIN: could not start a write of '" + path + "'"));
       return;
@@ -555,7 +548,7 @@ export class JanelaAppImpl<
           // Park the page's promise: the shim holds this call's id and
           // answers it when resolve/reject reaches wvResolve, whenever
           // that is. Meanwhile the loop is free to serve other calls.
-          const id = wvDefer(h) + 0;
+          const id = wvDefer(h);
           if (id < 0) {
             wvReply(h, encode("cannot defer command: " + cmd));
             return 1;
@@ -579,7 +572,7 @@ export class JanelaAppImpl<
 
     wvBind(h, "__invoke");
     wvSetHtml(h, html);
-    const rc = wvRun(h) + 0;
+    const rc = wvRun(h);
     return rc;
   }
 }
