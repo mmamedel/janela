@@ -2,21 +2,20 @@
 //
 //   pnpm test:e2e
 //
-// Env knobs:
-//   JANELA_TEST_LANES=desktop,ios,android   default: desktop
-//   JANELA_TEST_TEMPLATES=vanilla,vue,...   default: vanilla,vue
-//   JANELA_TEST_BIG_MB=32                   size of the large-read file
-//   JANELA_TEST_DRAIN_P99_MAX_MS=50         tail bound during that read
-//   JANELA_TEST_SYNC_MAX_MS=150             sync latency bound while async pending
-//   JANELA_TEST_KEEP=1                      keep fixture projects for inspection
+// Every environment knob, its default and its meaning live in one place:
+// `lib/env.mjs`. That module is also the gate — an unrecognised JANELA_*
+// variable, or a selector that narrows the run to nothing, fails the run
+// before the first test is defined. See docs/testing.md ("Failing loudly").
 //
-// The mobile lanes need a booted simulator/emulator and are skipped when one
-// is absent, so this file is safe to run anywhere.
+// The mobile lanes need a booted simulator/emulator. Selecting one that is not
+// there is an error, not a skip: a run that quietly covers less than it was
+// asked to must not be able to look green.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { cleanup, prepareProject } from "./lib/project.mjs";
 import { selectedLanes, selectedTemplates } from "./lib/lanes.mjs";
+import { assertKnownEnv, KNOBS } from "./lib/env.mjs";
 import {
   CORE_ASSERTIONS,
   FRAMEWORK_ASSERTION,
@@ -25,14 +24,45 @@ import {
   verdict,
 } from "./lib/results.mjs";
 
-const lanes = selectedLanes();
-const templates = selectedTemplates();
+assertKnownEnv();
+
+const { lanes, skipped } = selectedLanes();
+const { chosen: templates } = selectedTemplates();
+
+// What this run is about to cover, before it covers it. Printed unconditionally
+// so the log says which lanes and templates the numbers below belong to — the
+// count alone ("# pass 3") never distinguished three desktop tests from three
+// iOS ones.
+const knobsSet = Object.keys(KNOBS).filter((k) => process.env[k] !== undefined);
+console.log(
+  [
+    "",
+    `janela e2e — ${lanes.length} lane(s) x ${templates.length} template(s)`,
+    `  lanes:     ${lanes.map((l) => l.name).join(", ")}`,
+    `  templates: ${templates.join(", ")}`,
+    skipped.length ? `  SKIPPED:   ${skipped.map((l) => `${l.name} (${l.hint})`).join(", ")}` : null,
+    `  knobs set: ${knobsSet.length ? knobsSet.map((k) => `${k}=${process.env[k]}`).join(" ") : "(none — all defaults)"}`,
+    "",
+  ]
+    .filter((l) => l !== null)
+    .join("\n"),
+);
+
+// Which batteries actually reached their assertions. Counted rather than
+// inferred from the exit status, and reported at the end, so "it passed" always
+// comes with what it passed on.
+const covered = [];
+process.on("exit", () => {
+  const expected = lanes.length * templates.length + lanes.length;
+  console.log(
+    `\njanela e2e — ran ${covered.length}/${expected} test(s): ${covered.join(", ") || "NOTHING"}` +
+      (skipped.length ? `\n  lanes skipped by JANELA_TEST_SKIP_UNAVAILABLE: ${skipped.map((l) => l.name).join(", ")}` : ""),
+  );
+});
 
 for (const lane of lanes) {
-  const skip = lane.available() ? false : `${lane.name}: no device/host available`;
-
   for (const template of templates) {
-    test(`${lane.name} · ${template} · behaviour battery`, { skip, timeout: 30 * 60_000 }, () => {
+    test(`${lane.name} · ${template} · behaviour battery`, { timeout: 30 * 60_000 }, () => {
       const project = prepareProject({
         template,
         name: `e2e-${lane.name}-${template}`,
@@ -62,6 +92,7 @@ for (const lane of lanes) {
         assert.equal(signal, null, `app terminated by signal ${signal}`);
         if (lane.name === "desktop") assert.equal(exitCode, 0, `app exited ${exitCode}`);
         passed = true;
+        covered.push(`${lane.name}/${template}`);
       } finally {
         if (passed) cleanup(project.dir);
       }
@@ -70,7 +101,7 @@ for (const lane of lanes) {
 
   // Quitting with a read and a 5s timer in flight must exit cleanly, and
   // neither continuation may fire afterwards.
-  test(`${lane.name} · clean exit with work in flight`, { skip, timeout: 30 * 60_000 }, () => {
+  test(`${lane.name} · clean exit with work in flight`, { timeout: 30 * 60_000 }, () => {
     const project = prepareProject({
       template: "vanilla",
       name: `e2e-${lane.name}-quit`,
@@ -104,6 +135,7 @@ for (const lane of lanes) {
       assert.equal(signal, null, `app terminated by signal ${signal}`);
       if (lane.name === "desktop") assert.equal(exitCode, 0, `app exited ${exitCode}`);
       passed = true;
+      covered.push(`${lane.name}/quit`);
     } finally {
       if (passed) cleanup(project.dir);
     }
