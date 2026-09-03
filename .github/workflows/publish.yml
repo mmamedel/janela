@@ -151,6 +151,26 @@ jobs:
           registry-url: https://registry.npmjs.org
       - name: Update npm (trusted publishing needs npm >= 11.5)
         run: npm install -g npm@latest
+      # The repo declares `janela: workspace:^` so a checkout installs by
+      # linking the sibling and never asks the registry for a version that may
+      # not exist yet — that chicken-and-egg turned CI red once already. npm
+      # does not understand the workspace protocol, so the concrete range is
+      # written here, immediately before publishing. `pnpm publish` would do
+      # this rewrite itself, but npm is what carries the OIDC exchange for
+      # trusted publishing, so the rewrite is explicit instead.
+      #
+      # janela's version is the right pin whether or not this run published it:
+      # if the publish job was skipped, that version is already on the
+      # registry.
+      - name: Pin the janela dependency to ^${{ needs.check-version.outputs.version }}
+        working-directory: packages/create-janela
+        run: |
+          npm pkg set dependencies.janela="^${{ needs.check-version.outputs.version }}"
+          node -e "
+            const dep = require('./package.json').dependencies.janela;
+            if (dep.startsWith('workspace:')) { console.error('workspace spec survived the rewrite: ' + dep); process.exit(1); }
+            console.log('publishing with janela ' + dep);
+          "
       - name: Publish create-janela@${{ needs.check-create-version.outputs.version }}
         working-directory: packages/create-janela
         run: npm publish
