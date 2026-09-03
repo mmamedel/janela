@@ -12,8 +12,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { KNOBS, PASSTHROUGH, assertKnownEnv, knownTemplates, selectList } from "./lib/env.mjs";
-import { IOS, LANES, selectedLanes, selectedTemplates } from "./lib/lanes.mjs";
+import { IOS, LANES, selectedLanes, selectedTemplates, unescapeOsLog } from "./lib/lanes.mjs";
 import { REPO } from "./lib/project.mjs";
+import { parse } from "./lib/results.mjs";
 
 const clean = { PATH: "/usr/bin", HOME: "/tmp", LANG: "C" };
 
@@ -192,4 +193,78 @@ test("every lane can say how to become available", () => {
     assert.equal(typeof lane.hint, "string", `${name} has no hint`);
     assert.ok(lane.hint.length > 0, `${name}'s hint is empty`);
   }
+});
+
+// --- reading a device log --------------------------------------------------
+//
+// The desktop lane reads a pipe: everything in it belongs to the run that just
+// finished. The device lanes read a LOG — a time window that also contains
+// earlier runs, of other templates, from other invocations. Every bug below
+// came from treating the second like the first.
+
+test("a result line from another run cannot satisfy this run's assertion", () => {
+  const line = `JANELA_TEST {"run":"OTHER","name":"fs-roundtrip","pass":true,"value":1}`;
+  const parsed = parse(line, "MINE");
+  assert.deepEqual(parsed.results, [], "a foreign pass leaked into this run");
+});
+
+test("an unparseable line from another run is not this run's failure", () => {
+  // Reported as a false failure on the ios lane: `ios · vanilla` failed citing
+  // a payload whose run id was an earlier `ios · vue`.
+  const line = `JANELA_TEST {"run":"e2e-ios-vue-OLD","name":"x","value":"\\134n"}`;
+  assert.deepEqual(parse(line, "e2e-ios-vanilla-NEW").errors, []);
+});
+
+test("an unparseable line from THIS run is still a failure", () => {
+  const line = `JANELA_TEST {"run":"MINE","name":"x","value":not-json}`;
+  const errors = parse(line, "MINE").errors;
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /unparseable result line/);
+});
+
+test("a page error is attributed to its own run", () => {
+  const mine = `JANELA_TEST_ERROR {"run":"MINE","error":"TypeError: boom"}`;
+  const theirs = `JANELA_TEST_ERROR {"run":"OTHER","error":"TypeError: boom"}`;
+  assert.deepEqual(parse(theirs, "MINE").errors, [], "another run's stack failed this run");
+  assert.deepEqual(parse(mine, "MINE").errors, ["page threw: TypeError: boom"]);
+});
+
+test("os_log's escaped backslash is undone before parsing", () => {
+  // The exact shape captured from `simctl spawn … log show`: a payload whose
+  // JSON escape `\n` arrives as the octal escape for a backslash, then `n`.
+  const line =
+    `JANELA_TEST {"run":"MINE","name":"framework-mounted","pass":true,` +
+    `"value":"\\134n    Hello, janela\\134n  "}`;
+
+  assert.deepEqual(parse(line, "MINE").results, [], "precondition: the raw line does not parse");
+
+  const fixed = unescapeOsLog(line);
+  const results = parse(fixed, "MINE").results;
+  assert.equal(results.length, 1, "framework-mounted should parse once unescaped");
+  assert.equal(results[0].name, "framework-mounted");
+  assert.equal(results[0].pass, true);
+  assert.match(results[0].value, /\n {4}Hello, janela\n {2}/);
+});
+
+test("the unescaper leaves everything else alone, including UTF-8", () => {
+  const text = `JANELA_TEST {"run":"MINE","name":"fs-unicode","pass":true,"value":"— çãé 🚀"}`;
+  assert.equal(unescapeOsLog(text), text);
+  assert.equal(parse(unescapeOsLog(text), "MINE").results[0].value, "— çãé 🚀");
+});
+
+/**
+ * docs/testing.md lists the knobs in a hand-written table, and a hand-written
+ * list of the same thing is exactly what goes stale. This is the cheapest
+ * possible guard: the doc and the gate must name the same set.
+ */
+test("docs/testing.md documents exactly the knobs the suite reads", () => {
+  const doc = readFileSync(join(REPO, "docs", "testing.md"), "utf8");
+  const table = doc.slice(doc.indexOf("## Knobs"));
+  const documented = new Set([...table.matchAll(/^\| `(JANELA_[A-Z0-9_]+)`/gm)].map((m) => m[1]));
+  const read = new Set(Object.keys(KNOBS));
+
+  const missing = [...read].filter((k) => !documented.has(k));
+  const extra = [...documented].filter((k) => !read.has(k));
+  assert.deepEqual(missing, [], "knobs the suite reads but docs/testing.md omits");
+  assert.deepEqual(extra, [], "knobs docs/testing.md lists but nothing reads");
 });

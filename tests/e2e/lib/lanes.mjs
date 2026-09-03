@@ -29,6 +29,24 @@ function finishedRe(project) {
   return new RegExp(`JANELA_TEST_(?:DONE|WORK_STARTED)[^\n]*${id}`);
 }
 
+/**
+ * Undo `log show`'s escaping of the backslash.
+ *
+ * The unified log renders a literal `\` in a message as the octal escape
+ * `\134`, so a payload that JSON-encoded a newline — `"value":"...\n..."` —
+ * reaches the reader as `\134n`. `\1` is not a valid JSON escape, so every
+ * result line carrying a newline failed to parse, which on the framework
+ * templates meant `framework-mounted` was reported MISSING even though the
+ * page had emitted `pass:true`. The app was never wrong; only the reader was.
+ *
+ * Scoped to `\134` deliberately: the log leaves UTF-8 alone (the `— çãé 🚀`
+ * assertion round-trips), and a blanket octal unescape would corrupt any
+ * payload that legitimately contained such a sequence.
+ */
+export function unescapeOsLog(text) {
+  return String(text).split("\\134").join("\\");
+}
+
 function conf(dir) {
   return JSON.parse(readFileSync(join(dir, "janela.conf.json"), "utf8"));
 }
@@ -111,7 +129,7 @@ export const IOS = {
     }
     // The simulator app's exit code is not observable this way; the suite
     // judges the run on the assertions, which is the stronger signal anyway.
-    return { output, exitCode: 0, signal: null };
+    return { output: unescapeOsLog(output), exitCode: 0, signal: null };
   },
 };
 

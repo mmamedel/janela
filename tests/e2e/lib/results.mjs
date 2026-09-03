@@ -8,7 +8,7 @@
 
 const LINE = /JANELA_TEST (\{.*\})\s*$/;
 const DONE = /JANELA_TEST_DONE (\{.*\})\s*$/;
-const ERROR = /JANELA_TEST_ERROR (".*")\s*$/;
+const ERROR = /JANELA_TEST_ERROR (\{.*\})\s*$/;
 const LATE = /JANELA_TEST_LATE (.*)$/;
 
 /** Every assertion the battery emits on every lane. */
@@ -55,8 +55,14 @@ export function parse(output, runId) {
       try {
         const r = JSON.parse(m[1]);
         if (r.run === runId) results.push(r);
-      } catch (e) {
-        errors.push(`unparseable result line: ${line}`);
+      } catch {
+        // A line that will not parse cannot be attributed by its payload, so
+        // fall back to the raw text. Without this the device lanes — which
+        // read a log over a time window, not a pipe — reported the CURRENT
+        // run as failed because an EARLIER run of a DIFFERENT template had
+        // left a malformed line in the window. Unparseable and not ours is
+        // not our problem; unparseable and ours is a real failure.
+        if (line.includes(runId)) errors.push(`unparseable result line: ${line}`);
       }
       continue;
     }
@@ -72,7 +78,14 @@ export function parse(output, runId) {
     }
     m = ERROR.exec(line);
     if (m) {
-      errors.push(`page threw: ${JSON.parse(m[1])}`);
+      // Run-scoped for the same reason: a stack trace from a previous run in
+      // the log window used to fail whichever test read it next.
+      try {
+        const e = JSON.parse(m[1]);
+        if (e.run === runId) errors.push(`page threw: ${e.error}`);
+      } catch {
+        if (line.includes(runId)) errors.push(`unparseable error line: ${line}`);
+      }
       continue;
     }
     m = LATE.exec(line);

@@ -51,7 +51,14 @@
         // Never let a throw end the run silently: name the failure, then still
         // print DONE so the runner can distinguish "crashed here" from "hung".
         return window.janela
-          .invoke("log", "JANELA_TEST_ERROR " + JSON.stringify(String(e && e.stack ? e.stack : e)))
+          .invoke(
+            "log",
+            // The run id travels with the error: on a device lane the reader
+            // sees a log window, so an unattributed stack fails whichever
+            // run reads it next.
+            "JANELA_TEST_ERROR " +
+              JSON.stringify({ run: cfg.runId, error: String(e && e.stack ? e.stack : e) }),
+          )
           .then(function () {
             return window.janela.invoke(
               "log",
