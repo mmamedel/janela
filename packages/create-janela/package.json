@@ -12,5 +12,5 @@
   "bin": { "create-janela": "index.mjs" },
   "files": ["index.mjs"],
   "engines": { "node": ">=24" },
-  "dependencies": { "janela": "^0.14.3" }
+  "dependencies": { "janela": "^0.15.0" }
 }

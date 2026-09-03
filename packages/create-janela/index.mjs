@@ -125,9 +125,23 @@ const interactive = stdin.isTTY && stdout.isTTY && !has("--yes");
 
 async function main() {
   const root = janelaRoot();
-  const { NAME_RE, suggestName } = await import(
-    pathToFileURL(join(root, "bin", "lib.mjs")).href
-  );
+
+  // janela's own validator, so the two cannot disagree about what a name is.
+  // bin/lib.mjs is not in its exports map — this is a deliberate reach into a
+  // sibling we ship with, which the ^ dependency range pins to a tested minor.
+  // If a future janela moves it anyway, fall back rather than crash: the CLI
+  // validates the name again regardless, so the worst case is a plainer
+  // message, not a bad project.
+  let NAME_RE = /^[a-z][a-z0-9_-]*$/;
+  let suggestName = (raw) =>
+    String(raw).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  try {
+    const lib = await import(pathToFileURL(join(root, "bin", "lib.mjs")).href);
+    if (lib.NAME_RE instanceof RegExp) NAME_RE = lib.NAME_RE;
+    if (typeof lib.suggestName === "function") suggestName = lib.suggestName;
+  } catch {
+    // keep the fallbacks
+  }
 
   /** A name janela will accept, and that is not already a directory here. */
   function checkName(raw) {
