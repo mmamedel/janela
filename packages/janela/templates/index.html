@@ -1,33 +1,204 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>__NAME__</title>
     <style>
-      body { font: 16px -apple-system, sans-serif; padding: 2rem; }
-      input[type="number"] { width: 5em; }
-      #events { color: #666; font-size: 13px; }
+      /* Everything here is yours to replace. It is deliberately one file with
+         no dependencies: this template has no bundler, so what you see is what
+         runs. The mark below is drawn in CSS rather than shipped as an image —
+         a janela frontend is embedded in the binary, so every asset has to be
+         inlined anyway, and a window needs no artwork. */
+      :root {
+        color-scheme: light dark;
+        --bg: #f6f6f7;
+        --card: #ffffff;
+        --text: #18181b;
+        --muted: #71717a;
+        --line: #e4e4e7;
+        --accent: #2563eb;
+        --accent-soft: #eff4ff;
+        --shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px -12px rgb(0 0 0 / 0.12);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #17171a;
+          --card: #202024;
+          --text: #fafafa;
+          --muted: #a1a1aa;
+          --line: #2e2e34;
+          --accent: #60a5fa;
+          --accent-soft: #1d2433;
+          --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px -12px rgb(0 0 0 / 0.5);
+        }
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        background: var(--bg);
+        color: var(--text);
+        font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      main { width: 100%; max-width: 760px; padding: 26px 22px 32px; }
+
+      /* --- header ------------------------------------------------------- */
+      header { text-align: center; margin-bottom: 20px; }
+      .mark {
+        width: 56px; height: 44px; margin: 0 auto 14px;
+        border: 2px solid var(--text); border-radius: 8px;
+        display: flex; flex-direction: column; overflow: hidden;
+      }
+      .mark .bar {
+        height: 13px; flex: none;
+        border-bottom: 2px solid var(--text);
+        display: flex; align-items: center; gap: 3px; padding: 0 4px;
+      }
+      .mark .bar i { width: 3px; height: 3px; border-radius: 50%; background: var(--text); }
+      .mark .pane { flex: 1; background: linear-gradient(135deg, var(--accent), transparent 70%); opacity: 0.85; }
+      h1 { margin: 0; font-size: 26px; letter-spacing: -0.02em; font-weight: 650; }
+      .sub { margin: 5px 0 0; color: var(--muted); font-size: 13.5px; }
+
+      /* The one line that proves the whole stack: this string was produced by
+         TypeScript compiled to machine code, and handed to the page. */
+      .greeting {
+        margin: 0 0 20px;
+        padding: 11px 16px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--accent-soft);
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        text-align: center;
+        overflow-wrap: anywhere;
+      }
+
+      /* --- cards -------------------------------------------------------- */
+      /* auto-fit rather than a fixed column count: the same page is the iOS and
+         Android frontend, where it must read as a single column. */
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 13px; }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 15px 17px;
+        box-shadow: var(--shadow);
+      }
+      .card h2 {
+        margin: 0 0 2px;
+        font-size: 13px; font-weight: 600;
+        letter-spacing: 0.04em; text-transform: uppercase;
+        color: var(--muted);
+      }
+      .card.wide { grid-column: 1 / -1; }
+      .card p.why { margin: 0 0 11px; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+      .card h3 {
+        margin: 16px 0 6px; font-size: 11px; font-weight: 600;
+        letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted);
+      }
+      .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+      input, button {
+        font: inherit;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        padding: 8px 12px;
+        background: var(--card);
+        color: var(--text);
+        transition: border-color 0.15s, background 0.15s;
+      }
+      input { min-width: 0; }
+      input[type="number"] { width: 5.5em; text-align: center; }
+      input.grow { flex: 1 1 12em; }
+      input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+      button { cursor: pointer; font-weight: 500; }
+      button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+      button:disabled { opacity: 0.5; cursor: default; }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      button.primary:hover:not(:disabled) { filter: brightness(1.08); color: #fff; }
+
+      .result { margin: 12px 0 0; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+      .result.filled { color: var(--text); }
+      pre.result { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 11em; overflow: auto; margin-top: 12px; }
+
+      /* A dot that keeps moving while a 2s command is pending. If it stalls,
+         the host has blocked the UI thread — which is the bug this proves is
+         absent. */
+      .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1s ease-in-out infinite; }
+      @keyframes pulse { 0%, 100% { opacity: 0.25; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.15); } }
+      @media (prefers-reduced-motion: reduce) { .pulse { animation: none; opacity: 1; } }
+
+      ul.events { list-style: none; margin: 0; padding: 0; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      ul.events li { padding: 3px 0; border-bottom: 1px dashed var(--line); }
+      ul.events li:last-child { border-bottom: 0; }
+      ul.events:empty::after { content: "nothing yet — press add"; color: var(--muted); font-family: inherit; }
+
+      footer { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; }
+      footer code { background: var(--card); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; font-size: 12px; }
+
     </style>
   </head>
   <body>
-    <h1>__NAME__</h1>
-    <p>
-      <input id="a" type="number" value="2" /> +
-      <input id="b" type="number" value="40" />
-      <button id="add">add</button>
-      <button id="wait">wait 2s (async)</button>
-      <button id="quit">Quit</button>
-    </p>
-    <p>
-      <input id="path" type="text" value="janela.conf.json" size="32" />
-      <button id="read">read file (async)</button>
-      <button id="open">pick a file…</button>
-    </p>
-    <p>
-      <input id="title" type="text" value="__NAME__ — renamed" size="24" />
-      <button id="retitle">set window title</button>
-    </p>
-    <pre id="out">booting…</pre>
-    <ul id="events"></ul>
+    <main>
+      <header>
+        <div class="mark" aria-hidden="true">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div class="pane"></div>
+        </div>
+        <h1>__NAME__</h1>
+        <p class="sub">TypeScript, compiled to a native binary. No Rust, no Node, no Electron.</p>
+      </header>
+
+      <p class="greeting" id="out">booting…</p>
+
+      <div class="grid">
+        <section class="card">
+          <h2>Typed commands</h2>
+          <p class="why">The name, the arguments and the result are all checked at compile time — no codegen, because both sides are TypeScript.</p>
+          <div class="row">
+            <input id="a" type="number" value="2" aria-label="first number" />
+            <span aria-hidden="true">+</span>
+            <input id="b" type="number" value="40" aria-label="second number" />
+            <button id="add" class="primary">add</button>
+          </div>
+          <p class="result" id="sum">—</p>
+          <h3>Events from the host</h3>
+          <ul class="events" id="events"></ul>
+        </section>
+
+        <section class="card">
+          <h2>Async without blocking</h2>
+          <p class="why">The window keeps answering while this is pending: the dot keeps moving and <strong>add</strong> still works.</p>
+          <div class="row">
+            <button id="wait">wait 2s</button>
+            <span id="spinner" hidden><span class="pulse"></span></span>
+          </div>
+          <p class="result" id="waited">—</p>
+        </section>
+
+        <section class="card wide">
+          <h2>Files and the window</h2>
+          <p class="why">Reads run on a worker thread, so a large file never freezes the window. The dialog is the real native one.</p>
+          <div class="row">
+            <input id="path" class="grow" type="text" value="janela.conf.json" aria-label="file to read" />
+            <button id="read">read</button>
+            <button id="open">pick a file…</button>
+            <input id="title" class="grow" type="text" value="__NAME__ — renamed" aria-label="window title" />
+            <button id="retitle">set title</button>
+          </div>
+          <pre class="result" id="file">—</pre>
+        </section>
+      </div>
+
+      <footer>
+        <span>Edit <code>index.html</code> for the page and <code>src-host/main.ts</code> for the commands.</span>
+        <button id="quit">Quit</button>
+      </footer>
+    </main>
 
     <script>
       // This template has no bundler, so it uses the `janela` global that the
@@ -35,56 +206,56 @@
       // `import { invoke, listen } from "janela/api"` instead — same functions,
       // but typed and resolvable by the bundler.
       window.onload = async () => {
-        const out = document.getElementById("out");
-        const events = document.getElementById("events");
+        const $ = (id) => document.getElementById(id);
+        const show = (el, text) => {
+          el.textContent = text;
+          el.classList.add("filled");
+        };
 
         janela.listen("added", (sum) => {
           const li = document.createElement("li");
-          li.textContent = "event 'added' from host: " + sum;
-          events.prepend(li);
+          li.textContent = "host emitted 'added': " + sum;
+          $("events").prepend(li);
         });
 
-        out.textContent = await janela.invoke("greet", { name: "__NAME__" });
+        // The greeting is a round trip: the string is built in compiled
+        // TypeScript and returned to the page.
+        $("out").textContent = await janela.invoke("greet", { name: "__NAME__" });
         await janela.invoke("log", "page loaded");
 
-        document.getElementById("add").onclick = async () => {
-          const a = Number(document.getElementById("a").value);
-          const b = Number(document.getElementById("b").value);
-          const sum = await janela.invoke("add", { a, b });
-          out.textContent = `add(${a}, ${b}) -> ${sum}`;
+        $("add").onclick = async () => {
+          const a = Number($("a").value);
+          const b = Number($("b").value);
+          show($("sum"), `add(${a}, ${b}) → ${await janela.invoke("add", { a, b })}`);
         };
-        // The window stays responsive while this is pending: the spinner keeps
-        // animating and "add" still works.
-        document.getElementById("wait").onclick = async (e) => {
+
+        $("wait").onclick = async (e) => {
           e.target.disabled = true;
-          out.textContent = "waiting… (try 'add' — it still answers)";
-          out.textContent = await janela.invoke("wait", { ms: 2000 });
+          $("spinner").hidden = false;
+          show($("waited"), "waiting… try add, it still answers");
+          const answer = await janela.invoke("wait", { ms: 2000 });
+          show($("waited"), answer);
+          $("spinner").hidden = true;
           e.target.disabled = false;
         };
 
-        // Reads run on a worker thread in the shim, so even a large file
-        // does not freeze the window while it loads.
-        document.getElementById("read").onclick = async () => {
-          const path = document.getElementById("path").value;
+        $("read").onclick = async () => {
+          const path = $("path").value;
           const r = await janela.invoke("readFile", { path });
-          out.textContent = r.ok
-            ? `${path}: ${r.length} chars\n\n` + r.text.slice(0, 400)
-            : "error: " + r.error;
+          show($("file"), r.ok ? `${path} — ${r.length} chars\n\n${r.text.slice(0, 400)}` : "error: " + r.error);
         };
 
         // The native open dialog. The window keeps serving other commands
         // while the user is deciding.
-        document.getElementById("open").onclick = async () => {
+        $("open").onclick = async () => {
           const r = await janela.invoke("openFile", {});
-          if (!r.ok) out.textContent = "error: " + r.error;
-          else if (r.cancelled) out.textContent = "cancelled";
-          else out.textContent = `${r.path}: ${r.length} chars\n\n` + r.text.slice(0, 400);
+          if (!r.ok) show($("file"), "error: " + r.error);
+          else if (r.cancelled) show($("file"), "cancelled");
+          else show($("file"), `${r.path} — ${r.length} chars\n\n${r.text.slice(0, 400)}`);
         };
 
-        document.getElementById("retitle").onclick = () =>
-          janela.invoke("setTitle", { title: document.getElementById("title").value });
-
-        document.getElementById("quit").onclick = () => janela.invoke("quit");
+        $("retitle").onclick = () => janela.invoke("setTitle", { title: $("title").value });
+        $("quit").onclick = () => janela.invoke("quit");
       };
     </script>
   </body>

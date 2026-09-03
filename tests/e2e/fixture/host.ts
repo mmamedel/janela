@@ -12,12 +12,31 @@
 
 import type { JanelaApp } from "janela/host";
 
+/**
+ * Template-compatible result shapes, named rather than inlined: a bare `null`
+ * in a returned literal infers as `null | undefined`, which does not lift into
+ * a declared `string | null` (scriptc SC2002). Annotating the literal with the
+ * same named type is what makes the two sides identical.
+ */
+export type ReadResult = { ok: boolean; error: string | null; length: number; text: string };
+export type PickResult = {
+  ok: boolean;
+  error: string | null;
+  cancelled: boolean;
+  path: string;
+  length: number;
+  text: string;
+};
+
 export type AppCommands = {
   // --- what the framework templates' own pages call ---
   add: (args: { a: number; b: number }) => number;
   greet: (args: { name: string }) => string;
   log: (args: string) => void;
   wait: (args: { ms: number }) => string;
+  readFile: (args: { path: string }) => ReadResult;
+  openFile: () => PickResult;
+  setTitle: (args: { title: string }) => void;
   quit: () => void;
 
   // --- the battery ---
@@ -74,6 +93,38 @@ export function setup(app: App): void {
     app.sleep(args.ms, () => {
       resolve("waited " + args.ms + "ms without blocking the UI");
     });
+  });
+
+  // Template-compatible, so the framework templates' own pages compile against
+  // this contract. readFile mirrors fsRead; setTitle is harmless.
+  app.commandAsync("readFile", (args, resolve) => {
+    app.readFileAsync(args.path, (err, text) => {
+      const answer: ReadResult =
+        err !== null
+          ? { ok: false, error: err, length: 0, text: "" }
+          : { ok: true, error: null, length: text.length, text: text };
+      resolve(answer);
+    });
+  });
+
+  // Declared and answered, but it must NEVER open the dialog: this suite runs
+  // unattended, and a modal would park the run until it timed out. Nothing in
+  // the battery calls it — it exists so the templates' pages type-check.
+  app.command("openFile", (_args) => {
+    const answer: PickResult = {
+      ok: true,
+      error: null,
+      cancelled: true,
+      path: "",
+      length: 0,
+      text: "",
+    };
+    return answer;
+  });
+
+  app.command("setTitle", (args) => {
+    app.setTitle(args.title);
+    return null;
   });
 
   app.command("quit", (_args) => {

@@ -1,7 +1,7 @@
 # janela — monorepo
 
 > Desktop and mobile apps in pure TypeScript, compiled to native. No Rust, no Node, no Electron.
-> macOS · Linux · Windows · iOS · Android — one runtime, ~190–390 KB desktop binaries.
+> macOS · Linux · Windows · iOS · Android — one runtime, ~225–420 KB desktop binaries.
 > **[janela.dev docs → mmamedel.github.io/janela](https://mmamedel.github.io/janela/)** ·
 > **[npm](https://www.npmjs.com/package/janela)**
 
@@ -48,7 +48,12 @@ All five frontend templates (`vanilla`, `vue`, `react`, `svelte`, `solid`) are
 built and run on desktop, the iOS simulator and an Android emulator; the matrix
 and sizes are in [`docs/frontend.md`](docs/frontend.md).
 
+Every template scaffolds the same starter page — the same layout, the same
+three demos, the same stylesheet — so the only difference between them is the
+framework you write it in.
+
 ```bash
+janela --version                         # which janela this is
 pnpm janela init my-app --template vue   # vanilla | vue | react | svelte | solid
 cd my-app && npm install
 janela dev                               # desktop, with Vite HMR

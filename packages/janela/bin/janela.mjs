@@ -4,6 +4,7 @@
 //   janela init <name>   scaffold a new project
 //   janela build         compile the project to a native binary (+ .app on macOS)
 //   janela dev           build, then run the binary with logs in the terminal
+//   janela --version     which janela this is
 //
 // A project is: index.html (frontend), src-host/main.ts (commands),
 // janela.conf.json (window + bundle config). Everything else — the C shim over
@@ -26,6 +27,9 @@ import {
 
 const KIT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(join(KIT, "package.json"));
+// createRequire is rooted AT the package.json, so "./package.json" is this
+// package's own — not the bin/ directory's and not the workspace's.
+const VERSION = require("./package.json").version;
 
 function fail(msg) {
   console.error(`janela: ${msg}`);
@@ -1277,6 +1281,16 @@ async function dev(root) {
 const argv = process.argv.slice(2);
 const cmd = argv[0];
 
+// Answered before anything else, because the question it settles is "is the
+// janela running this command the one I think it is?". A globally installed
+// CLI several minor versions behind accepts `init` and quietly ignores flags it
+// has never heard of — `--template` did not exist before 0.3.0 — so the only
+// symptom is a project that came out looking wrong.
+if (cmd === "--version" || cmd === "-v") {
+  console.log(VERSION);
+  process.exit(0);
+}
+
 function flag(name, fallback) {
   const eq = argv.find((a) => a.startsWith(`--${name}=`));
   if (eq) return eq.slice(name.length + 3);
@@ -1356,9 +1370,11 @@ switch (cmd) {
     break;
   default:
     console.log(
-      "usage: janela init <name> [--template vanilla|vue|react|svelte|solid]\n" +
+      `janela ${VERSION}\n\n` +
+        "usage: janela init <name> [--template vanilla|vue|react|svelte|solid]\n" +
         "       janela build [--target desktop|ios|android]\n" +
-        "       janela dev   [--target desktop|ios|android]",
+        "       janela dev   [--target desktop|ios|android]\n" +
+        "       janela --version",
     );
     process.exit(cmd ? 1 : 0);
 }

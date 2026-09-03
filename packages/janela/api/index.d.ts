@@ -94,10 +94,20 @@ export interface JanelaClient<A> {
   /**
    * Call a declared command. Unknown names and wrong argument shapes are
    * compile errors, and the result type comes from the contract.
+   *
+   * A command declared to take nothing — `quit: () => void` — normalises to
+   * `args: null`, and for those the argument is omitted rather than passed as
+   * an explicit `null`. That is what the rest-tuple is for: it makes the
+   * parameter optional for exactly those commands, and required with the
+   * declared shape for every other one. The bracketed `[X] extends [null]`
+   * form is deliberate — a bare `null extends X` would also match a command
+   * whose arguments are legitimately nullable.
    */
   invoke<K extends keyof CommandsOf<A> & string>(
     name: K,
-    args: CommandsOf<A>[K]["args"],
+    ...args: [CommandsOf<A>[K]["args"]] extends [null]
+      ? [args?: null]
+      : [args: CommandsOf<A>[K]["args"]]
   ): Promise<CommandsOf<A>[K]["result"]>;
   /**
    * Subscribe to a declared event; the payload type is inferred. Returns a
