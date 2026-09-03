@@ -14,6 +14,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/janela
 
+  packages/create-janela:
+    dependencies:
+      janela:
+        specifier: ^0.14.3
+        version: 0.14.3
+
   packages/janela:
     dependencies:
       scriptc:
@@ -165,6 +171,11 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  janela@0.14.3:
+    resolution: {integrity: sha512-GssqhikA6V4qwJKmI1NW98DtNvCsJLAK++7i7goLkd9KqTY9hbq6arySRazRXKNpb6AzzSCJvJZ2JgPbRU6uOQ==}
+    engines: {node: '>=24'}
+    hasBin: true
+
   scriptc@0.0.36:
     resolution: {integrity: sha512-jxyL8VMi771nU3PuYCj8U+P6sQGgioD5yIMigXbUyVEDyR3IUrxkkZH/Iu/j8Z0VM5cTaLqLr65Gk8ff3wciNQ==}
     engines: {node: '>=24'}
@@ -258,6 +269,10 @@ snapshots:
 
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
+
+  janela@0.14.3:
+    dependencies:
+      scriptc: 0.0.36
 
   scriptc@0.0.36:
     dependencies:

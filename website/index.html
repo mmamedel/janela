@@ -4,7 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>janela — desktop and mobile apps in pure TypeScript, compiled to native</title>
-<meta name="description" content="janela (Portuguese for window): desktop, iOS and Android apps in pure TypeScript, compiled to native. No Rust, no Node, no Electron. Desktop binaries around 225-420 KB.">
+<meta name="description" content="janela (Portuguese for window): desktop, iOS and Android apps in pure TypeScript, compiled to native. No Rust, no Node, no Electron. Desktop binaries around 240-420 KB.">
+<link rel="icon" type="image/svg+xml" href="janela-favicon.svg"
+      media="(prefers-color-scheme: light)">
+<link rel="icon" type="image/svg+xml" href="janela-favicon-dark.svg"
+      media="(prefers-color-scheme: dark)">
 <style>
   :root {
     --bg: #0d1117;
@@ -24,6 +28,7 @@
     --radius: 10px;
   }
   @media (prefers-color-scheme: light) {
+    .pane-glyph { background-image: url("janela-favicon.svg"); }
     :root {
       --bg: #faf7f2;
       --bg-raise: #ffffff;
@@ -63,10 +68,9 @@
   .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 20px; color: var(--ink); }
   .brand:hover { text-decoration: none; }
   .pane-glyph {
-    width: 22px; height: 22px; border: 2px solid var(--accent); border-radius: 5px;
-    display: grid; grid-template: 1fr 1fr / 1fr 1fr; gap: 2px; padding: 2px;
+    width: 24px; height: 24px;
+    background: center / contain no-repeat url("janela-favicon-dark.svg");
   }
-  .pane-glyph i { background: var(--pane); border-radius: 1.5px; opacity: .85; }
   nav { display: flex; gap: 18px; font-size: 15px; flex-wrap: wrap; justify-content: flex-end; }
   nav a { color: var(--ink-dim); white-space: nowrap; }
   nav a:hover { color: var(--ink); }
@@ -76,6 +80,8 @@
   }
 
   /* ---- hero ---- */
+  .hero-mark { display: block; margin: 0 auto 18px; }
+  @media (max-width: 640px) { .hero-mark { width: 72px; height: 72px; } }
   .hero { padding: 72px 0 40px; text-align: center; position: relative; }
   .hero::before {
     /* faint window-grid backdrop */
@@ -201,7 +207,7 @@
 <div class="wrap">
   <header>
     <a class="brand" href="#">
-      <span class="pane-glyph" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <span class="pane-glyph" aria-hidden="true"></span>
       janela
     </a>
     <nav>
@@ -215,13 +221,18 @@
   </header>
 
   <div class="hero">
+    <picture>
+      <source srcset="janela-mark-light.svg" media="(prefers-color-scheme: light)">
+      <img class="hero-mark" src="janela-mark-dark.svg" width="96" height="96"
+           alt="" aria-hidden="true">
+    </picture>
     <h1>j<span class="a">a</span>nela</h1>
     <p class="etym">/ʒaˈnɛlɐ/ — Portuguese for <em>window</em></p>
     <p class="tagline">Desktop and mobile apps in pure TypeScript, compiled to native.</p>
     <p class="subtag">No Rust. No Node. No Electron. Your backend is TypeScript compiled to a real
       native binary; your frontend runs in the OS webview. macOS, Linux, Windows, iOS and Android —
-      <strong>one runtime, and desktop binaries around 225–420&nbsp;KB.</strong></p>
-    <div class="install"><span class="p">$</span> npm install -g janela</div>
+      <strong>one runtime, and desktop binaries around 240–420&nbsp;KB.</strong></p>
+    <div class="install"><span class="p">$</span> pnpm create janela</div>
     <div class="cta">
       <a class="btn primary" href="https://github.com/mmamedel/janela">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
@@ -327,7 +338,7 @@
     <div class="cards">
       <div class="card">
         <h3><span class="mini" aria-hidden="true"><i></i><i></i><i></i><i></i></span>Tiny binaries</h3>
-        <p>Roughly 225–420&nbsp;KB per desktop app and 228–421&nbsp;KB packaged for a phone. No bundled browser, no bundled
+        <p>Roughly 240–420&nbsp;KB per desktop app and 244–421&nbsp;KB packaged for a phone. No bundled browser, no bundled
           runtime — the window is the webview your OS already ships. Sizes below.</p>
       </div>
       <div class="card">
@@ -369,9 +380,8 @@
       Linux, an <strong>llvm-mingw</strong> clang on Windows. iOS additionally needs Xcode and
       <code>zig</code>; Android needs a JDK, the Android SDK, the NDK and <code>zig</code>.</p>
     <div class="qs">
-      <pre><code><span class="c">$</span> npm install -g janela
-<span class="c">$</span> janela init my-app <span class="c">--template vue   # or react | svelte | solid | vanilla</span>
-<span class="c">$</span> cd my-app                         <span class="c"># init installed the deps</span>
+      <pre><code><span class="c">$</span> pnpm create janela                <span class="c"># prompts for a name and a template</span>
+<span class="c">$</span> cd my-app                         <span class="c"># deps are already installed</span>
 <span class="c">$</span> janela dev                        <span class="c"># Vite dev server + HMR, in a native window</span>
 <span class="c">$</span> janela build                      <span class="c"># .janela/out/my-app  (+ .app on macOS)</span>
 <span class="c">$</span> janela build --target ios         <span class="c"># simulator .app</span>
@@ -382,8 +392,8 @@
       <table class="tbl">
         <thead><tr><th>Target</th><th>Vanilla</th><th>With Vue</th></tr></thead>
         <tbody>
-          <tr><td class="plat">Desktop (macOS arm64)</td><td class="num">225 KB</td><td class="num">290 KB</td></tr>
-          <tr><td class="plat">iOS (simulator)</td><td class="num">228 KB</td><td class="num">292 KB</td></tr>
+          <tr><td class="plat">Desktop (macOS arm64)</td><td class="num">241 KB</td><td class="num">290 KB</td></tr>
+          <tr><td class="plat">iOS (simulator)</td><td class="num">244 KB</td><td class="num">292 KB</td></tr>
           <tr><td class="plat">Android (APK)</td><td class="num">329 KB</td><td class="num">357 KB</td></tr>
         </tbody>
       </table>
