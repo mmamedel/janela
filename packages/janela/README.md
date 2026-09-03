@@ -6,9 +6,11 @@ Desktop and mobile apps in pure TypeScript, compiled to native. No Rust, no
 Node, no Electron. The backend is TypeScript compiled to a native binary by
 [scriptc](https://scriptc.dev); the window is the OS webview via
 [webview/webview](https://github.com/webview/webview). A desktop binary comes
-out around 190–390 KB — 191 KB for the smallest template — with no bundled
+out around 225–420 KB — 225 KB for the smallest template — with no bundled
 browser and no bundled runtime; iOS and Android bundles land around
-211–405 KB. Per-template figures are in
+228–421 KB. Those are the *starter's* figures, and about 35 KB of each is the
+native file dialog and worker-thread reader it demonstrates: delete the "Files
+and the window" card and its two commands and the smallest binary is 212 KB. Per-template figures are in
 [docs/frontend.md](../../docs/frontend.md).
 
 Five targets, one runtime — the same `main.ts`, the same typed contract and the
@@ -30,6 +32,7 @@ desktop-only for now; on mobile they report clearly when called.
 
 ```bash
 npm install -g janela     # or: npx janela init my-app
+janela --version          # which janela you actually have
 janela init my-app        # (or `jn init my-app`)
 cd my-app
 janela dev                # build + run with logs in the terminal
@@ -43,6 +46,11 @@ janela init my-app --template vue     # or react | svelte | solid | vanilla
 cd my-app && npm install
 janela dev                            # Vite dev server + HMR, in a native window
 ```
+
+A `--template` a globally installed CLI has never heard of is now an error
+rather than a silent fallback, and `janela --version` says which one you are
+running — worth checking first if a scaffolded project comes out looking
+nothing like the screenshots.
 
 `vanilla` is the default and needs no frontend toolchain at all. With a
 framework, `janela dev` runs your Vite dev server and points the window at it,

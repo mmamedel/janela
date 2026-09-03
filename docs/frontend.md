@@ -174,27 +174,27 @@ without saying so.
 
 | template | desktop (darwin-arm64) | Android `.apk` | iOS `.app` |
 |---|---|---|---|
-| solid | 191 KB | 329 KB | 211 KB |
-| svelte | 223 KB | 337 KB | 244 KB |
-| vanilla | 225 KB | 325 KB | 228 KB |
-| vue | 256 KB | 349 KB | 276 KB |
-| react | 385 KB | 385 KB | 405 KB |
+| vanilla | 225 KB | 329 KB | 228 KB |
+| solid | 241 KB | 333 KB | 244 KB |
+| svelte | 274 KB | 345 KB | 276 KB |
+| vue | 290 KB | 357 KB | 292 KB |
+| react | 419 KB | 389 KB | 421 KB |
 
 Sizes are rounded KiB of the shipped artifact. Raw bytes:
 
 | template | desktop (darwin-arm64) | Android `.apk` | Android `.so` | iOS `.app` | iOS binary |
 |---|---|---|---|---|---|
-| solid | 195,768 | 336,395 | 854,224 | 216,449 | 215,640 |
-| svelte | 228,808 | 344,587 | 882,432 | 249,493 | 248,680 |
-| vanilla | 230,608 | 332,299 | 852,768 | 233,041 | 232,224 |
-| vue | 261,832 | 356,875 | 908,864 | 282,505 | 281,704 |
-| react | 393,944 | 393,739 | 1,038,496 | 414,625 | 413,816 |
+| vanilla | 230,608 | 336,395 | 860,544 | 233,041 | 232,224 |
+| solid | 247,144 | 340,491 | 874,592 | 249,569 | 248,760 |
+| svelte | 280,184 | 352,779 | 903,472 | 282,597 | 281,784 |
+| vue | 296,696 | 365,067 | 929,120 | 299,097 | 298,296 |
+| react | 428,808 | 397,835 | 1,058,944 | 431,217 | 430,408 |
 
 Where each column comes from:
 
-- **desktop (darwin-arm64)** — janela 0.14.1, scriptc 0.0.36, measured 2026-09-03 on darwin-arm64.
-- **Android `.apk`** — janela 0.14.1, scriptc 0.0.36, measured 2026-09-03 on Android arm64-v8a, build-tools 36.0.0, built on darwin-arm64.
-- **iOS `.app`** — janela 0.14.1, scriptc 0.0.36, measured 2026-09-03 on iOS 26.5 simulator SDK, built on darwin-arm64.
+- **desktop (darwin-arm64)** — janela 0.14.2, scriptc 0.0.36, measured 2026-09-03 on darwin-arm64.
+- **Android `.apk`** — janela 0.14.2, scriptc 0.0.36, measured 2026-09-03 on Android arm64-v8a, build-tools 36.0.0, built on darwin-arm64.
+- **iOS `.app`** — janela 0.14.2, scriptc 0.0.36, measured 2026-09-03 on iOS 26.5 simulator SDK, built on darwin-arm64.
 
 <!-- sizes:end -->
 
@@ -204,6 +204,29 @@ smaller than a sixteen-character one. The script always scaffolds as
 `size-<template>`, which is why `--check --measure` reproduces the record
 exactly; your own app will land a few bytes either side. Rounded KiB is
 unaffected.
+
+### What the starter itself costs
+
+The figures above are the **scaffolded starter's**, not a floor, and 0.14.2
+moved them: the templates gained a designed page and — for the four framework
+templates — the native file dialog and worker-thread reader that the
+no-framework template always demonstrated. Measured on `solid`, the smallest:
+
+| | binary |
+|---|---|
+| 0.14.1 starter | 195,768 |
+| + the designed page (markup, shared stylesheet, more state) | 212,360 |
+| + `openFileDialog` and `readFileAsync` in the host | **247,144** |
+
+So **34,784 bytes of it is native code for two commands**, not page weight, and
+it is the same 34,784 on every template. That is also why the no-framework
+template did not move at all across this change (230,600 → 230,608): it already
+called both, so its binary already carried them.
+
+Deleting the "Files and the window" card and its two host commands takes the
+smallest template back to 212 KB. Nothing else in the starter reaches for a
+platform API, which is the useful shape of the number: what you pay is what you
+call.
 
 ### What tree-shaking did to every column
 
@@ -281,7 +304,7 @@ Two things worth noticing. **`solid` is smaller than `vanilla`** — not because
 Solid is free, but because the `vanilla` template ships a larger hand-written
 `index.html` (it demonstrates dialogs, file reading and window control inline)
 while Solid's flattened bundle is ~11 KB. And **the APK spread is much
-narrower** than the desktop spread — 325–385 KB against 191–385 KB — because an
+narrower** than the desktop spread — 329–389 KB against 225–419 KB — because an
 APK is dominated by the shared `.so` (853 KB–1.04 MB uncompressed) rather than
 by the frontend. Stripping the `.so` narrowed the APK range further, from 56 KB
 to 61 KB in absolute terms but from 12% to 18% of the smallest APK, so the
