@@ -85,6 +85,78 @@ function du(path) {
 }
 
 /**
+ * The platforms this script can build and measure, and what "the shipped
+ * artifact" means for each.
+ *
+ * Building needs the toolchain, NOT a device: `janela build --target ios`
+ * compiles and lays out the .app without a simulator, and the Android build
+ * needs a JDK and the SDK/NDK but no emulator. Only the e2e lanes need a
+ * booted device. That is what makes refreshing these columns practical.
+ */
+const TARGETS = {
+  desktop: {
+    key: () => hostKey(),
+    kind: "desktop",
+    label: () => `desktop (${hostKey()})`,
+    host: () => hostKey(),
+    artifact: (dir, name) =>
+      join(dir, ".janela", "out", process.platform === "win32" ? `${name}.exe` : name),
+  },
+  ios: {
+    key: () => "ios-sim-arm64",
+    kind: "mobile",
+    label: () => "iOS `.app`",
+    host: () => describeIos(),
+    artifact: (dir, name) => join(dir, ".janela", "out-ios", `${name}.app`),
+    // The bundle total is what ships; the executable inside it is the part
+    // the linker actually changes, and the two differ by ~800 B of bundle
+    // metadata, so both are worth recording.
+    components: { "iOS binary": (dir, name) => join(dir, ".janela", "out-ios", `${name}.app`, name) },
+  },
+  android: {
+    key: () => "android-emu-arm64",
+    kind: "mobile",
+    label: () => "Android `.apk`",
+    host: () => describeAndroid(),
+    artifact: (dir, name) => join(dir, ".janela", "out-android", `${name}.apk`),
+    // The .so is inside the (compressed, aligned) APK, so its uncompressed
+    // size cannot be measured from the APK itself. The CLI prints both as it
+    // builds, and that line is the only place the staged path is named.
+    componentsFromLog: (out) => {
+      const m = /\.so (\d+) bytes/.exec(out);
+      if (!m) die("could not read the .so size from the android build output — did its wording change?");
+      return { "Android `.so`": Number(m[1]) };
+    },
+    env: () => ({ JAVA_HOME: javaHome() }),
+  },
+};
+
+/** The JDK the Android build needs, including Homebrew's keg-only location. */
+function javaHome() {
+  if (process.env.JAVA_HOME) return process.env.JAVA_HOME;
+  // Homebrew's openjdk is keg-only: absent from /usr/bin, from
+  // /Library/Java/JavaVirtualMachines and from java_home, which is exactly
+  // why a JDK here is easy to miss.
+  const brew = "/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home";
+  if (existsSync(join(brew, "bin", "java"))) return brew;
+  die("android needs a JDK: set JAVA_HOME, or `brew install openjdk`");
+}
+
+function describeIos() {
+  const l = spawnSync("xcrun", ["simctl", "list", "devices", "available"], { encoding: "utf8" });
+  const runtime = /-- (iOS [\d.]+) --/.exec(l.stdout ?? "")?.[1] ?? "iOS";
+  return `${runtime} simulator SDK, built on ${hostKey()}`;
+}
+
+function describeAndroid() {
+  const home = process.env.ANDROID_HOME ?? join(process.env.HOME ?? "", "Library/Android/sdk");
+  const bt = existsSync(join(home, "build-tools"))
+    ? readdirSync(join(home, "build-tools")).sort().pop()
+    : "unknown";
+  return `Android arm64-v8a, build-tools ${bt}, built on ${hostKey()}`;
+}
+
+/**
  * Build one pristine template and return the size of the shipped artifact.
  *
  * Pristine on purpose: the e2e suite replaces src-host/main.ts with a fixture
@@ -92,7 +164,8 @@ function du(path) {
  * anything a user gets. What is published has to be what `janela init` gives
  * you.
  */
-function measureTemplate(template) {
+function measureTemplate(template, targetName) {
+  const target = TARGETS[targetName];
   // The name is fixed, and that matters: it is embedded in the binary, so a
   // longer project name builds a bigger one (230,592 B for a 2-character name
   // against 230,608 B for 16). Holding it constant is what makes
@@ -109,19 +182,34 @@ function measureTemplate(template) {
   if (template !== "vanilla") {
     run("npm", ["install", "--no-audit", "--no-fund"], dir, `npm install (${template})`, true);
   }
-  run(process.execPath, [CLI, "build"], dir, `janela build (${template})`);
+
+  const buildArgs = [CLI, "build"];
+  if (targetName !== "desktop") buildArgs.push("--target", targetName);
+  const out = run(
+    process.execPath,
+    buildArgs,
+    dir,
+    `janela build${targetName === "desktop" ? "" : ` --target ${targetName}`} (${template})`,
+    false,
+    target.env?.(),
+  );
 
   const conf = JSON.parse(readFileSync(join(dir, "janela.conf.json"), "utf8"));
-  const exe = join(dir, ".janela", "out", process.platform === "win32" ? `${conf.name}.exe` : conf.name);
-  const bytes = du(exe);
+  const total = du(target.artifact(dir, conf.name));
+  const components = {};
+  for (const [label, path] of Object.entries(target.components ?? {})) {
+    components[label] = du(path(dir, conf.name));
+  }
+  Object.assign(components, target.componentsFromLog?.(out) ?? {});
   rmSync(dir, { recursive: true, force: true });
-  return bytes;
+  return { total, components };
 }
 
-function run(cmd, args, cwd, label, needsShell = false) {
+function run(cmd, args, cwd, label, needsShell = false, extraEnv) {
   const out = spawnSync(cmd, args, {
     cwd,
     encoding: "utf8",
+    env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
     maxBuffer: 64 * 1024 * 1024,
     timeout: 15 * 60_000,
     // npm is a .cmd shim on Windows and Node refuses to spawn it without one.
@@ -133,14 +221,19 @@ function run(cmd, args, cwd, label, needsShell = false) {
   return out.stdout ?? "";
 }
 
-function measureDesktop() {
-  const results = {};
+function measureAll(targetName) {
+  const sizes = {};
+  const components = {};
   for (const t of templates()) {
     process.stderr.write(`  building ${t} … `);
-    results[t] = measureTemplate(t);
-    process.stderr.write(`${kib(results[t])}\n`);
+    const { total, components: c } = measureTemplate(t, targetName);
+    sizes[t] = total;
+    for (const [label, bytes] of Object.entries(c)) {
+      (components[label] ??= {})[t] = bytes;
+    }
+    process.stderr.write(`${kib(total)}\n`);
   }
-  return results;
+  return { sizes, components };
 }
 
 // --- the record -------------------------------------------------------------
@@ -338,23 +431,40 @@ function checkProse(rec) {
 
 // --- commands ---------------------------------------------------------------
 
-function cmdMeasure() {
-  const key = hostKey();
+/** Which columns this host can actually build, and why not when it cannot. */
+function measurable() {
+  const out = {};
+  out.desktop = true;
+  out.ios = process.platform === "darwin" ? true : "needs Xcode on macOS";
+  const sdk = process.env.ANDROID_HOME ?? join(process.env.HOME ?? "", "Library/Android/sdk");
+  if (!existsSync(sdk)) out.android = "no Android SDK";
+  else if (!process.env.JAVA_HOME && !existsSync("/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home/bin/java"))
+    out.android = "no JDK (set JAVA_HOME, or `brew install openjdk`)";
+  else out.android = true;
+  return out;
+}
+
+function cmdMeasure(targetName) {
+  const target = TARGETS[targetName];
+  const can = measurable()[targetName];
+  if (can !== true) die(`cannot measure ${targetName} here: ${can}`);
+
+  const key = target.key();
   const rec = existsSync(RECORD) ? loadRecord() : { templates: templates(), platforms: {} };
-  console.error(`measuring desktop on ${key} (janela ${janelaVersion()}, scriptc ${scriptcVersion()})`);
-  const sizes = measureDesktop();
+  console.error(`measuring ${targetName} (janela ${janelaVersion()}, scriptc ${scriptcVersion()})`);
+  const { sizes, components } = measureAll(targetName);
 
   const prev = rec.platforms[key]?.sizes ?? {};
   rec.templates = templates();
   rec.platforms[key] = {
-    ...(rec.platforms[key] ?? {}),
-    label: rec.platforms[key]?.label ?? `desktop (${key})`,
-    kind: "desktop",
-    host: key,
+    label: rec.platforms[key]?.label ?? target.label(),
+    kind: target.kind,
+    host: target.host(),
     janela: janelaVersion(),
     scriptc: scriptcVersion(),
     measured: new Date().toISOString().slice(0, 10),
     sizes,
+    ...(Object.keys(components).length ? { components } : {}),
   };
   saveRecord(rec);
 
@@ -383,9 +493,9 @@ function cmdWrite() {
   }
 }
 
-function cmdCheck({ measure, strict }) {
+function cmdCheck({ measure, strict, measureTargetName = "desktop" }) {
+  const key = TARGETS[measureTargetName].key();
   const rec = loadRecord();
-  const key = hostKey();
   const problems = [];
   const version = janelaVersion();
 
@@ -411,11 +521,20 @@ function cmdCheck({ measure, strict }) {
   // teach people to ignore this check. --strict promotes them, for the
   // release checklist.
   const warnings = [];
+  const can = measurable();
+  const targetOf = Object.fromEntries(Object.entries(TARGETS).map(([n, t]) => [t.key(), n]));
   for (const [k, p] of Object.entries(rec.platforms)) {
     if (p.janela === version) continue;
     const msg = `${k}: figures were measured at janela ${p.janela}, the package is now ${version}.`;
-    if (k === key) problems.push(`${msg} Re-measure: node scripts/measure-sizes.mjs --measure`);
-    else warnings.push(`${msg} That column needs the ${k} lane; it cannot be measured on ${key}.`);
+    const name = targetOf[k];
+    if (name && can[name] === true) {
+      problems.push(
+        `${msg} Re-measure: node scripts/measure-sizes.mjs --measure` +
+          (name === "desktop" ? "" : ` --target ${name}`),
+      );
+    } else {
+      warnings.push(`${msg} Not measurable here: ${name ? can[name] : "unknown platform"}.`);
+    }
   }
 
   // 4. optionally re-measure this host and compare
@@ -423,7 +542,7 @@ function cmdCheck({ measure, strict }) {
     if (!rec.platforms[key]) {
       problems.push(`no recorded figures for ${key} — run --measure`);
     } else {
-      const sizes = measureDesktop();
+      const { sizes } = measureAll(measureTargetName);
       for (const [t, bytes] of Object.entries(sizes)) {
         const was = rec.platforms[key].sizes[t];
         if (was == null) problems.push(`${key}/${t}: not in the record`);
@@ -436,11 +555,12 @@ function cmdCheck({ measure, strict }) {
       }
     }
   } else {
-    const unverifiable = Object.keys(rec.platforms).filter((k) => k !== key);
+    const names = Object.entries(TARGETS)
+      .filter(([, t]) => rec.platforms[t.key()])
+      .map(([n, t]) => `${t.key()} (--target ${n})`);
     console.error(
       `checked the published figures against ${RECORD}.\n` +
-        `  Not re-measured: ${[key, ...unverifiable].join(", ")} ` +
-        `(pass --measure to rebuild ${key}; ${unverifiable.join(", ") || "no other platform"} needs its device lane).`,
+        `  No builds run. To re-measure a column: ${names.join(", ")}.`,
     );
   }
 
@@ -458,17 +578,28 @@ function cmdCheck({ measure, strict }) {
 }
 
 const argv = process.argv.slice(2);
-const known = ["--measure", "--write", "--check", "--strict", "--help", "-h"];
-for (const a of argv) if (!known.includes(a)) die(`unknown option '${a}'. Known: ${known.join(", ")}`);
+const known = ["--measure", "--write", "--check", "--strict", "--target", "--help", "-h"];
+for (let i = 0; i < argv.length; i++) {
+  const a = argv[i];
+  if (a === "--target") {
+    const v = argv[++i];
+    if (!v || !TARGETS[v]) die(`--target needs one of: ${Object.keys(TARGETS).join(", ")}`);
+    continue;
+  }
+  if (!known.includes(a)) die(`unknown option '${a}'. Known: ${known.join(", ")}`);
+}
+const ti = argv.indexOf("--target");
+const target = ti === -1 ? "desktop" : argv[ti + 1];
 
 if (argv.includes("--help") || argv.includes("-h") || argv.length === 0) {
   console.error(readText(fileURLToPath(import.meta.url)).split("\n").slice(1, 21).join("\n").replace(/^\/\/ ?/gm, ""));
   process.exit(argv.length === 0 ? 1 : 0);
 }
 const strict = argv.includes("--strict");
-if (argv.includes("--measure") && argv.includes("--check")) cmdCheck({ measure: true, strict });
-else if (argv.includes("--measure")) {
-  cmdMeasure();
+if (argv.includes("--measure") && argv.includes("--check")) {
+  cmdCheck({ measure: true, strict, measureTargetName: target });
+} else if (argv.includes("--measure")) {
+  cmdMeasure(target);
   cmdWrite();
 } else if (argv.includes("--write")) cmdWrite();
 else if (argv.includes("--check")) cmdCheck({ measure: false, strict });
