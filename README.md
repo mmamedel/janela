@@ -55,7 +55,7 @@ framework you write it in.
 ```bash
 janela --version                         # which janela this is
 pnpm janela init my-app --template vue   # vanilla | vue | react | svelte | solid
-cd my-app && npm install
+cd my-app                                # init already installed the deps
 janela dev                               # desktop, with Vite HMR
 janela dev --target ios                  # simulator: build, boot, install, launch
 janela dev --target android              # emulator: same, plus logcat

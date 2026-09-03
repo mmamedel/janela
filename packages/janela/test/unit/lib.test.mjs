@@ -12,6 +12,8 @@ import { test } from "node:test";
 import {
   androidConf, androidPackage, ffiManifest, iosConf, libraryProfile, mimeFor,
   NAME_RE, patchPeSubsystem, PeError, rewriteHostSpecifier, suggestName,
+  installCommand,
+  packageManager,
 } from "../../bin/lib.mjs";
 
 // ---- project names ---------------------------------------------------------
@@ -299,4 +301,38 @@ test("mimeFor maps the asset types the Vite inliner embeds", () => {
   assert.equal(mimeFor("font.woff2"), "font/woff2");
   assert.equal(mimeFor("noextension"), "application/octet-stream");
   assert.equal(mimeFor("archive.tar.gz"), "application/octet-stream");
+});
+
+// `janela init` installs a scaffolded project's dependencies, and which
+// manager it uses is inferred from the one that ran janela. Getting this wrong
+// is quiet and annoying: pnpm users would get an npm lockfile in a pnpm repo.
+test("the package manager is the one that invoked janela", () => {
+  assert.equal(packageManager({ npm_config_user_agent: "pnpm/9.1.0 npm/? node/v24.0.0" }), "pnpm");
+  assert.equal(packageManager({ npm_config_user_agent: "yarn/4.1.0 npm/? node/v24.0.0" }), "yarn");
+  assert.equal(packageManager({ npm_config_user_agent: "bun/1.1.0" }), "bun");
+  assert.equal(packageManager({ npm_config_user_agent: "npm/10.9.0 node/v24.0.0" }), "npm");
+});
+
+test("no user agent means npm — the only manager node guarantees", () => {
+  // Run as a global binary rather than through a package script, which is how
+  // `janela init` is normally invoked.
+  assert.equal(packageManager({}), "npm");
+  assert.equal(packageManager(), "npm");
+});
+
+test("a manager whose name merely starts a known one is not mistaken for it", () => {
+  // The prefix is matched with the trailing slash for a reason: without it
+  // "pnpmx/1.0" would install with pnpm.
+  assert.equal(packageManager({ npm_config_user_agent: "pnpmx/1.0.0" }), "npm");
+  assert.equal(packageManager({ npm_config_user_agent: "yarnpkg-alt/1.0.0" }), "npm");
+});
+
+test("each manager's install invocation is the one it actually accepts", () => {
+  // `yarn install` works but `yarn` is the documented form; npm skips fund and
+  // audit, neither of which says anything useful about a tree created seconds
+  // ago, and the audit is the slow half.
+  assert.deepEqual(installCommand("yarn"), ["yarn"]);
+  assert.deepEqual(installCommand("pnpm"), ["pnpm", "install"]);
+  assert.deepEqual(installCommand("bun"), ["bun", "install"]);
+  assert.deepEqual(installCommand("npm"), ["npm", "install", "--no-fund", "--no-audit"]);
 });

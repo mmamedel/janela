@@ -345,3 +345,30 @@ export function patchPeSubsystem(input) {
   buf.writeUInt16LE(IMAGE_SUBSYSTEM_WINDOWS_GUI, subOff);
   return { patched: true, buf };
 }
+
+/**
+ * Which package manager to install a scaffolded project with.
+ *
+ * `npm_config_user_agent` is set by whichever manager ran janela, so
+ * `pnpm janela init` installs with pnpm. Run as a plain global binary it is
+ * unset, and npm is the only manager guaranteed to exist alongside node.
+ *
+ * Takes the environment rather than reading process.env, so it is testable.
+ */
+export function packageManager(env = {}) {
+  const ua = env.npm_config_user_agent ?? "";
+  for (const pm of ["pnpm", "yarn", "bun"]) if (ua.startsWith(`${pm}/`)) return pm;
+  return "npm";
+}
+
+/**
+ * The install invocation for a manager.
+ *
+ * yarn's is the bare command. npm gets --no-fund --no-audit: neither is useful
+ * on a freshly scaffolded tree, and the audit is the slowest part of it.
+ */
+export function installCommand(pm) {
+  if (pm === "yarn") return ["yarn"];
+  if (pm === "npm") return ["npm", "install", "--no-fund", "--no-audit"];
+  return [pm, "install"];
+}

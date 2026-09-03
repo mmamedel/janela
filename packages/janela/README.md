@@ -43,9 +43,14 @@ Or start from a frontend framework:
 
 ```bash
 janela init my-app --template vue     # or react | svelte | solid | vanilla
-cd my-app && npm install
+cd my-app                             # deps are already installed
 janela dev                            # Vite dev server + HMR, in a native window
 ```
+
+`init` installs the template's dependencies with whichever package manager
+ran it — `pnpm janela init` uses pnpm — so `janela dev` works straight
+afterwards. Pass `--no-install` to skip that, and if the install fails the
+project is still written; the message names the one command to retry.
 
 A `--template` a globally installed CLI has never heard of is now an error
 rather than a silent fallback, and `janela --version` says which one you are

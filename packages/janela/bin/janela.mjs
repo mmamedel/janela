@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // janela — the CLI (the tauri-cli analogue).
 //
-//   janela init <name>   scaffold a new project
+//   janela init <name>   scaffold a new project (and install its dependencies)
 //   janela build         compile the project to a native binary (+ .app on macOS)
 //   janela dev           build, then run the binary with logs in the terminal
 //   janela --version     which janela this is
@@ -21,8 +21,8 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   ANDROID_ABI, ANDROID_TARGET_SDK, androidConf, ffiManifest, iosConf,
-  libraryProfile, mimeFor, NAME_RE, patchPeSubsystem, PeError,
-  rewriteHostSpecifier, suggestName,
+  installCommand, libraryProfile, mimeFor, NAME_RE, packageManager as pmFor,
+  patchPeSubsystem, PeError, rewriteHostSpecifier, suggestName,
 } from "./lib.mjs";
 
 const KIT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -107,8 +107,9 @@ function viteCommand(root) {
   if (existsSync(shim)) return { argv: [shim], shell: process.platform === "win32" };
 
   fail(
-    "this project has a vite config but no local vite — run your package manager's " +
-      "install first (npm install / pnpm install)",
+    "this project has a vite config but no local vite — its dependencies are not " +
+      `installed yet:\n    ${installCommand(pmFor(process.env)).join(" ")}\n` +
+      "  (janela init installs them for you unless you pass --no-install)",
   );
 }
 
@@ -1160,7 +1161,29 @@ function copyTemplate(from, to, name) {
 
 // Best-effort repair of a rejected name, so the error can suggest something
 // that would have worked instead of only stating the rule.
-function init(name, template) {
+/**
+ * Install a scaffolded project's dependencies.
+ *
+ * Returns true on success. A failure is NOT fatal: the project is already
+ * written, and the useful thing to do is name the one command to retry rather
+ * than exit non-zero on a tree that is fine. Offline, an unreachable registry
+ * and missing auth all land here.
+ *
+ * Windows needs a shell: npm/pnpm/yarn are .cmd shims, and Node has refused to
+ * spawn those directly since the CVE-2024-27980 fix.
+ */
+function installDeps(dir, pm) {
+  const cmd = installCommand(pm);
+  console.log(`janela: installing dependencies with ${pm}…`);
+  const r = spawnSync(cmd[0], cmd.slice(1), {
+    stdio: "inherit",
+    cwd: dir,
+    shell: process.platform === "win32",
+  });
+  return r.status === 0;
+}
+
+function init(name, template, { install = true } = {}) {
   if (!name) {
     fail(
       "no project name given.\n" +
@@ -1216,8 +1239,27 @@ function init(name, template) {
   writeFileSync(join(dir, ".gitignore"), ".janela/\nnode_modules/\ndist/\n");
   writeFileSync(join(dir, "package.json"), JSON.stringify(pkg, null, 2) + "\n");
 
-  const install = template === "vanilla" ? "" : "npm install && ";
-  console.log(`janela: created ${name}/ (${template}) — next: cd ${name} && ${install}janela dev`);
+  // The no-framework template has no dependencies to install: it needs no
+  // frontend toolchain, and `janela dev` works on it straight out of init.
+  const hasDeps = template !== "vanilla";
+  if (!hasDeps || !install) {
+    // Only a skipped install on a template that HAS dependencies leaves the
+    // caller something to run.
+    const manual = hasDeps ? `${installCommand(pmFor(process.env)).join(" ")} && ` : "";
+    console.log(`janela: created ${name}/ (${template}) — next: cd ${name} && ${manual}janela dev`);
+    return;
+  }
+
+  const pm = pmFor(process.env);
+  if (installDeps(dir, pm)) {
+    console.log(`janela: created ${name}/ (${template}) — next: cd ${name} && janela dev`);
+  } else {
+    console.log(
+      `janela: created ${name}/ (${template}), but installing its dependencies failed.\n` +
+        `  The project is written and fine — retry the install and you are set:\n` +
+        `    cd ${name} && ${installCommand(pm).join(" ")} && janela dev`,
+    );
+  }
 }
 
 // ---- dev --------------------------------------------------------------------
@@ -1349,9 +1391,11 @@ function assertPositionals(max) {
 
 switch (cmd) {
   case "init":
-    assertKnownFlags(["template"]);
+    assertKnownFlags(["template", "no-install"]);
     assertPositionals(1);
-    init(positionals()[0], flag("template", "vanilla"));
+    init(positionals()[0], flag("template", "vanilla"), {
+      install: !argv.includes("--no-install"),
+    });
     break;
   case "build":
     assertKnownFlags(["target"]);
@@ -1371,7 +1415,7 @@ switch (cmd) {
   default:
     console.log(
       `janela ${VERSION}\n\n` +
-        "usage: janela init <name> [--template vanilla|vue|react|svelte|solid]\n" +
+        "usage: janela init <name> [--template vanilla|vue|react|svelte|solid] [--no-install]\n" +
         "       janela build [--target desktop|ios|android]\n" +
         "       janela dev   [--target desktop|ios|android]\n" +
         "       janela --version",
