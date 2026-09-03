@@ -6,7 +6,7 @@
 # janela — monorepo
 
 > Desktop and mobile apps in pure TypeScript, compiled to native. No Rust, no Node, no Electron.
-> macOS · Linux · Windows · iOS · Android — one runtime, ~240–420 KB desktop binaries.
+> macOS · Linux · Windows · iOS · Android — one runtime, ~190–390 KB desktop binaries.
 > **[janela.dev docs → mmamedel.github.io/janela](https://mmamedel.github.io/janela/)** ·
 > **[npm](https://www.npmjs.com/package/janela)**
 
@@ -54,9 +54,10 @@ All five frontend templates (`vanilla`, `vue`, `react`, `svelte`, `solid`) are
 built and run on desktop, the iOS simulator and an Android emulator; the matrix
 and sizes are in [`docs/frontend.md`](docs/frontend.md).
 
-Every template scaffolds the same starter page — the same layout, the same
-three demos, the same stylesheet — so the only difference between them is the
-framework you write it in.
+Every template scaffolds the same starter page — a centred column, the logos,
+and one `greet` round trip you can drive, taking its shape from
+[create-tauri-app](https://github.com/tauri-apps/create-tauri-app) — so the
+only difference between them is the framework you write it in.
 
 ```bash
 pnpm create janela                       # prompts for a name and a template
@@ -77,3 +78,10 @@ release. A merge that doesn't change the version is a clean no-op.
 MIT. Bundles [webview/webview](https://github.com/webview/webview) headers
 (MIT, © Serge Zaitsev and contributors); compiles with
 [scriptc](https://scriptc.dev) (Apache-2.0).
+
+The starter page takes its shape from
+[create-tauri-app](https://github.com/tauri-apps/create-tauri-app) (MIT), and
+the Vite, Vue, React, Svelte and Solid marks in
+[`packages/janela/brand/logos`](packages/janela/brand/logos) are each project's
+own, vendored from that repo. They are authoring inputs — inlined into the
+templates, not shipped in the npm package.
