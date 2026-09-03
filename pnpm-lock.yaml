@@ -17,8 +17,8 @@ importers:
   packages/janela:
     dependencies:
       scriptc:
-        specifier: 0.0.35
-        version: 0.0.35
+        specifier: 0.0.36
+        version: 0.0.36
     devDependencies:
       typescript:
         specifier: ^5.9.3
@@ -28,11 +28,22 @@ importers:
 
 packages:
 
-  '@scriptc/compiler@0.0.35':
-    resolution: {integrity: sha512-OLTmyGpFPJAAVn0RfRBoXuCjpaTfpBC1wt6XdO/SzqMab/DaRjCIJY9vv5b1VspP6zLZP2WEYWZPgP8vHKAJPg==}
+  '@scriptc/compiler@0.0.36':
+    resolution: {integrity: sha512-3NRngr5BB7P6ynraWSS1gB9M+XoApp0SSmaV999hvaM1loqdgySQEUNfhJNWD2FBPxOSk1MxGc3zrKDN+2drJw==}
 
-  '@scriptc/runtime@0.0.35':
-    resolution: {integrity: sha512-kjtKfneGr9YGxx631jOPJ1XVh0X6h5LM+rwQmhF6loI9oA+zW7rlYmoF+VkTXLdkre+bu9LptIIgdxKPdAquPA==}
+  '@scriptc/llvm-darwin-arm64@0.0.36':
+    resolution: {integrity: sha512-FPupxAkIaEbOSBGwIVihAmTXSX94Cln43WRFgEOm9OWGDjYCdKuVZ2/ftjqo+ptTi3k65W7KgW6SrvywC70rRA==}
+    cpu: [arm64]
+    os: [darwin]
+    hasBin: true
+
+  '@scriptc/runtime-darwin-arm64@0.0.36':
+    resolution: {integrity: sha512-WvrBGmUmWejvrRZ59HehXlyuRW4++/ciO303ZEHiEc96l1hdPefvjFZMK6offxRCi5en5l4O8Odj4UcAnG9K3g==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@scriptc/runtime@0.0.36':
+    resolution: {integrity: sha512-5WGzxlWvx28Qc+oE6QsbJfHVZ1WX5fDAQUvcOgrInzATzkEws4knnBs0y+5J7Sn0HnyYD/Wg4HNBwg47MlDKng==}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
@@ -154,8 +165,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  scriptc@0.0.35:
-    resolution: {integrity: sha512-46Td/02HJZNLuosdYDiUSQ+auKwGmQ03+odD6Pg+J7D+eAV7sOYQvjZu9M+3ePyYfL3hFQa6wWiGexV/Bd0r+w==}
+  scriptc@0.0.36:
+    resolution: {integrity: sha512-jxyL8VMi771nU3PuYCj8U+P6sQGgioD5yIMigXbUyVEDyR3IUrxkkZH/Iu/j8Z0VM5cTaLqLr65Gk8ff3wciNQ==}
     engines: {node: '>=24'}
     hasBin: true
 
@@ -171,13 +182,22 @@ packages:
 
 snapshots:
 
-  '@scriptc/compiler@0.0.35':
+  '@scriptc/compiler@0.0.36':
     dependencies:
-      '@scriptc/runtime': 0.0.35
+      '@scriptc/runtime': 0.0.36
       typescript: 7.0.2
       typescript5: typescript@5.9.3
+    optionalDependencies:
+      '@scriptc/llvm-darwin-arm64': 0.0.36
+      '@scriptc/runtime-darwin-arm64': 0.0.36
 
-  '@scriptc/runtime@0.0.35': {}
+  '@scriptc/llvm-darwin-arm64@0.0.36':
+    optional: true
+
+  '@scriptc/runtime-darwin-arm64@0.0.36':
+    optional: true
+
+  '@scriptc/runtime@0.0.36': {}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true
@@ -239,9 +259,9 @@ snapshots:
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
 
-  scriptc@0.0.35:
+  scriptc@0.0.36:
     dependencies:
-      '@scriptc/compiler': 0.0.35
+      '@scriptc/compiler': 0.0.36
 
   typescript@5.9.3: {}
 
