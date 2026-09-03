@@ -28,6 +28,74 @@ the same lesson:
 - **Fixture edits assert that they applied.** A silently no-op'd edit is the
   other half of that failure.
 
+## Failing loudly
+
+The rule above is about the *page*. The same rule applies to the *harness*:
+**a run that covers less than it was asked to must not be able to look green.**
+Every hole below was real, and each one reported success.
+
+| What was asked | What happened | Reported |
+|---|---|---|
+| `JANELA_E2E_TARGETS=ios,android` | nothing reads that name; the desktop lane ran | `# pass 3`, exit 0 |
+| `JANELA_TEST_TEMPLATES=` | no templates selected, so no battery was defined | `# pass 1`, exit 0 |
+| `JANELA_TEST_LANES=ios` with no simulator booted | reported as a node:test skip | exit 0 |
+
+The first is the instructive one. `JANELA_E2E_TARGETS` was a plausible guess at
+a real knob, the suite ignored it completely, and the three desktop tests that
+ran looked exactly like three iOS tests passing — the count is identical and
+nothing in the output named a lane. The coverage the caller asked for did not
+merely fail, it never existed, and there was no way to tell from the result.
+
+So `lib/env.mjs` holds the whole environment contract and enforces it before
+the first test is defined:
+
+- an unrecognised `JANELA_*` variable is an **error**, with a suggestion when
+  a real knob is close and the full list always;
+- a selector that resolves to nothing is an **error** — never an empty run;
+- an unknown lane or template name is an **error**;
+- a lane selected with no device attached is an **error**, not a skip, because
+  a skip exits 0. `JANELA_TEST_SKIP_UNAVAILABLE=1` accepts the gap and the run
+  says what it dropped, but it may not reduce the run to nothing.
+
+Every run also opens by naming the lanes, templates and knobs it is about to
+use, and closes with what it actually covered:
+
+```
+janela e2e — 1 lane(s) x 2 template(s)
+  lanes:     desktop
+  templates: vanilla, vue
+  knobs set: (none — all defaults)
+…
+janela e2e — ran 3/3 test(s): desktop/vanilla, desktop/vue, desktop/quit
+```
+
+A bare pass count could never distinguish three desktop tests from three iOS
+ones. Now the log says which.
+
+### A log is not a pipe
+
+The desktop lane reads a pipe: everything in it belongs to the run that just
+finished. The device lanes read a **log** — a time window that also holds
+earlier runs, of other templates, from other invocations. Three bugs came from
+conflating the two, and the iOS lane could not go green for two of them:
+
+- a **result** line is accepted only if its payload carries this run's nonce,
+  so a passing line from an earlier run cannot satisfy an assertion this build
+  never emitted;
+- an **unparseable** line, and a **page error**, are now attributed the same
+  way. They were not, so a malformed line left in the window by an earlier run
+  of a *different template* failed whichever run read it next — observed as
+  `ios · vanilla` failing on a payload whose run id was an earlier `ios · vue`;
+- `log show` renders a literal backslash as the octal escape `\134`, so a
+  payload with a JSON `\n` arrives as `\134n`. `\1` is not a valid JSON
+  escape, so **every** result line containing a newline failed to parse — which
+  made `framework-mounted` report as MISSING on every framework template even
+  though the page had emitted `pass:true`. The app was right; the reader was
+  wrong. The iOS lane undoes that escaping before parsing.
+
+The last two are why a broken lane is worse than a missing one: a lane that is
+red for reasons unrelated to the product is a lane people learn to ignore.
+
 ## What is asserted
 
 One page, one battery, all lanes — the fixture is a classic (non-module)
@@ -79,6 +147,7 @@ assertions — which is the stronger signal anyway.
 |---|---|---|
 | `JANELA_TEST_LANES` | `desktop` | comma-separated lanes |
 | `JANELA_TEST_TEMPLATES` | `vanilla,vue` | any of `vanilla,vue,react,svelte,solid` |
+| `JANELA_TEST_SKIP_UNAVAILABLE` | unset | tolerate a selected lane with no device |
 | `JANELA_TEST_BIG_MB` | `32` | size of the file the large-read assertions stage |
 | `JANELA_TEST_SYNC_MAX_MS` | `150` | sync latency bound while async work is pending |
 | `JANELA_TEST_DRAIN_P99_MAX_MS` | `50` | ping tail bound during the large read |
@@ -86,6 +155,11 @@ assertions — which is the stronger signal anyway.
 | `JANELA_TEST_RUN_TIMEOUT_MS` | `300000` | per-run budget |
 | `JANELA_TEST_KEEP` | unset | keep fixture projects that passed |
 | `JANELA_TEST_SCRATCH` | `.janela-tests/` | where fixtures are built |
+| `JANELA_TEST_QUIT_SLACK_MS` | `60000` | slack over the 5s timer when judging quit time |
+
+This table is the same list `lib/env.mjs` enforces, and a test asserts they
+match — a knob documented but not read, or read but not documented, fails the
+suite. Anything not in it is rejected outright.
 
 Failing fixtures are kept regardless of `JANELA_TEST_KEEP` — the built project
 is the only record of what was actually compiled and run, and CI uploads it.
@@ -109,6 +183,22 @@ name promised more than it checked. Tightening it to demand the node code and
 the path is what made the mutation fail. When adding an assertion, prefer the
 exact contract over a truthiness check — otherwise the mutation table above
 will keep growing rows that pass.
+
+The harness's own guards are asserted the same way — a guard that cannot fail
+is the bug it was written to prevent:
+
+| Mutation | Caught by |
+|---|---|
+| the unknown-variable gate accepts everything | `an unknown JANELA_ variable is rejected and named` |
+| an empty selector is allowed to select nothing | `a selector that selects nothing is an error` |
+| an unknown lane or template name is allowed | `a selector naming something unknown is an error` |
+| an unavailable lane is silently skipped again | `selecting a lane with no device is an error` |
+| result lines stop being run-scoped | `a result line from another run cannot satisfy…` |
+| error lines stop being run-scoped | `a page error is attributed to its own run` |
+| the `log show` unescaper becomes a no-op | `os_log's escaped backslash is undone before parsing` |
+
+Those live in [`tests/e2e/contract.test.mjs`](../tests/e2e/contract.test.mjs),
+which builds nothing and runs in about 40 ms, so it gates every run.
 
 The suite also has two product bugs to its name, both of which the previous
 inline CI smoke could not have seen:
