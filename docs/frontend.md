@@ -144,30 +144,30 @@ compiled into the binary, so changing it means re-running `janela dev`.
 Every cell below was scaffolded, built and **run**, with a probe asserting that
 the framework rendered host data into the DOM, that a typed round trip returned
 a `number`, and that `— çãé 🚀` survived intact. Re-measured 2026-09-03 at
-janela 0.13.1 on **scriptc 0.0.36**, on an Apple Silicon Mac, an iPhone 17 Pro
+janela 0.14.1 on **scriptc 0.0.36**, on an Apple Silicon Mac, an iPhone 17 Pro
 simulator (iOS 26.5) and a `Medium_Phone_API_36` emulator (API 36,
 WebView 133).
 
 | template | desktop binary | iOS `.app` | Android `.apk` |
 |---|---|---|---|
-| solid | 191 KB | 384 KB | 473 KB |
-| svelte | 223 KB | 417 KB | 480 KB |
-| vanilla | 225 KB | 400 KB | 473 KB |
-| vue | 256 KB | 449 KB | 493 KB |
-| react | 385 KB | 578 KB | 529 KB |
+| solid | 191 KB | 211 KB | 329 KB |
+| svelte | 223 KB | 244 KB | 337 KB |
+| vanilla | 225 KB | 228 KB | 325 KB |
+| vue | 256 KB | 276 KB | 349 KB |
+| react | 385 KB | 405 KB | 385 KB |
 
 All fifteen cells pass. Sizes are `KiB` of the whole artifact — the stripped
 executable, the summed `.app` bundle, the `.apk` as shipped. Raw byte counts:
 
 | template | desktop | iOS `.app` | iOS binary | Android `.apk` | Android `.so` |
 |---|---|---|---|---|---|
-| solid | 195,768 | 393,513 | 392,712 | 483,851 | 1,407,912 |
-| svelte | 228,808 | 426,541 | 425,736 | 492,043 | 1,436,104 |
-| vanilla | 230,600 | 410,049 | 409,240 | 483,851 | 1,406,536 |
-| vue | 261,832 | 459,553 | 458,760 | 504,331 | 1,462,536 |
-| react | 393,944 | 591,673 | 590,872 | 541,195 | 1,592,184 |
+| solid | 195,768 | 216,437 | 215,640 | 336,395 | 854,208 |
+| svelte | 228,808 | 249,481 | 248,680 | 344,587 | 882,416 |
+| vanilla | 230,600 | 233,021 | 232,216 | 332,299 | 852,768 |
+| vue | 261,832 | 282,493 | 281,704 | 356,875 | 908,832 |
+| react | 393,944 | 414,613 | 413,816 | 393,739 | 1,038,480 |
 
-### What scriptc 0.0.36 did to the desktop column
+### What tree-shaking did to every column
 
 0.0.36 shipped per-program stdlib tree-shaking
 ([#256](https://github.com/vercel-labs/scriptc/issues/256), their PR #271).
@@ -182,30 +182,60 @@ rebuilt across the pin bump and nothing else:
 | vue | 531,320 | 261,832 | **−51%** |
 | react | 663,416 | 393,944 | **−41%** |
 
-**Mobile did not move.** iOS grew by 64 B and the Android APK by one 4 KB
-alignment block. The elimination is section-based dead-stripping applied at
-scriptc's own *executable* link step; iOS and Android are the only lanes that
-build in library mode, where scriptc emits a static archive and Xcode or Gradle
-does the final link. Measured: the desktop executable carries **0** dead
-`scr_path_win32_*` / `scr_exec_*` symbols, the iOS archive still carries **11**.
-See [`shims-to-retire.md`](shims-to-retire.md).
+**Mobile did not move on the bump alone** — iOS grew by 64 B and the Android
+APK by one 4 KB alignment block — because the elimination is section-based
+dead-stripping applied at scriptc's own *executable* link step, and iOS and
+Android are the only lanes that build in library mode. There scriptc emits a
+static archive and the final link is janela's. Its note beside the flag matrix
+is explicit: "`--lib` preserves its established object and archive contract;
+section GC is an executable-link optimization only."
 
-Two notes on the table's history. The desktop column above replaces figures
-that were correct when written — the previous 470 / 519 / 648 / 487 / 454 KB
-row reproduces our 0.0.35 baseline exactly. The **mobile** columns were already
-stale before this bump: 0.13.x added native file dialogs and `os_log`, which
-grew the iOS shell by ~16 KB and the APK by ~8 KB, and the table had not been
-re-measured since 0.12.0.
+So janela does that link's stripping itself, as of 0.14.1. The two lanes need
+different flags. On iOS, `ld64` dead-strips per symbol subsection, so
+`-Wl,-dead_strip` needs no help from `-ffunction-sections`. On Android a shared
+library exports every default-visibility symbol, which roots the whole archive
+and leaves `--gc-sections` almost nothing to collect (51 KB); `--exclude-libs,ALL`
+drops the archive out of the dynamic symbol table first, and then GC can discard
+what the shell never reaches:
+
+| template | iOS `.app` before | after | Android `.so` before | after |
+|---|---|---|---|---|
+| solid | 393,513 | 216,437 | 1,407,912 | 854,208 |
+| svelte | 426,541 | 249,481 | 1,436,104 | 882,416 |
+| vanilla | 410,049 | 233,021 | 1,406,536 | 852,768 |
+| vue | 459,553 | 282,493 | 1,462,536 | 908,832 |
+| react | 591,673 | 414,613 | 1,592,184 | 1,038,480 |
+
+The saving is a **constant** — 177,056 B off every iOS binary and ~553,700 B off
+every `.so`, within a few bytes across all five templates — which is what it
+should be: the dead weight is the same unreachable runtime in every build, not
+anything template-specific. Runtime symbols in the iOS binary fall 807 → 227 and
+Android's dynamic exports 2,751 → 154. The `scr_path_win32_*` / `scr_exec_*`
+symbols that the desktop link had already dropped are now gone from both mobile
+lanes too. See [`shims-to-retire.md`](shims-to-retire.md).
+
+One saving is still upstream's: scriptc compiles the archive without
+`-ffunction-sections -fdata-sections`, so on ELF the GC works at
+whole-translation-unit granularity. Adding them would take the Android `.so`
+from 852,720 to 674,616 — another **178 KB** — and is byte-identical for anyone
+who does not pass `--gc-sections`.
+
+A note on the table's history. The desktop column replaces figures that were
+correct when written — the previous 470 / 519 / 648 / 487 / 454 KB row
+reproduces our 0.0.35 baseline exactly. The mobile columns were stale twice
+over: 0.13.x added native file dialogs and `os_log`, which grew the iOS shell
+by ~16 KB and the APK by ~8 KB against a table last measured at 0.12.0, and
+then 0.14.1 stripped both lanes.
 
 Two things worth noticing. **`solid` is smaller than `vanilla`** — not because
 Solid is free, but because the `vanilla` template ships a larger hand-written
 `index.html` (it demonstrates dialogs, file reading and window control inline)
 while Solid's flattened bundle is ~11 KB. And **the APK spread is much
-narrower** than the desktop spread — 473–529 KB against 191–385 KB — because an
-APK is dominated by the shared `.so` (~1.41–1.59 MB uncompressed) rather than
-by the frontend. Tree-shaking widened that gap: `solid` and `vanilla` now ship
-byte-identical APKs (483,851) despite `.so` files 1,376 B apart, because zip
-alignment absorbs the difference.
+narrower** than the desktop spread — 325–385 KB against 191–385 KB — because an
+APK is dominated by the shared `.so` (853 KB–1.04 MB uncompressed) rather than
+by the frontend. Stripping the `.so` narrowed the APK range further, from 56 KB
+to 61 KB in absolute terms but from 12% to 18% of the smallest APK, so the
+frontend is now a slightly larger share of what ships.
 
 The frontend is embedded as a string, so its bundle size lands in the binary
 roughly 1:1 — though small additions can be free, since macOS arm64 segments

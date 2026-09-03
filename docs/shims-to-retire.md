@@ -37,17 +37,30 @@ row above each one used to describe is deleted, not softened.
 | PR #266 — inline record assertions | [#262](https://github.com/vercel-labs/scriptc/issues/262) (case 1 of 3) | Indexing an inline cast no longer crashes. |
 | PR #270 — reject callback re-entry | [#263](https://github.com/vercel-labs/scriptc/issues/263) | Illegal re-entry traps with `SC4026`. **Verified janela's design is not caught by it**: we only re-enter from a later turn of the host's own loop. |
 
-**Why mobile did not shrink.** The elimination is section-based dead-stripping
-applied **at scriptc's own executable link step** —
-`executableSectionEliminationFlags` in `backend/native-toolchain.js` returns
-`-Wl,-dead_strip` on darwin and `-ffunction-sections -fdata-sections` +
-`-Wl,--gc-sections` on linux. iOS and Android are the only lanes that build in
-*library* mode: scriptc emits a static archive and Xcode or Gradle performs the
-final link, so scriptc's dead-strip never runs on them. Measured: the desktop
-executable carries **0** dead `scr_path_win32_*` / `scr_exec_*` symbols, the
-iOS static archive still carries **11**, and the shipped `.app` / `.apk` did
-not shrink (+64 B on iOS, +4 KB of APK padding on Android). Nothing to retire
-here — it is an upstream lane gap, not a shim.
+**Why mobile did not shrink on the bump, and what we did about it.** The
+elimination is section-based dead-stripping applied **at scriptc's own
+executable link step** — `executableSectionEliminationFlags` in
+`backend/native-toolchain.js` returns `-Wl,-dead_strip` on darwin and
+`-ffunction-sections -fdata-sections` + `-Wl,--gc-sections` on linux. iOS and
+Android are the only lanes that build in *library* mode: scriptc emits a static
+archive and janela performs the final link, so scriptc's dead-strip never runs
+on them. Its own note says so: "`--lib` preserves its established object and
+archive contract; section GC is an executable-link optimization only."
+
+That makes the stripping **ours**, not a shim awaiting upstream, and 0.14.1
+does it: `-Wl,-dead_strip` on the iOS link, and `-Wl,--gc-sections
+-Wl,--exclude-libs,ALL` on the Android one (`--exclude-libs` is the load-bearing
+half — without it every default-visibility symbol in the archive is a GC root
+and only 51 KB comes back). iOS `.app` 409,232 → 232,208 and the Android `.so`
+1,406,488 → 852,720, a constant saving across all five templates. The dead
+`scr_path_win32_*` / `scr_exec_*` symbols the desktop link had already dropped
+are now gone from both mobile lanes too.
+
+One slice is still upstream's, and is a genuine lane gap: `compileLibArchive`
+does not pass `-ffunction-sections -fdata-sections`, so ELF GC works per
+translation unit rather than per function. With them the Android `.so` reaches
+674,616 — another **178 KB** — and the change is byte-identical for any consumer
+who does not pass `--gc-sections`.
 
 ## Still carried, with the issue that would let us delete it
 
