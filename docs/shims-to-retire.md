@@ -56,9 +56,10 @@ and only 51 KB comes back). iOS `.app` 409,232 → 232,208 and the Android `.so`
 `scr_path_win32_*` / `scr_exec_*` symbols the desktop link had already dropped
 are now gone from both mobile lanes too.
 
-One slice is still upstream's, and is a genuine lane gap: `compileLibArchive`
-does not pass `-ffunction-sections -fdata-sections`, so ELF GC works per
-translation unit rather than per function. With them the Android `.so` reaches
+One slice is still upstream's, and is a genuine lane gap
+([#287](https://github.com/vercel-labs/scriptc/issues/287)):
+`compileLibArchive` does not pass `-ffunction-sections -fdata-sections`, so ELF
+GC works per translation unit rather than per function. With them the Android `.so` reaches
 674,616 — another **178 KB** — at no cost to a consumer who does not pass
 `--gc-sections`: the output keeps its size, section count, `.text` size and
 export set, and differs only in the order of functions within `.text`.
