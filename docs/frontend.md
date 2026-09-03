@@ -217,8 +217,10 @@ lanes too. See [`shims-to-retire.md`](shims-to-retire.md).
 One saving is still upstream's: scriptc compiles the archive without
 `-ffunction-sections -fdata-sections`, so on ELF the GC works at
 whole-translation-unit granularity. Adding them would take the Android `.so`
-from 852,720 to 674,616 — another **178 KB** — and is byte-identical for anyone
-who does not pass `--gc-sections`.
+from 852,720 to 674,616 — another **178 KB** — and costs nothing for anyone who
+does not pass `--gc-sections`: same size, same section count, same `.text` size
+and the same 2,751-symbol export set, differing only in the order of functions
+within `.text`.
 
 A note on the table's history. The desktop column replaces figures that were
 correct when written — the previous 470 / 519 / 648 / 487 / 454 KB row

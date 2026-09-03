@@ -59,8 +59,9 @@ are now gone from both mobile lanes too.
 One slice is still upstream's, and is a genuine lane gap: `compileLibArchive`
 does not pass `-ffunction-sections -fdata-sections`, so ELF GC works per
 translation unit rather than per function. With them the Android `.so` reaches
-674,616 — another **178 KB** — and the change is byte-identical for any consumer
-who does not pass `--gc-sections`.
+674,616 — another **178 KB** — at no cost to a consumer who does not pass
+`--gc-sections`: the output keeps its size, section count, `.text` size and
+export set, and differs only in the order of functions within `.text`.
 
 ## Still carried, with the issue that would let us delete it
 
