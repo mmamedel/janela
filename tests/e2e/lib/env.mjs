@@ -126,6 +126,18 @@ export function selectList({ name, fallback, valid, label }) {
         `  Unset it for the default (${fallback}), or name at least one of: ${valid.join(", ")}.`,
     );
   }
+  // A repeat is a typo, and it is not harmless: both runs of a template
+  // scaffold into the same fixture directory, and the second deletes the
+  // first's before rebuilding it.
+  const seen = new Set();
+  const repeated = chosen.filter((item) => (seen.has(item) ? true : (seen.add(item), false)));
+  if (repeated.length) {
+    throw new Error(
+      `${name} names ${[...new Set(repeated)].map((r) => `'${r}'`).join(", ")} more than once.\n` +
+        `  Each entry builds into its own fixture directory, so a repeat would rebuild over itself.`,
+    );
+  }
+
   for (const item of chosen) {
     if (valid.includes(item)) continue;
     const near = nearest(item, valid);

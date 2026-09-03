@@ -122,6 +122,10 @@ test("a selector that selects nothing is an error, not an empty run", () => {
   }
 });
 
+test("a selector naming the same thing twice is an error", () => {
+  assert.throws(() => withEnv("a,b,a", () => selectList(SEL)), /names 'a' more than once/);
+});
+
 test("a selector naming something unknown is an error", () => {
   assert.throws(() => withEnv("a,zzz", () => selectList(SEL)), /unknown thing 'zzz'/);
 });
