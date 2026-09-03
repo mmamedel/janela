@@ -42,6 +42,32 @@ jobs:
             echo "janela@$local_version is not on the registry — will publish."
           fi
 
+  # create-janela versions independently of janela: a release that only touches
+  # the framework must not republish the scaffolder, and vice versa.
+  check-create-version:
+    runs-on: ubuntu-latest
+    outputs:
+      should-publish: ${{ steps.check.outputs.should-publish }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Compare package.json version against the registry
+        id: check
+        run: |
+          local_version="$(node -p "require('./packages/create-janela/package.json').version")"
+          echo "version=$local_version" >> "$GITHUB_OUTPUT"
+          published="$(npm view "create-janela@$local_version" version 2>/dev/null || true)"
+          if [ "$published" = "$local_version" ]; then
+            echo "should-publish=false" >> "$GITHUB_OUTPUT"
+            echo "create-janela@$local_version already on the registry — skipping publish."
+          else
+            echo "should-publish=true" >> "$GITHUB_OUTPUT"
+            echo "create-janela@$local_version is not on the registry — will publish."
+          fi
+
   # Build and run a scaffolded app end to end before anything reaches npm.
   sanity:
     needs: check-version
@@ -59,8 +85,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev xvfb
       - run: pnpm install --frozen-lockfile
-      - name: Scaffold a smoke project
-        run: node packages/janela/bin/janela.mjs init smoke
+      # Through create-janela, not janela directly: the scaffolder is the path
+      # most people take, so it is the one that has to work. --no-install
+      # because this smoke project is the no-framework template.
+      - name: Scaffold a smoke project through create-janela
+        run: node packages/create-janela/index.mjs smoke --template vanilla --yes
       - name: Make the smoke page self-terminating
         run: |
           cat > smoke/index.html <<'EOF'
@@ -97,6 +126,33 @@ jobs:
         run: npm install -g npm@latest
       - name: Publish janela@${{ needs.check-version.outputs.version }}
         working-directory: packages/janela
+        run: npm publish
+
+  publish-create:
+    # After janela's publish, and tolerant of it being skipped: a create-janela
+    # bump on its own is a valid release. `always()` plus the explicit result
+    # check is what allows "skipped" while still blocking on "failure".
+    needs: [check-version, check-create-version, sanity, publish]
+    if: |
+      always() &&
+      needs.check-create-version.outputs.should-publish == 'true' &&
+      needs.sanity.result == 'success' &&
+      needs.publish.result != 'failure' &&
+      needs.publish.result != 'cancelled'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Update npm (trusted publishing needs npm >= 11.5)
+        run: npm install -g npm@latest
+      - name: Publish create-janela@${{ needs.check-create-version.outputs.version }}
+        working-directory: packages/create-janela
         run: npm publish
 
   # Tag and release the published commit. Gated twice over: `needs: publish`

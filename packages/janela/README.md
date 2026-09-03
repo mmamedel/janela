@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/mmamedel/janela/main/packages/janela/brand/janela-mark-dark.svg">
+  <img src="https://raw.githubusercontent.com/mmamedel/janela/main/packages/janela/brand/janela-mark-light.svg" alt="" width="88" align="right">
+</picture>
+
 # janela
 
 > *janela* — Portuguese for **window**.
@@ -6,9 +11,9 @@ Desktop and mobile apps in pure TypeScript, compiled to native. No Rust, no
 Node, no Electron. The backend is TypeScript compiled to a native binary by
 [scriptc](https://scriptc.dev); the window is the OS webview via
 [webview/webview](https://github.com/webview/webview). A desktop binary comes
-out around 225–420 KB — 225 KB for the smallest template — with no bundled
+out around 240–420 KB — 241 KB for the smallest template — with no bundled
 browser and no bundled runtime; iOS and Android bundles land around
-228–421 KB. Those are the *starter's* figures, and about 35 KB of each is the
+244–421 KB. Those are the *starter's* figures, and about 35 KB of each is the
 native file dialog and worker-thread reader it demonstrates: delete the "Files
 and the window" card and its two commands and the smallest binary is 212 KB. Per-template figures are in
 [docs/frontend.md](../../docs/frontend.md).
@@ -31,7 +36,11 @@ desktop-only for now; on mobile they report clearly when called.
 ## Quick start
 
 ```bash
-npm install -g janela     # or: npx janela init my-app
+pnpm create janela        # the front door: prompts, scaffolds, installs
+                          # (npm create janela@latest / yarn / bun also work)
+
+# or drive the CLI yourself:
+npm install -g janela
 janela --version          # which janela you actually have
 janela init my-app        # (or `jn init my-app`)
 cd my-app

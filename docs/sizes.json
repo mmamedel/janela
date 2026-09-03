@@ -11,11 +11,11 @@
       "label": "iOS `.app`",
       "kind": "mobile",
       "host": "iOS 26.5 simulator SDK, built on darwin-arm64",
-      "janela": "0.14.3",
+      "janela": "0.15.0",
       "scriptc": "0.0.36",
       "measured": "2026-09-03",
       "sizes": {
-        "vanilla": 233041,
+        "vanilla": 249553,
         "react": 431217,
         "solid": 249569,
         "svelte": 282597,
@@ -23,7 +23,7 @@
       },
       "components": {
         "iOS binary": {
-          "vanilla": 232224,
+          "vanilla": 248736,
           "react": 430408,
           "solid": 248760,
           "svelte": 281784,
@@ -35,23 +35,23 @@
       "label": "Android `.apk`",
       "kind": "mobile",
       "host": "Android arm64-v8a, build-tools 36.0.0, built on darwin-arm64",
-      "janela": "0.14.3",
+      "janela": "0.15.0",
       "scriptc": "0.0.36",
       "measured": "2026-09-03",
       "sizes": {
         "vanilla": 336395,
         "react": 397835,
-        "solid": 340491,
+        "solid": 344587,
         "svelte": 352779,
         "vue": 365067
       },
       "components": {
         "Android `.so`": {
-          "vanilla": 860544,
-          "react": 1058944,
-          "solid": 874592,
-          "svelte": 903472,
-          "vue": 929120
+          "vanilla": 863728,
+          "react": 1062064,
+          "solid": 877680,
+          "svelte": 906608,
+          "vue": 932240
         }
       }
     },
@@ -59,11 +59,11 @@
       "label": "desktop (darwin-arm64)",
       "kind": "desktop",
       "host": "darwin-arm64",
-      "janela": "0.14.3",
+      "janela": "0.15.0",
       "scriptc": "0.0.36",
       "measured": "2026-09-03",
       "sizes": {
-        "vanilla": 230608,
+        "vanilla": 247120,
         "react": 428808,
         "solid": 247144,
         "svelte": 280184,

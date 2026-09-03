@@ -1,10 +1,6 @@
 /* The janela starter's look. Shared by every template so a project scaffolded
    with --template vue looks the same as one scaffolded without a framework.
-   All of it is yours to replace.
-
-   The window mark in App is drawn in CSS rather than shipped as an image: a
-   janela frontend is embedded in the binary, so every asset has to be inlined
-   anyway, and a window needs no artwork. */
+   All of it is yours to replace. */
 
 :root {
   color-scheme: light dark;
@@ -13,7 +9,7 @@
   --text: #18181b;
   --muted: #71717a;
   --line: #e4e4e7;
-  --accent: #2563eb;
+  --accent: #1c6fd4;
   --accent-soft: #eff4ff;
   --shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px -12px rgb(0 0 0 / 0.12);
 }
@@ -24,7 +20,7 @@
     --text: #fafafa;
     --muted: #a1a1aa;
     --line: #2e2e34;
-    --accent: #60a5fa;
+    --accent: #58a6ff;
     --accent-soft: #1d2433;
     --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px -12px rgb(0 0 0 / 0.5);
   }
@@ -45,18 +41,14 @@ main { width: 100%; max-width: 760px; padding: 26px 22px 32px; }
 
 /* --- header ------------------------------------------------------- */
 header { text-align: center; margin-bottom: 20px; }
-.mark {
-  width: 56px; height: 44px; margin: 0 auto 14px;
-  border: 2px solid var(--text); border-radius: 8px;
-  display: flex; flex-direction: column; overflow: hidden;
-}
-.mark .bar {
-  height: 13px; flex: none;
-  border-bottom: 2px solid var(--text);
-  display: flex; align-items: center; gap: 3px; padding: 0 4px;
-}
-.mark .bar i { width: 3px; height: 3px; border-radius: 50%; background: var(--text); }
-.mark .pane { flex: 1; background: linear-gradient(135deg, var(--accent), transparent 70%); opacity: 0.85; }
+/* The mark: a round window, which is what janela means. Inlined rather
+   than linked, because a janela frontend is embedded in the binary and
+   every asset has to be inlined anyway — and inline rather than a CSS
+   data URI so ONE copy serves both themes: the frame follows the text
+   colour, the glass follows the accent. Percent-encoding a data URI
+   would also have cost 4x the bytes. Delete it and the header still
+   works. */
+.mark { display: block; width: 56px; height: 56px; margin: 0 auto 14px; }
 h1 { margin: 0; font-size: 26px; letter-spacing: -0.02em; font-weight: 650; }
 .sub { margin: 5px 0 0; color: var(--muted); font-size: 13.5px; }
 

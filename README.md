@@ -1,7 +1,12 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="packages/janela/brand/janela-mark-dark.svg">
+  <img src="packages/janela/brand/janela-mark-light.svg" alt="" width="88" align="right">
+</picture>
+
 # janela — monorepo
 
 > Desktop and mobile apps in pure TypeScript, compiled to native. No Rust, no Node, no Electron.
-> macOS · Linux · Windows · iOS · Android — one runtime, ~225–420 KB desktop binaries.
+> macOS · Linux · Windows · iOS · Android — one runtime, ~240–420 KB desktop binaries.
 > **[janela.dev docs → mmamedel.github.io/janela](https://mmamedel.github.io/janela/)** ·
 > **[npm](https://www.npmjs.com/package/janela)**
 
@@ -11,6 +16,7 @@ This is the workspace. The framework itself, its README, and its docs live in
 | Path | What it is | Published? |
 |---|---|---|
 | [`packages/janela`](packages/janela) | the framework: CLI, TypeScript runtime, C shim over webview.h, project templates | yes — [`janela`](https://www.npmjs.com/package/janela) on npm |
+| [`packages/create-janela`](packages/create-janela) | the scaffolder: `pnpm create janela` — prompts, then hands off to `janela init` | yes — [`create-janela`](https://www.npmjs.com/package/create-janela) on npm |
 | [`examples/demo`](examples/demo) | a worked app: commands, events, async, a file reader | no |
 | [`website`](website) | the landing page, deployed to GitHub Pages | no |
 | [`docs`](docs) | design notes: the typed contract, the async model, the iOS and Android ports, [how the test suites run](docs/testing.md), scriptc findings | no |
@@ -53,9 +59,8 @@ three demos, the same stylesheet — so the only difference between them is the
 framework you write it in.
 
 ```bash
-janela --version                         # which janela this is
-pnpm janela init my-app --template vue   # vanilla | vue | react | svelte | solid
-cd my-app                                # init already installed the deps
+pnpm create janela                       # prompts for a name and a template
+cd my-app                                # deps are already installed
 janela dev                               # desktop, with Vite HMR
 janela dev --target ios                  # simulator: build, boot, install, launch
 janela dev --target android              # emulator: same, plus logcat
