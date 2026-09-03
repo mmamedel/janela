@@ -372,6 +372,13 @@ function buildIos(root, conf, buildDir, outDir) {
     `-I${join(KIT, "vendor-webview", "core", "include")}`,
     "-framework", "UIKit", "-framework", "WebKit", "-framework", "Foundation",
     lib,
+    // scriptc runs its section elimination only when it performs the final
+    // executable link itself; `--lib` deliberately keeps the archive intact
+    // (see executableSectionEliminationFlags in its native-toolchain.js), so
+    // on the mobile lanes the last link is ours and so is the stripping.
+    // ld64 dead-strips per symbol subsection, so the archive needs no
+    // -ffunction-sections to benefit: 409 KB -> 232 KB stripped.
+    "-Wl,-dead_strip",
     "-o", join(bundle, conf.name),
   ]);
   run(["strip", join(bundle, conf.name)]);
@@ -551,6 +558,14 @@ function buildAndroid(root, conf, buildDir, outDir) {
     // libc++_shared.so beside ours; static keeps the APK to one library.
     "-static-libstdc++",
     `-I${join(KIT, "vendor-webview", "core", "include")}`,
+    // As on iOS, the final link is ours, so the section GC is too. A shared
+    // library exports every default-visibility symbol, which roots the whole
+    // scriptc archive and leaves --gc-sections nearly nothing to collect
+    // (1.41 MB -> 1.35 MB on its own). --exclude-libs drops the archive out
+    // of the dynamic symbol table first, so GC can then discard what the
+    // shell never reaches: 1.41 MB -> 853 KB stripped. The JNI entry points
+    // come from app.cc rather than the archive, so they stay exported.
+    "-Wl,--gc-sections", "-Wl,--exclude-libs,ALL",
     lib, "-llog", "-o", so,
   ]);
   run([join(sdk.toolchain, "llvm-strip"), so]);

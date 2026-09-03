@@ -383,12 +383,12 @@
         <thead><tr><th>Target</th><th>Vanilla</th><th>With Vue</th></tr></thead>
         <tbody>
           <tr><td class="plat">Desktop (macOS arm64)</td><td class="num">225 KB</td><td class="num">256 KB</td></tr>
-          <tr><td class="plat">iOS (simulator)</td><td class="num">400 KB</td><td class="num">449 KB</td></tr>
-          <tr><td class="plat">Android (APK)</td><td class="num">473 KB</td><td class="num">493 KB</td></tr>
+          <tr><td class="plat">iOS (simulator)</td><td class="num">228 KB</td><td class="num">276 KB</td></tr>
+          <tr><td class="plat">Android (APK)</td><td class="num">325 KB</td><td class="num">349 KB</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="tbl-note">All figures measured directly at 0.13.1 on scriptc 0.0.36 — the desktop row roughly halved when 0.0.36 added stdlib tree-shaking, which does not reach the mobile lanes. Every one of the five
+    <p class="tbl-note">All figures measured directly at 0.14.1 on scriptc 0.0.36 — the desktop row roughly halved when 0.0.36 added stdlib tree-shaking, and the mobile rows fell 43% and 31% once janela dead-stripped the two library-mode links that tree-shaking does not reach. Every one of the five
       templates — vanilla, Vue, React, Svelte, Solid — is built and run on all three
       targets; the full matrix is in
       <a href="https://github.com/mmamedel/janela/blob/main/docs/frontend.md">docs/frontend.md</a>.
