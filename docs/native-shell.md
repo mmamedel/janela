@@ -95,8 +95,10 @@ pass a linker flag**:
 - `libraries` entries must resolve to existing files,
 - no environment variable is read for extra link flags.
 
-(Checked in `@scriptc/compiler` 0.0.35: `dist/ffi/profile.js`,
-`dist/backend/cc.js`.)
+(Re-checked in `@scriptc/compiler` 0.0.36: `dist/ffi/profile.js`,
+`dist/backend/cc.js`. Still true — and scriptc's own PR for
+[#259](https://github.com/vercel-labs/scriptc/issues/259) was closed
+unmerged, so there is no linker-flag route on the horizon.)
 
 So `janela build` rewrites the `Subsystem` field in the linked PE instead —
 from `IMAGE_SUBSYSTEM_WINDOWS_CUI` (3) to `IMAGE_SUBSYSTEM_WINDOWS_GUI` (2).
