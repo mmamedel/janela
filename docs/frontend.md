@@ -174,27 +174,27 @@ without saying so.
 
 | template | desktop (darwin-arm64) | Android `.apk` | iOS `.app` |
 |---|---|---|---|
-| vanilla | 241 KB | 329 KB | 244 KB |
-| solid | 241 KB | 337 KB | 244 KB |
-| svelte | 274 KB | 345 KB | 276 KB |
-| vue | 290 KB | 357 KB | 292 KB |
-| react | 419 KB | 389 KB | 421 KB |
+| vanilla | 191 KB | 321 KB | 195 KB |
+| solid | 207 KB | 325 KB | 211 KB |
+| svelte | 223 KB | 337 KB | 227 KB |
+| vue | 256 KB | 349 KB | 259 KB |
+| react | 385 KB | 385 KB | 388 KB |
 
 Sizes are rounded KiB of the shipped artifact. Raw bytes:
 
 | template | desktop (darwin-arm64) | Android `.apk` | Android `.so` | iOS `.app` | iOS binary |
 |---|---|---|---|---|---|
-| vanilla | 247,120 | 336,395 | 863,728 | 249,553 | 248,736 |
-| solid | 247,144 | 344,587 | 877,680 | 249,569 | 248,760 |
-| svelte | 280,184 | 352,779 | 906,608 | 282,597 | 281,784 |
-| vue | 296,696 | 365,067 | 932,240 | 299,097 | 298,296 |
-| react | 428,808 | 397,835 | 1,062,064 | 431,217 | 430,408 |
+| vanilla | 195,584 | 328,203 | 840,256 | 199,585 | 198,768 |
+| solid | 212,104 | 332,299 | 850,320 | 216,113 | 215,304 |
+| svelte | 228,616 | 344,587 | 875,200 | 232,629 | 231,816 |
+| vue | 261,640 | 356,875 | 905,648 | 265,641 | 264,840 |
+| react | 393,752 | 393,739 | 1,039,328 | 397,761 | 396,952 |
 
 Where each column comes from:
 
-- **desktop (darwin-arm64)** — janela 0.15.0, scriptc 0.0.36, measured 2026-09-03 on darwin-arm64.
-- **Android `.apk`** — janela 0.15.0, scriptc 0.0.36, measured 2026-09-03 on Android arm64-v8a, build-tools 36.0.0, built on darwin-arm64.
-- **iOS `.app`** — janela 0.15.0, scriptc 0.0.36, measured 2026-09-03 on iOS 26.5 simulator SDK, built on darwin-arm64.
+- **desktop (darwin-arm64)** — janela 0.16.0, scriptc 0.0.36, measured 2026-09-03 on darwin-arm64.
+- **Android `.apk`** — janela 0.16.0, scriptc 0.0.36, measured 2026-09-03 on Android arm64-v8a, build-tools 36.0.0, built on darwin-arm64.
+- **iOS `.app`** — janela 0.16.0, scriptc 0.0.36, measured 2026-09-03 on iOS 26.5 simulator SDK, built on darwin-arm64.
 
 <!-- sizes:end -->
 
@@ -207,38 +207,37 @@ unaffected.
 
 ### What the starter itself costs
 
-The figures above are the **scaffolded starter's**, not a floor, and 0.14.2
-moved them: the templates gained a designed page and — for the four framework
-templates — the native file dialog and worker-thread reader that the
-no-framework template always demonstrated. Measured on `solid`, the smallest:
+The figures above are the **scaffolded starter's**, not a floor, and they have
+moved twice. 0.16.0 reshaped the starter after
+[create-tauri-app](https://github.com/tauri-apps/create-tauri-app): a centred
+column, the logos, and one `greet` round trip you can drive — where 0.15.0 had
+four cards demonstrating async, events, a native file dialog and a
+worker-thread read. Measured on `vanilla`, the smallest:
 
 | | binary |
 |---|---|
-| 0.14.1 starter | 195,768 |
-| + the designed page (markup, shared stylesheet, more state) | 212,360 |
-| + `openFileDialog` and `readFileAsync` in the host | **247,144** |
+| 0.14.1 — the old debug-harness page, with dialog and fs | 230,608 |
+| 0.15.0 — designed cards, dialog and fs, plus the mark | 247,120 |
+| 0.16.0 — Tauri-shaped: `greet` and `log` only | **195,584** |
 
-So **34,784 bytes of it is native code for two commands**, not page weight, and
-it is the same 34,784 on every template. That is also why the no-framework
-template did not move at all across *that* change (230,600 → 230,608): it
-already called both, so its binary already carried them.
+The useful part is *why* it fell 51 KB. Almost none of it was page weight:
+**~35 KB is the native code behind `openFileDialog` and `readFileAsync`**,
+linked into the binary because the starter called them, and identical on every
+template. The starter no longer calls either, so it is gone. Call them and it
+comes back — which is the shape worth remembering: **what you pay is what you
+call.** Both are still fully supported; see
+[`native-shell.md`](native-shell.md) and [`async.md`](async.md), and the
+0.15.0 starter is in the history if you want the four-card version back.
 
-Deleting the "Files and the window" card and its two host commands takes the
-smallest template back to 212,352 bytes — re-measured at 0.15.0, so the figure
-holds with the brand mark in place. Nothing else in the starter reaches for a
-platform API, which is the useful shape of the number: what you pay is what you
-call.
-
-**The mark, added in 0.15.0, is a good illustration of the 16 KB alignment**
-noted below. It is ~3.5 KB of inline SVG, and four of the five templates came
-back **byte-identical** — solid 247,144, svelte 280,184, vue 296,696, react
-428,808, all unchanged. Only `vanilla` moved, 230,608 → 247,120, because its
-page was small enough that 3.5 KB crossed a segment boundary and cost a whole
-16,384-byte block. The mark is inline rather than a CSS data URI for
-correctness, not size — one copy serves both themes, since the frame follows
-the text colour and the glass follows the accent, and that keeps working under
-an explicit theme toggle rather than only `prefers-color-scheme`. Measured both
-ways: 247,104 inline against 247,120 as two data URIs, which is to say the same
+The mark is a good illustration of the 16 KB alignment noted below. It is
+~3.5 KB of inline SVG, and when it landed in 0.15.0 four of the five templates
+came back **byte-identical**; only `vanilla` moved, because its page was small
+enough that 3.5 KB crossed a segment boundary and cost a whole 16,384-byte
+block. It is inline rather than a CSS data URI for correctness rather than
+size — one copy serves both themes, since the frame follows the text colour and
+the glass follows the accent, and that keeps working under an explicit theme
+toggle rather than only `prefers-color-scheme`. Measured both ways at the time:
+247,104 inline against 247,120 as two data URIs, which is to say the same
 block.
 
 ### What tree-shaking did to every column
@@ -317,7 +316,7 @@ Two things worth noticing. **`solid` is smaller than `vanilla`** — not because
 Solid is free, but because the `vanilla` template ships a larger hand-written
 `index.html` (it demonstrates dialogs, file reading and window control inline)
 while Solid's flattened bundle is ~11 KB. And **the APK spread is much
-narrower** than the desktop spread — 329–389 KB against 241–419 KB — because an
+narrower** than the desktop spread — 321–385 KB against 191–385 KB — because an
 APK is dominated by the shared `.so` (853 KB–1.04 MB uncompressed) rather than
 by the frontend. Stripping the `.so` narrowed the APK range further, from 56 KB
 to 61 KB in absolute terms but from 12% to 18% of the smallest APK, so the

@@ -1,129 +1,91 @@
-/* The janela starter's look. Shared by every template so a project scaffolded
-   with --template vue looks the same as one scaffolded without a framework.
-   All of it is yours to replace. */
+/* The look of create-tauri-app's starter, in janela's own tokens: a centred
+   column, the logos with a hover glow in each project's colour, and one round
+   trip you can drive. Shared by every template, so a project scaffolded with
+   --template vue looks the same as one scaffolded without a framework. All of
+   it is yours to replace. */
 
 :root {
   color-scheme: light dark;
   --bg: #f6f6f7;
-  --card: #ffffff;
-  --text: #18181b;
-  --muted: #71717a;
-  --line: #e4e4e7;
+  --ink: #18181b;
+  --ink-dim: #71717a;
+  --field: #ffffff;
   --accent: #1c6fd4;
-  --accent-soft: #eff4ff;
-  --shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px -12px rgb(0 0 0 / 0.12);
+  --shadow: 0 2px 2px rgb(0 0 0 / 0.08);
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #17171a;
-    --card: #202024;
-    --text: #fafafa;
-    --muted: #a1a1aa;
-    --line: #2e2e34;
+    --ink: #fafafa;
+    --ink-dim: #a1a1aa;
+    --field: #0f0f11;
     --accent: #58a6ff;
-    --accent-soft: #1d2433;
-    --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px -12px rgb(0 0 0 / 0.5);
+    --shadow: 0 2px 2px rgb(0 0 0 / 0.3);
   }
 }
 
 * { box-sizing: border-box; }
 body {
   margin: 0;
-  min-height: 100vh;
-  display: flex;
-  justify-content: center;
   background: var(--bg);
-  color: var(--text);
-  font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  color: var(--ink);
+  font: 16px/1.5 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 }
-main { width: 100%; max-width: 760px; padding: 26px 22px 32px; }
 
-/* --- header ------------------------------------------------------- */
-header { text-align: center; margin-bottom: 20px; }
-/* The mark: a round window, which is what janela means. Inlined rather
-   than linked, because a janela frontend is embedded in the binary and
-   every asset has to be inlined anyway — and inline rather than a CSS
-   data URI so ONE copy serves both themes: the frame follows the text
-   colour, the glass follows the accent. Percent-encoding a data URI
-   would also have cost 4x the bytes. Delete it and the header still
-   works. */
-.mark { display: block; width: 56px; height: 56px; margin: 0 auto 14px; }
-h1 { margin: 0; font-size: 26px; letter-spacing: -0.02em; font-weight: 650; }
-.sub { margin: 5px 0 0; color: var(--muted); font-size: 13.5px; }
-
-/* The one line that proves the whole stack: this string was produced by
-   TypeScript compiled to machine code, and handed to the page. */
-.greeting {
-  margin: 0 0 20px;
-  padding: 11px 16px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--accent-soft);
-  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+.container {
+  padding: 10vh 20px 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   text-align: center;
-  overflow-wrap: anywhere;
 }
+h1 { margin: 0; font-size: 2em; letter-spacing: -0.02em; }
+.hint { color: var(--ink-dim); margin: 4px 0 18px; }
 
-/* --- cards -------------------------------------------------------- */
-/* auto-fit rather than a fixed column count: the same page is the iOS and
-   Android frontend, where it must read as a single column. */
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 13px; }
-.card {
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 15px 17px;
-  box-shadow: var(--shadow);
+.row { display: flex; justify-content: center; align-items: center; gap: 8px; flex-wrap: wrap; }
+.logos { margin: 26px 0 8px; }
+.logos a { display: block; }
+.logo {
+  /* content-box on purpose: the page sets border-box globally, which
+     would make 6em include the padding and shrink the mark by half. */
+  box-sizing: content-box;
+  height: 6em; padding: 1.5em;
+  will-change: filter; transition: filter 0.75s;
 }
-.card h2 {
-  margin: 0 0 2px;
-  font-size: 13px; font-weight: 600;
-  letter-spacing: 0.04em; text-transform: uppercase;
-  color: var(--muted);
-}
-.card.wide { grid-column: 1 / -1; }
-.card p.why { margin: 0 0 11px; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
-.card h3 {
-  margin: 16px 0 6px; font-size: 11px; font-weight: 600;
-  letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted);
-}
-.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+/* Each glow is the project's own colour — the same idea as Tauri's
+   starter, which is where the shape of this page comes from. */
+/* The mark's frame is currentColor by design, so it follows the text.
+   Inside the link it would follow the LINK colour instead — hence the
+   explicit ink here. */
+.logo.janela { color: var(--ink); }
+.logo.janela:hover { filter: drop-shadow(0 0 2em var(--accent)); }
+.logo.vite:hover   { filter: drop-shadow(0 0 2em #747bff); }
+.logo.vue:hover    { filter: drop-shadow(0 0 2em #42b883); }
+.logo.react:hover  { filter: drop-shadow(0 0 2em #61dafb); }
+.logo.svelte:hover { filter: drop-shadow(0 0 2em #ff3e00); }
+.logo.solid:hover  { filter: drop-shadow(0 0 2em #4f88c6); }
+@media (prefers-reduced-motion: reduce) { .logo { transition: none; } }
+
+a { color: var(--accent); text-decoration: none; font-weight: 500; }
+a:hover { text-decoration: underline; }
 
 input, button {
-  font: inherit;
   border-radius: 8px;
-  border: 1px solid var(--line);
-  padding: 8px 12px;
-  background: var(--card);
-  color: var(--text);
-  transition: border-color 0.15s, background 0.15s;
+  border: 1px solid transparent;
+  padding: 0.6em 1.2em;
+  font: inherit;
+  font-weight: 500;
+  color: var(--ink);
+  background: var(--field);
+  box-shadow: var(--shadow);
+  transition: border-color 0.25s;
 }
-input { min-width: 0; }
-input[type="number"] { width: 5.5em; text-align: center; }
-input.grow { flex: 1 1 12em; }
+button { cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button:active { border-color: var(--accent); filter: brightness(0.97); }
 input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-button { cursor: pointer; font-weight: 500; }
-button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-button:disabled { opacity: 0.5; cursor: default; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-button.primary:hover:not(:disabled) { filter: brightness(1.08); color: #fff; }
 
-.result { margin: 12px 0 0; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
-.result.filled { color: var(--text); }
-pre.result { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 11em; overflow: auto; margin-top: 12px; }
-
-/* A dot that keeps moving while a 2s command is pending. If it stalls,
-   the host has blocked the UI thread — which is the bug this proves is
-   absent. */
-.pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1s ease-in-out infinite; }
-@keyframes pulse { 0%, 100% { opacity: 0.25; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.15); } }
-@media (prefers-reduced-motion: reduce) { .pulse { animation: none; opacity: 1; } }
-
-ul.events { list-style: none; margin: 0; padding: 0; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
-ul.events li { padding: 3px 0; border-bottom: 1px dashed var(--line); }
-ul.events li:last-child { border-bottom: 0; }
-ul.events:empty::after { content: "nothing yet — press add"; color: var(--muted); font-family: inherit; }
-
-footer { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; }
-footer code { background: var(--card); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; font-size: 12px; }
+/* Reserved so the layout does not jump when the answer arrives. */
+.greeting { min-height: 1.5em; margin: 20px 0 0; }

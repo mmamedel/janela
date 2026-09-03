@@ -5,248 +5,137 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>__NAME__</title>
     <style>
-      /* Everything here is yours to replace. It is deliberately one file with
-         no dependencies: this template has no bundler, so what you see is what
-         runs. */
+      /* The look of create-tauri-app's starter, in janela's own tokens: a
+         centred column, the logos with a hover glow in each project's colour,
+         and one round trip you can drive. All of it is yours to replace. */
       :root {
         color-scheme: light dark;
         --bg: #f6f6f7;
-        --card: #ffffff;
-        --text: #18181b;
-        --muted: #71717a;
-        --line: #e4e4e7;
+        --ink: #18181b;
+        --ink-dim: #71717a;
+        --field: #ffffff;
         --accent: #1c6fd4;
-        --accent-soft: #eff4ff;
-        --shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px -12px rgb(0 0 0 / 0.12);
+        --shadow: 0 2px 2px rgb(0 0 0 / 0.08);
       }
       @media (prefers-color-scheme: dark) {
         :root {
           --bg: #17171a;
-          --card: #202024;
-          --text: #fafafa;
-          --muted: #a1a1aa;
-          --line: #2e2e34;
+          --ink: #fafafa;
+          --ink-dim: #a1a1aa;
+          --field: #0f0f11;
           --accent: #58a6ff;
-          --accent-soft: #1d2433;
-          --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px -12px rgb(0 0 0 / 0.5);
+          --shadow: 0 2px 2px rgb(0 0 0 / 0.3);
         }
       }
 
       * { box-sizing: border-box; }
       body {
         margin: 0;
-        min-height: 100vh;
-        display: flex;
-        justify-content: center;
         background: var(--bg);
-        color: var(--text);
-        font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        color: var(--ink);
+        font: 16px/1.5 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        text-rendering: optimizeLegibility;
         -webkit-font-smoothing: antialiased;
       }
-      main { width: 100%; max-width: 760px; padding: 26px 22px 32px; }
 
-      /* --- header ------------------------------------------------------- */
-      header { text-align: center; margin-bottom: 20px; }
-      /* The mark: a round window, which is what janela means. Inlined rather
-         than linked, because a janela frontend is embedded in the binary and
-         every asset has to be inlined anyway — and inline rather than a CSS
-         data URI so ONE copy serves both themes: the frame follows the text
-         colour, the glass follows the accent. Percent-encoding a data URI
-         would also have cost 4x the bytes. Delete it and the header still
-         works. */
-      .mark { display: block; width: 56px; height: 56px; margin: 0 auto 14px; }
-      h1 { margin: 0; font-size: 26px; letter-spacing: -0.02em; font-weight: 650; }
-      .sub { margin: 5px 0 0; color: var(--muted); font-size: 13.5px; }
-
-      /* The one line that proves the whole stack: this string was produced by
-         TypeScript compiled to machine code, and handed to the page. */
-      .greeting {
-        margin: 0 0 20px;
-        padding: 11px 16px;
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        background: var(--accent-soft);
-        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      .container {
+        padding: 10vh 20px 40px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
         text-align: center;
-        overflow-wrap: anywhere;
       }
+      h1 { margin: 0; font-size: 2em; letter-spacing: -0.02em; }
+      .hint { color: var(--ink-dim); margin: 4px 0 18px; }
 
-      /* --- cards -------------------------------------------------------- */
-      /* auto-fit rather than a fixed column count: the same page is the iOS and
-         Android frontend, where it must read as a single column. */
-      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 13px; }
-      .card {
-        background: var(--card);
-        border: 1px solid var(--line);
-        border-radius: 12px;
-        padding: 15px 17px;
-        box-shadow: var(--shadow);
+      .row { display: flex; justify-content: center; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .logos { margin: 26px 0 8px; }
+      .logos a { display: block; }
+      .logo {
+        /* content-box on purpose: the page sets border-box globally, which
+           would make 6em include the padding and shrink the mark by half. */
+        box-sizing: content-box;
+        height: 6em; padding: 1.5em;
+        will-change: filter; transition: filter 0.75s;
       }
-      .card h2 {
-        margin: 0 0 2px;
-        font-size: 13px; font-weight: 600;
-        letter-spacing: 0.04em; text-transform: uppercase;
-        color: var(--muted);
-      }
-      .card.wide { grid-column: 1 / -1; }
-      .card p.why { margin: 0 0 11px; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
-      .card h3 {
-        margin: 16px 0 6px; font-size: 11px; font-weight: 600;
-        letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted);
-      }
-      .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+      /* Each glow is the project's own colour — the same idea as Tauri's
+         starter, which is where the shape of this page comes from. */
+      /* The mark's frame is currentColor by design, so it follows the text.
+         Inside the link it would follow the LINK colour instead — hence the
+         explicit ink here. */
+      .logo.janela { color: var(--ink); }
+      .logo.janela:hover { filter: drop-shadow(0 0 2em var(--accent)); }
+      .logo.vite:hover   { filter: drop-shadow(0 0 2em #747bff); }
+      .logo.vue:hover    { filter: drop-shadow(0 0 2em #42b883); }
+      .logo.react:hover  { filter: drop-shadow(0 0 2em #61dafb); }
+      .logo.svelte:hover { filter: drop-shadow(0 0 2em #ff3e00); }
+      .logo.solid:hover  { filter: drop-shadow(0 0 2em #4f88c6); }
+      @media (prefers-reduced-motion: reduce) { .logo { transition: none; } }
+
+      a { color: var(--accent); text-decoration: none; font-weight: 500; }
+      a:hover { text-decoration: underline; }
 
       input, button {
-        font: inherit;
         border-radius: 8px;
-        border: 1px solid var(--line);
-        padding: 8px 12px;
-        background: var(--card);
-        color: var(--text);
-        transition: border-color 0.15s, background 0.15s;
+        border: 1px solid transparent;
+        padding: 0.6em 1.2em;
+        font: inherit;
+        font-weight: 500;
+        color: var(--ink);
+        background: var(--field);
+        box-shadow: var(--shadow);
+        transition: border-color 0.25s;
       }
-      input { min-width: 0; }
-      input[type="number"] { width: 5.5em; text-align: center; }
-      input.grow { flex: 1 1 12em; }
+      button { cursor: pointer; }
+      button:hover { border-color: var(--accent); }
+      button:active { border-color: var(--accent); filter: brightness(0.97); }
       input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-      button { cursor: pointer; font-weight: 500; }
-      button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-      button:disabled { opacity: 0.5; cursor: default; }
-      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-      button.primary:hover:not(:disabled) { filter: brightness(1.08); color: #fff; }
 
-      .result { margin: 12px 0 0; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
-      .result.filled { color: var(--text); }
-      pre.result { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 11em; overflow: auto; margin-top: 12px; }
-
-      /* A dot that keeps moving while a 2s command is pending. If it stalls,
-         the host has blocked the UI thread — which is the bug this proves is
-         absent. */
-      .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1s ease-in-out infinite; }
-      @keyframes pulse { 0%, 100% { opacity: 0.25; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.15); } }
-      @media (prefers-reduced-motion: reduce) { .pulse { animation: none; opacity: 1; } }
-
-      ul.events { list-style: none; margin: 0; padding: 0; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
-      ul.events li { padding: 3px 0; border-bottom: 1px dashed var(--line); }
-      ul.events li:last-child { border-bottom: 0; }
-      ul.events:empty::after { content: "nothing yet — press add"; color: var(--muted); font-family: inherit; }
-
-      footer { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; }
-      footer code { background: var(--card); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; font-size: 12px; }
-
+      /* Reserved so the layout does not jump when the answer arrives. */
+      .greeting { min-height: 1.5em; margin: 20px 0 0; }
     </style>
   </head>
   <body>
-    <main>
-      <header>
-        <svg class="mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 970.64 970.64" role="img" aria-label="janela"><path fill="currentColor" d="M970.64,485.32c0,268.03-217.28,485.32-485.32,485.32S0,753.35,0,485.32,217.28,0,485.32,0s485.32,217.28,485.32,485.32ZM938.11,485.34c0-250.08-202.73-452.8-452.8-452.8S32.51,235.26,32.51,485.34s202.73,452.8,452.8,452.8,452.8-202.73,452.8-452.8Z"/><path fill="currentColor" d="M892.79,485.25c0,225.05-182.44,407.49-407.49,407.49S77.82,710.3,77.82,485.25,260.26,77.77,485.31,77.77s407.49,182.44,407.49,407.49ZM470.27,112.09v335.5c0,1.05,13.11,12.99,15.36,14.43,1.65-2.06,14.64-13.4,14.64-14.43V112.59c0-1.1-2.44-1.43-3.45-1.55-8.42-.99-18.1.83-26.55,1.05ZM858.27,438.09c-20.14-166.94-158.46-303.59-325-324v324h325ZM437.27,115.09c-21.65,1.62-44.22,7.07-65,13.5-137.62,42.61-242.41,165.92-260,309.5h325V115.09ZM109.27,500.09h338.5c1,0,12.36-12.44,13.54-14.5,0-1-12.54-14.5-13.54-14.5H109.27c-1.81,9.94-.24,19.09,0,29ZM861.27,471.09h-338.5c-1,0-13.53,13.5-13.54,14.5.52,2.76,3.61,3.57,5.57,5.47,1.64,1.59,7.37,9.03,7.97,9.03h338.5c.9-9.78.9-19.22,0-29ZM500.27,860.09v-336.5c0-1.03-12.98-12.37-14.64-14.43-2.26,1.44-15.36,13.37-15.36,14.43v336.5h30ZM437.27,533.09H112.27c19.95,166.03,159.46,303.1,325,323v-323ZM858.27,533.09h-325v324c165.97-22.51,304.48-156.63,325-324Z"/><path fill="var(--accent)" d="M858.27,438.09h-325V114.09c166.54,20.41,304.86,157.06,325,324Z"/><path fill="var(--accent)" d="M858.27,533.09c-20.52,167.37-159.03,301.49-325,324v-324h325Z"/><path fill="var(--accent)" d="M437.27,533.09v323c-165.54-19.9-305.05-156.97-325-323h325Z"/><path fill="var(--accent)" d="M437.27,115.09v323H112.27c17.6-143.57,122.38-266.89,260-309.5,20.78-6.43,43.34-11.88,65-13.5ZM324.93,239.42c-5.22-5.22-14.48-5.8-20.62-1.79-23.51,27.2-56.28,50.77-79.07,77.93-3.21,3.83-6.62,7.81-7,13.05-.97,13.35,13.8,21.88,24.98,14.93,28.09-28.84,58.16-56.14,84.78-86.22,2.71-5.58,1.25-13.58-3.07-17.9ZM375.06,280.3c-4.15.41-7.65,2.76-10.8,5.27-2.42,1.93-17.06,17.64-18.19,19.81-7.64,14.76,7.17,29.85,21.55,22.56,2.83-1.44,19.3-18.18,21.64-21.36,8.21-11.17-.52-27.62-14.2-26.28ZM310.03,344.3c-2.88.42-6.45,2.49-8.78,4.26-4.52,3.45-32.55,31.28-34.83,35.17-8.84,15.07,8.47,31.23,23.59,21.59,4.35-2.77,34.16-32.7,36.28-36.72,6.36-12.04-2.95-26.26-16.27-24.31Z"/><path fill="var(--card)" d="M500.27,860.09h-30v-336.5c0-1.05,13.11-12.99,15.36-14.43,1.65,2.06,14.64,13.4,14.64,14.43v336.5Z"/><path fill="var(--card)" d="M470.27,112.09c8.45-.22,18.13-2.04,26.55-1.05,1.01.12,3.45.46,3.45,1.55v335c0,1.03-12.98,12.37-14.64,14.43-2.26-1.44-15.36-13.37-15.36-14.43V112.09Z"/><path fill="var(--card)" d="M109.27,500.09c-.24-9.91-1.81-19.06,0-29h338.5c1,0,13.54,13.5,13.54,14.5-1.17,2.06-12.54,14.5-13.54,14.5H109.27Z"/><path fill="var(--card)" d="M861.27,471.09c.9,9.78.9,19.22,0,29h-338.5c-.6,0-6.34-7.44-7.97-9.03-1.96-1.9-5.04-2.72-5.57-5.47,0-1,12.54-14.5,13.54-14.5h338.5Z"/><path fill="currentColor" d="M324.93,239.42c4.32,4.32,5.78,12.32,3.07,17.9-26.62,30.07-56.7,57.37-84.78,86.22-11.18,6.94-25.95-1.58-24.98-14.93.38-5.24,3.79-9.22,7-13.05,22.8-27.16,55.56-50.73,79.07-77.93,6.13-4.01,15.39-3.43,20.62,1.79Z"/><path fill="currentColor" d="M310.03,344.3c13.33-1.95,22.63,12.27,16.27,24.31-2.12,4.02-31.93,33.94-36.28,36.72-15.12,9.64-32.44-6.52-23.59-21.59,2.28-3.89,30.31-31.72,34.83-35.17,2.33-1.78,5.9-3.84,8.78-4.26Z"/><path fill="currentColor" d="M375.06,280.3c13.69-1.35,22.42,15.11,14.2,26.28-2.34,3.18-18.81,19.93-21.64,21.36-14.39,7.3-29.19-7.8-21.55-22.56,1.13-2.18,15.76-17.88,18.19-19.81,3.16-2.51,6.65-4.86,10.8-5.27Z"/></svg>
-        <h1>__NAME__</h1>
-        <p class="sub">TypeScript, compiled to a native binary. No Rust, no Node, no Electron.</p>
-      </header>
+    <main class="container">
+      <h1>Welcome to janela</h1>
+      <p class="hint">TypeScript, compiled to a native binary. No Rust, no Node, no Electron.</p>
 
-      <p class="greeting" id="out">booting…</p>
-
-      <div class="grid">
-        <section class="card">
-          <h2>Typed commands</h2>
-          <p class="why">The name, the arguments and the result are all checked at compile time — no codegen, because both sides are TypeScript.</p>
-          <div class="row">
-            <input id="a" type="number" value="2" aria-label="first number" />
-            <span aria-hidden="true">+</span>
-            <input id="b" type="number" value="40" aria-label="second number" />
-            <button id="add" class="primary">add</button>
-          </div>
-          <p class="result" id="sum">—</p>
-          <h3>Events from the host</h3>
-          <ul class="events" id="events"></ul>
-        </section>
-
-        <section class="card">
-          <h2>Async without blocking</h2>
-          <p class="why">The window keeps answering while this is pending: the dot keeps moving and <strong>add</strong> still works.</p>
-          <div class="row">
-            <button id="wait">wait 2s</button>
-            <span id="spinner" hidden><span class="pulse"></span></span>
-          </div>
-          <p class="result" id="waited">—</p>
-        </section>
-
-        <section class="card wide">
-          <h2>Files and the window</h2>
-          <p class="why">Reads run on a worker thread, so a large file never freezes the window. The dialog is the real native one.</p>
-          <div class="row">
-            <input id="path" class="grow" type="text" value="janela.conf.json" aria-label="file to read" />
-            <button id="read">read</button>
-            <button id="open">pick a file…</button>
-            <input id="title" class="grow" type="text" value="__NAME__ — renamed" aria-label="window title" />
-            <button id="retitle">set title</button>
-          </div>
-          <pre class="result" id="file">—</pre>
-        </section>
+      <div class="row logos">
+        <a href="https://mmamedel.github.io/janela/" target="_blank" rel="noreferrer">
+          <svg class="logo janela" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 970.64 970.64" role="img" aria-label="janela"><path fill="currentColor" d="M970.64,485.32c0,268.03-217.28,485.32-485.32,485.32S0,753.35,0,485.32,217.28,0,485.32,0s485.32,217.28,485.32,485.32ZM938.11,485.34c0-250.08-202.73-452.8-452.8-452.8S32.51,235.26,32.51,485.34s202.73,452.8,452.8,452.8,452.8-202.73,452.8-452.8Z"/><path fill="currentColor" d="M892.79,485.25c0,225.05-182.44,407.49-407.49,407.49S77.82,710.3,77.82,485.25,260.26,77.77,485.31,77.77s407.49,182.44,407.49,407.49ZM470.27,112.09v335.5c0,1.05,13.11,12.99,15.36,14.43,1.65-2.06,14.64-13.4,14.64-14.43V112.59c0-1.1-2.44-1.43-3.45-1.55-8.42-.99-18.1.83-26.55,1.05ZM858.27,438.09c-20.14-166.94-158.46-303.59-325-324v324h325ZM437.27,115.09c-21.65,1.62-44.22,7.07-65,13.5-137.62,42.61-242.41,165.92-260,309.5h325V115.09ZM109.27,500.09h338.5c1,0,12.36-12.44,13.54-14.5,0-1-12.54-14.5-13.54-14.5H109.27c-1.81,9.94-.24,19.09,0,29ZM861.27,471.09h-338.5c-1,0-13.53,13.5-13.54,14.5.52,2.76,3.61,3.57,5.57,5.47,1.64,1.59,7.37,9.03,7.97,9.03h338.5c.9-9.78.9-19.22,0-29ZM500.27,860.09v-336.5c0-1.03-12.98-12.37-14.64-14.43-2.26,1.44-15.36,13.37-15.36,14.43v336.5h30ZM437.27,533.09H112.27c19.95,166.03,159.46,303.1,325,323v-323ZM858.27,533.09h-325v324c165.97-22.51,304.48-156.63,325-324Z"/><path fill="var(--accent, #1c6fd4)" d="M858.27,438.09h-325V114.09c166.54,20.41,304.86,157.06,325,324Z"/><path fill="var(--accent, #1c6fd4)" d="M858.27,533.09c-20.52,167.37-159.03,301.49-325,324v-324h325Z"/><path fill="var(--accent, #1c6fd4)" d="M437.27,533.09v323c-165.54-19.9-305.05-156.97-325-323h325Z"/><path fill="var(--accent, #1c6fd4)" d="M437.27,115.09v323H112.27c17.6-143.57,122.38-266.89,260-309.5,20.78-6.43,43.34-11.88,65-13.5ZM324.93,239.42c-5.22-5.22-14.48-5.8-20.62-1.79-23.51,27.2-56.28,50.77-79.07,77.93-3.21,3.83-6.62,7.81-7,13.05-.97,13.35,13.8,21.88,24.98,14.93,28.09-28.84,58.16-56.14,84.78-86.22,2.71-5.58,1.25-13.58-3.07-17.9ZM375.06,280.3c-4.15.41-7.65,2.76-10.8,5.27-2.42,1.93-17.06,17.64-18.19,19.81-7.64,14.76,7.17,29.85,21.55,22.56,2.83-1.44,19.3-18.18,21.64-21.36,8.21-11.17-.52-27.62-14.2-26.28ZM310.03,344.3c-2.88.42-6.45,2.49-8.78,4.26-4.52,3.45-32.55,31.28-34.83,35.17-8.84,15.07,8.47,31.23,23.59,21.59,4.35-2.77,34.16-32.7,36.28-36.72,6.36-12.04-2.95-26.26-16.27-24.31Z"/><path fill="var(--card, var(--bg, #f6f6f7))" d="M500.27,860.09h-30v-336.5c0-1.05,13.11-12.99,15.36-14.43,1.65,2.06,14.64,13.4,14.64,14.43v336.5Z"/><path fill="var(--card, var(--bg, #f6f6f7))" d="M470.27,112.09c8.45-.22,18.13-2.04,26.55-1.05,1.01.12,3.45.46,3.45,1.55v335c0,1.03-12.98,12.37-14.64,14.43-2.26-1.44-15.36-13.37-15.36-14.43V112.09Z"/><path fill="var(--card, var(--bg, #f6f6f7))" d="M109.27,500.09c-.24-9.91-1.81-19.06,0-29h338.5c1,0,13.54,13.5,13.54,14.5-1.17,2.06-12.54,14.5-13.54,14.5H109.27Z"/><path fill="var(--card, var(--bg, #f6f6f7))" d="M861.27,471.09c.9,9.78.9,19.22,0,29h-338.5c-.6,0-6.34-7.44-7.97-9.03-1.96-1.9-5.04-2.72-5.57-5.47,0-1,12.54-14.5,13.54-14.5h338.5Z"/><path fill="currentColor" d="M324.93,239.42c4.32,4.32,5.78,12.32,3.07,17.9-26.62,30.07-56.7,57.37-84.78,86.22-11.18,6.94-25.95-1.58-24.98-14.93.38-5.24,3.79-9.22,7-13.05,22.8-27.16,55.56-50.73,79.07-77.93,6.13-4.01,15.39-3.43,20.62,1.79Z"/><path fill="currentColor" d="M310.03,344.3c13.33-1.95,22.63,12.27,16.27,24.31-2.12,4.02-31.93,33.94-36.28,36.72-15.12,9.64-32.44-6.52-23.59-21.59,2.28-3.89,30.31-31.72,34.83-35.17,2.33-1.78,5.9-3.84,8.78-4.26Z"/><path fill="currentColor" d="M375.06,280.3c13.69-1.35,22.42,15.11,14.2,26.28-2.34,3.18-18.81,19.93-21.64,21.36-14.39,7.3-29.19-7.8-21.55-22.56,1.13-2.18,15.76-17.88,18.19-19.81,3.16-2.51,6.65-4.86,10.8-5.27Z"/></svg>
+        </a>
       </div>
+      <p class="hint">Click the janela logo to learn more.</p>
 
-      <footer>
-        <span>Edit <code>index.html</code> for the page and <code>src-host/main.ts</code> for the commands.</span>
-        <button id="quit">Quit</button>
-      </footer>
+      <form class="row" id="greet-form">
+        <input id="greet-input" placeholder="Enter a name..." aria-label="a name to greet" />
+        <button type="submit">Greet</button>
+      </form>
+      <p class="greeting" id="greeting"></p>
     </main>
 
     <script>
       // This template has no bundler, so it uses the `janela` global that the
       // host injects before the page loads. Projects with a build step should
-      // `import { invoke, listen } from "janela/api"` instead — same functions,
-      // but typed and resolvable by the bundler.
+      // `import { invoke } from "janela/api"` instead — same function, but
+      // typed and resolvable by the bundler.
       window.onload = async () => {
-        const $ = (id) => document.getElementById(id);
-        const show = (el, text) => {
-          el.textContent = text;
-          el.classList.add("filled");
+        const out = document.getElementById("greeting");
+        const input = document.getElementById("greet-input");
+
+        // `greet` is a command in src-host/main.ts, compiled to machine code.
+        const greet = async (name) => {
+          out.textContent = await janela.invoke("greet", { name });
         };
 
-        janela.listen("added", (sum) => {
-          const li = document.createElement("li");
-          li.textContent = "host emitted 'added': " + sum;
-          $("events").prepend(li);
-        });
-
-        // The greeting is a round trip: the string is built in compiled
-        // TypeScript and returned to the page.
-        $("out").textContent = await janela.invoke("greet", { name: "__NAME__" });
+        // Greeted once on load, so the round trip is visible without a click.
+        await greet("__NAME__");
         await janela.invoke("log", "page loaded");
 
-        $("add").onclick = async () => {
-          const a = Number($("a").value);
-          const b = Number($("b").value);
-          show($("sum"), `add(${a}, ${b}) → ${await janela.invoke("add", { a, b })}`);
+        document.getElementById("greet-form").onsubmit = (e) => {
+          e.preventDefault();
+          greet(input.value || "__NAME__");
         };
-
-        $("wait").onclick = async (e) => {
-          e.target.disabled = true;
-          $("spinner").hidden = false;
-          show($("waited"), "waiting… try add, it still answers");
-          const answer = await janela.invoke("wait", { ms: 2000 });
-          show($("waited"), answer);
-          $("spinner").hidden = true;
-          e.target.disabled = false;
-        };
-
-        $("read").onclick = async () => {
-          const path = $("path").value;
-          const r = await janela.invoke("readFile", { path });
-          show($("file"), r.ok ? `${path} — ${r.length} chars\n\n${r.text.slice(0, 400)}` : "error: " + r.error);
-        };
-
-        // The native open dialog. The window keeps serving other commands
-        // while the user is deciding.
-        $("open").onclick = async () => {
-          const r = await janela.invoke("openFile", {});
-          if (!r.ok) show($("file"), "error: " + r.error);
-          else if (r.cancelled) show($("file"), "cancelled");
-          else show($("file"), `${r.path} — ${r.length} chars\n\n${r.text.slice(0, 400)}`);
-        };
-
-        $("retitle").onclick = () => janela.invoke("setTitle", { title: $("title").value });
-        $("quit").onclick = () => janela.invoke("quit");
       };
     </script>
   </body>

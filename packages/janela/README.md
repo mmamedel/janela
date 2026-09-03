@@ -11,11 +11,12 @@ Desktop and mobile apps in pure TypeScript, compiled to native. No Rust, no
 Node, no Electron. The backend is TypeScript compiled to a native binary by
 [scriptc](https://scriptc.dev); the window is the OS webview via
 [webview/webview](https://github.com/webview/webview). A desktop binary comes
-out around 240–420 KB — 241 KB for the smallest template — with no bundled
+out around 190–390 KB — 191 KB for the smallest template — with no bundled
 browser and no bundled runtime; iOS and Android bundles land around
-244–421 KB. Those are the *starter's* figures, and about 35 KB of each is the
-native file dialog and worker-thread reader it demonstrates: delete the "Files
-and the window" card and its two commands and the smallest binary is 212 KB. Per-template figures are in
+195–388 KB. Those are the *starter's* figures: it calls one command, so it
+links almost nothing beyond the runtime. Reaching for a platform API adds its
+code — the native file dialog and the worker-thread reader together are about
+35 KB — which is the shape worth remembering: what you pay is what you call. Per-template figures are in
 [docs/frontend.md](../../docs/frontend.md).
 
 Five targets, one runtime — the same `main.ts`, the same typed contract and the
@@ -672,4 +673,7 @@ gh release create v<version> --generate-notes --verify-tag
 ## License
 
 MIT. Bundles [webview/webview](https://github.com/webview/webview) headers
-(MIT, © Serge Zaitsev and contributors).
+(MIT, © Serge Zaitsev and contributors). The starter page takes its shape from
+[create-tauri-app](https://github.com/tauri-apps/create-tauri-app) (MIT), and
+the Vite, Vue, React, Svelte and Solid marks it inlines are each project's
+own.
