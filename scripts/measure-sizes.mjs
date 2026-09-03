@@ -238,7 +238,7 @@ function measureAll(targetName) {
 
 // --- the record -------------------------------------------------------------
 
-function loadRecord() {
+export function loadRecord() {
   if (!existsSync(RECORD)) die(`${RECORD} is missing — run --measure first`);
   return JSON.parse(readFileSync(RECORD, "utf8"));
 }
@@ -247,7 +247,7 @@ function saveRecord(rec) {
   writeFileSync(RECORD, `${JSON.stringify(rec, null, 2)}\n`, "utf8");
 }
 
-const kib = (bytes) => `${Math.round(bytes / 1024)} KB`;
+export const kib = (bytes) => `${Math.round(bytes / 1024)} KB`;
 
 // --- rendering --------------------------------------------------------------
 
@@ -429,6 +429,141 @@ function checkProse(rec) {
   return problems;
 }
 
+/**
+ * The website's per-platform table, checked figure by figure.
+ *
+ * `checkProse` gates every "N–M KB" *range*, which is why the stale
+ * "roughly 380–520 KB, desktop or mobile" could not survive this script. But
+ * the landing page also carries a small table of *single absolute* figures —
+ * one cell per platform per template — and a range check has nothing to say
+ * about those. They were correct when written and nothing would have noticed
+ * them coming loose, on the one surface a reader actually sees.
+ *
+ * The table is hand-written HTML rather than a generated block, because the
+ * page's markup and classes are design, not data. So this reads it instead of
+ * owning it: the row label picks the platform, the column heading picks the
+ * template, and every cell must equal the record rounded the same way the
+ * generated table rounds it.
+ */
+const SITE_TABLE_FILE = "website/index.html";
+
+/**
+ * Row label -> platform key in the record. Deliberately explicit: a row whose
+ * label matches nothing is an error, so a platform added to the page cannot
+ * arrive unchecked, and a row silently retitled fails rather than passing by
+ * default.
+ */
+const SITE_ROWS = [
+  { re: /^desktop\b/i, kind: "desktop" },
+  { re: /^ios\b/i, key: "ios-sim-arm64" },
+  { re: /^android\b/i, key: "android-emu-arm64" },
+];
+
+/** "Vanilla" / "With Vue" -> a template name in the record. */
+function siteColumnTemplate(heading, rec) {
+  const want = heading
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .trim()
+    .toLowerCase()
+    .replace(/^with\s+/, "");
+  return rec.templates.find((t) => t === want) ?? null;
+}
+
+// Exported, and taking the page text rather than only reading it, so the
+// checker can be exercised against mutated markup in memory — see
+// tests/e2e/sizes.test.mjs. A guard nothing can fail is not a guard.
+export function checkSiteFigures(rec, text = readText(join(REPO, SITE_TABLE_FILE))) {
+  const problems = [];
+
+  // The page has more than one table; the size table is the one whose first
+  // column is the target. Anchoring on that rather than on ordinal position
+  // means adding a table above it does not silently move the check.
+  const headRe = /<thead>\s*<tr>\s*<th>Target<\/th>([\s\S]*?)<\/tr>\s*<\/thead>\s*<tbody>([\s\S]*?)<\/tbody>/i;
+  const m = headRe.exec(text);
+  if (!m) {
+    return [
+      `${SITE_TABLE_FILE}: no size table found (expected a <thead> whose first <th> is "Target"). ` +
+        `If the page's wording changed, update SITE_ROWS / the anchor in scripts/measure-sizes.mjs — ` +
+        `do not delete the check.`,
+    ];
+  }
+
+  const headings = [...m[1].matchAll(/<th>([\s\S]*?)<\/th>/gi)].map((h) => h[1]);
+  const cols = headings.map((h) => ({ raw: h, template: siteColumnTemplate(h, rec) }));
+  const unknown = cols.filter((c) => !c.template);
+  if (unknown.length) {
+    problems.push(
+      `${SITE_TABLE_FILE}: column heading(s) ${unknown.map((c) => JSON.stringify(c.raw.trim())).join(", ")} ` +
+        `name no template in the record (${rec.templates.join(", ")})`,
+    );
+    return problems;
+  }
+
+  const rows = [...m[2].matchAll(/<tr>([\s\S]*?)<\/tr>/gi)].map((r) => r[1]);
+  if (rows.length === 0) problems.push(`${SITE_TABLE_FILE}: the size table has no rows`);
+
+  const seen = new Set();
+  for (const row of rows) {
+    const label = /<td class="plat">([\s\S]*?)<\/td>/i.exec(row)?.[1] ?? "";
+    const plain = label.replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim();
+    const spec = SITE_ROWS.find((r) => r.re.test(plain));
+    if (!spec) {
+      problems.push(
+        `${SITE_TABLE_FILE}: row ${JSON.stringify(plain)} matches no known platform — ` +
+          `add it to SITE_ROWS so its figures are checked`,
+      );
+      continue;
+    }
+    // A kind-based spec (desktop) resolves through the record, so the host
+    // platform's key does not have to be hard-coded here.
+    const key =
+      spec.key ?? Object.entries(rec.platforms).find(([, p]) => p.kind === spec.kind)?.[0];
+    const plat = key && rec.platforms[key];
+    if (!plat) {
+      problems.push(`${SITE_TABLE_FILE}: row ${JSON.stringify(plain)} has no ${spec.key ?? spec.kind} column in the record`);
+      continue;
+    }
+    seen.add(key);
+
+    const cells = [...row.matchAll(/<td class="num">([\s\S]*?)<\/td>/gi)].map((c) =>
+      c[1].replace(/&nbsp;/g, " ").trim(),
+    );
+    if (cells.length !== cols.length) {
+      problems.push(
+        `${SITE_TABLE_FILE}: row ${JSON.stringify(plain)} has ${cells.length} figure(s) ` +
+          `for ${cols.length} column(s) — a dropped cell would otherwise go unchecked`,
+      );
+      continue;
+    }
+    cells.forEach((cell, i) => {
+      const t = cols[i].template;
+      const bytes = plat.sizes[t];
+      if (bytes == null) {
+        problems.push(`${SITE_TABLE_FILE}: ${plain}/${t} is on the page but not in the record`);
+        return;
+      }
+      const want = kib(bytes);
+      if (cell !== want) {
+        problems.push(
+          `${SITE_TABLE_FILE}: ${plain}/${t} says ${JSON.stringify(cell)}, ` +
+            `the record measures ${bytes.toLocaleString("en-US")} B = ${want}`,
+        );
+      }
+    });
+  }
+
+  // Every platform the record knows about should appear on the page. A column
+  // quietly dropped from the site is the same failure as a stale one: the
+  // reader is told less than we measured.
+  for (const key of Object.keys(rec.platforms)) {
+    if (!seen.has(key)) {
+      problems.push(`${SITE_TABLE_FILE}: the record has ${key} but the size table has no row for it`);
+    }
+  }
+  return problems;
+}
+
 // --- commands ---------------------------------------------------------------
 
 /** Which columns this host can actually build, and why not when it cannot. */
@@ -513,6 +648,9 @@ function cmdCheck({ measure, strict, measureTargetName = "desktop" }) {
   // 2. prose ranges still bracket the measurements
   problems.push(...checkProse(rec));
 
+  // 2b. and the site's single absolute figures match it cell by cell
+  problems.push(...checkSiteFigures(rec));
+
   // 3. every platform's figures were taken at the current version.
   //
   // A lagging column this host can measure is a failure — the fix is one
@@ -577,29 +715,33 @@ function cmdCheck({ measure, strict, measureTargetName = "desktop" }) {
   console.error("measure-sizes: published sizes are consistent.");
 }
 
-const argv = process.argv.slice(2);
-const known = ["--measure", "--write", "--check", "--strict", "--target", "--help", "-h"];
-for (let i = 0; i < argv.length; i++) {
-  const a = argv[i];
-  if (a === "--target") {
-    const v = argv[++i];
-    if (!v || !TARGETS[v]) die(`--target needs one of: ${Object.keys(TARGETS).join(", ")}`);
-    continue;
+// The CLI runs only when this file IS the program. Importing it (the unit
+// tests do) must not parse argv, print help, or exit.
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const argv = process.argv.slice(2);
+  const known = ["--measure", "--write", "--check", "--strict", "--target", "--help", "-h"];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--target") {
+      const v = argv[++i];
+      if (!v || !TARGETS[v]) die(`--target needs one of: ${Object.keys(TARGETS).join(", ")}`);
+      continue;
+    }
+    if (!known.includes(a)) die(`unknown option '${a}'. Known: ${known.join(", ")}`);
   }
-  if (!known.includes(a)) die(`unknown option '${a}'. Known: ${known.join(", ")}`);
-}
-const ti = argv.indexOf("--target");
-const target = ti === -1 ? "desktop" : argv[ti + 1];
+  const ti = argv.indexOf("--target");
+  const target = ti === -1 ? "desktop" : argv[ti + 1];
 
-if (argv.includes("--help") || argv.includes("-h") || argv.length === 0) {
-  console.error(readText(fileURLToPath(import.meta.url)).split("\n").slice(1, 21).join("\n").replace(/^\/\/ ?/gm, ""));
-  process.exit(argv.length === 0 ? 1 : 0);
+  if (argv.includes("--help") || argv.includes("-h") || argv.length === 0) {
+    console.error(readText(fileURLToPath(import.meta.url)).split("\n").slice(1, 21).join("\n").replace(/^\/\/ ?/gm, ""));
+    process.exit(argv.length === 0 ? 1 : 0);
+  }
+  const strict = argv.includes("--strict");
+  if (argv.includes("--measure") && argv.includes("--check")) {
+    cmdCheck({ measure: true, strict, measureTargetName: target });
+  } else if (argv.includes("--measure")) {
+    cmdMeasure(target);
+    cmdWrite();
+  } else if (argv.includes("--write")) cmdWrite();
+  else if (argv.includes("--check")) cmdCheck({ measure: false, strict });
 }
-const strict = argv.includes("--strict");
-if (argv.includes("--measure") && argv.includes("--check")) {
-  cmdCheck({ measure: true, strict, measureTargetName: target });
-} else if (argv.includes("--measure")) {
-  cmdMeasure(target);
-  cmdWrite();
-} else if (argv.includes("--write")) cmdWrite();
-else if (argv.includes("--check")) cmdCheck({ measure: false, strict });
