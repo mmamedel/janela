@@ -994,7 +994,7 @@ function build(root, { devUrl = null, gui = true, target = "desktop" } = {}) {
       `}\n`
     : `const app = createApp<CmdsOf<typeof setup>, EvtsOf<typeof setup>>(WINDOW);\n` +
       `setup(app);\n` +
-      `const rc = app.run(INDEX_HTML) + 0;\n` +
+      `const rc = app.run(INDEX_HTML);\n` +
       `console.log("[janela] run returned", rc);\n`;
 
   writeFileSync(

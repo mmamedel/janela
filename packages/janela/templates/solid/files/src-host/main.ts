@@ -6,11 +6,8 @@
 // names, argument shapes, results and event payloads — with no code
 // generation and nothing to keep in sync.
 //
-// Two gotchas inherited from scriptc:
-//   - never use a bare FFI-backed call as a complete variable initializer;
-//     wrap it in any expression (`+ 0`);
-//   - a command that returns nothing is declared `() => void` and its handler
-//     returns `null`; every command answers the page's promise with a value.
+// A command that returns nothing is declared `() => void` and its handler
+// returns `null`; every command answers the page's promise with a value.
 
 import type { JanelaApp } from "janela/host";
 

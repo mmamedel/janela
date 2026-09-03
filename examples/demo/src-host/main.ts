@@ -3,10 +3,6 @@
 // Register commands here; the page calls them with `await janela.invoke(name, args)`.
 // Handlers take the arguments as a value and return a value; the runtime owns
 // JSON at the boundary.
-//
-// Gotcha inherited from scriptc: never use a bare FFI-backed call as a
-// complete variable initializer — wrap it in any expression (`+ 0`). Plain
-// TypeScript like everything in this file is unaffected.
 
 import type { JanelaApp } from "janela/host";
 

@@ -559,10 +559,6 @@ no `-framework` support) and the binary is wrapped into an ad-hoc-signed
   the boundary, so anything that survives `JSON.stringify`/`JSON.parse` round
   trips (including full Unicode). `args` is typed `unknown` — cast it to the
   shape you expect.
-- Never use a bare FFI call as a complete variable initializer or assignment
-  RHS — it is silently miscompiled. Wrap it in any expression (`+ 0`). Plain
-  TypeScript is unaffected; only the runtime does FFI, so app code rarely
-  meets this.
 - One window per app for now. Host code is single-threaded: a synchronous
   command blocks the UI while it runs — use `commandAsync` + `defer`/`sleep`
   (see "Async commands") for anything slow.
