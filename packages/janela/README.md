@@ -6,7 +6,7 @@ Desktop and mobile apps in pure TypeScript, compiled to native. No Rust, no
 Node, no Electron. The backend is TypeScript compiled to a native binary by
 [scriptc](https://scriptc.dev); the window is the OS webview via
 [webview/webview](https://github.com/webview/webview). A desktop binary comes
-out around 200–400 KB — 191 KB for the smallest template — with no bundled
+out around 190–390 KB — 191 KB for the smallest template — with no bundled
 browser and no bundled runtime; iOS and Android bundles land around
 211–415 KB. Per-template figures are in
 [docs/frontend.md](../../docs/frontend.md).

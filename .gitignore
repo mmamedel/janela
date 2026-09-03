@@ -6,3 +6,6 @@ node_modules
 
 # end-to-end fixture projects (generated at run time)
 .janela-tests/
+
+# scratch for scripts/measure-sizes.mjs
+.janela-sizes/

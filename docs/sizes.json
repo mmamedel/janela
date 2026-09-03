@@ -1,0 +1,76 @@
+{
+  "templates": [
+    "vanilla",
+    "react",
+    "solid",
+    "svelte",
+    "vue"
+  ],
+  "platforms": {
+    "ios-sim-arm64": {
+      "label": "iOS `.app`",
+      "kind": "mobile",
+      "host": "iPhone 17 Pro simulator, iOS 26.5",
+      "janela": "0.13.1",
+      "scriptc": "0.0.36",
+      "measured": "2026-09-03",
+      "note": "Taken from the ios e2e lane; not re-measurable without a booted simulator.",
+      "sizes": {
+        "vanilla": 410049,
+        "react": 591673,
+        "solid": 393513,
+        "svelte": 426541,
+        "vue": 459553
+      },
+      "components": {
+        "iOS binary": {
+          "vanilla": 409240,
+          "react": 590872,
+          "solid": 392712,
+          "svelte": 425736,
+          "vue": 458760
+        }
+      }
+    },
+    "android-emu-arm64": {
+      "label": "Android `.apk`",
+      "kind": "mobile",
+      "host": "Medium_Phone_API_36 emulator, API 36, WebView 133",
+      "janela": "0.13.1",
+      "scriptc": "0.0.36",
+      "measured": "2026-09-03",
+      "note": "Taken from the android e2e lane; not re-measurable without an emulator.",
+      "sizes": {
+        "vanilla": 483851,
+        "react": 541195,
+        "solid": 483851,
+        "svelte": 492043,
+        "vue": 504331
+      },
+      "components": {
+        "Android `.so`": {
+          "vanilla": 1406536,
+          "react": 1592184,
+          "solid": 1407912,
+          "svelte": 1436104,
+          "vue": 1462536
+        }
+      }
+    },
+    "darwin-arm64": {
+      "label": "desktop (darwin-arm64)",
+      "kind": "desktop",
+      "host": "darwin-arm64",
+      "janela": "0.14.0",
+      "scriptc": "0.0.36",
+      "measured": "2026-09-03",
+      "sizes": {
+        "vanilla": 230608,
+        "react": 393944,
+        "solid": 195768,
+        "svelte": 228808,
+        "vue": 261832
+      }
+    }
+  }
+}

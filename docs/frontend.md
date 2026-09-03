@@ -143,29 +143,35 @@ compiled into the binary, so changing it means re-running `janela dev`.
 
 Every cell below was scaffolded, built and **run**, with a probe asserting that
 the framework rendered host data into the DOM, that a typed round trip returned
-a `number`, and that `— çãé 🚀` survived intact. Re-measured 2026-09-03 at
-janela 0.14.1 on **scriptc 0.0.36**, on an Apple Silicon Mac, an iPhone 17 Pro
-simulator (iOS 26.5) and a `Medium_Phone_API_36` emulator (API 36,
-WebView 133).
+a `number`, and that `— çãé 🚀` survived intact. All fifteen cells pass.
 
-| template | desktop binary | iOS `.app` | Android `.apk` |
-|---|---|---|---|
-| solid | 191 KB | 211 KB | 329 KB |
-| svelte | 223 KB | 244 KB | 337 KB |
-| vanilla | 225 KB | 228 KB | 325 KB |
-| vue | 256 KB | 276 KB | 349 KB |
-| react | 385 KB | 405 KB | 385 KB |
+Sizes are of the whole shipped artifact — the stripped executable, the summed
+`.app` bundle, the `.apk` as shipped — measured from a pristine `janela init`,
+not from an e2e fixture. The tables are **generated**:
 
-All fifteen cells pass. Sizes are `KiB` of the whole artifact — the stripped
-executable, the summed `.app` bundle, the `.apk` as shipped. Raw byte counts:
+```bash
+node scripts/measure-sizes.mjs --measure                    # this host's desktop column
+node scripts/measure-sizes.mjs --measure --target ios        # needs a booted simulator
+node scripts/measure-sizes.mjs --measure --target android    # needs an emulator + a JDK
+node scripts/measure-sizes.mjs --check                       # fail if any published figure drifted
+```
 
-| template | desktop | iOS `.app` | iOS binary | Android `.apk` | Android `.so` |
-|---|---|---|---|---|---|
-| solid | 195,768 | 216,437 | 215,640 | 336,395 | 854,208 |
-| svelte | 228,808 | 249,481 | 248,680 | 344,587 | 882,416 |
-| vanilla | 230,600 | 233,021 | 232,216 | 332,299 | 852,768 |
-| vue | 261,832 | 282,493 | 281,704 | 356,875 | 908,832 |
-| react | 393,944 | 414,613 | 413,816 | 393,739 | 1,038,480 |
+`--check` also verifies the size ranges quoted in the READMEs and on the
+website, and reports any column whose figures predate the current version. It
+runs no builds unless asked, so it is cheap enough for CI. The record it reads
+is [`sizes.json`](sizes.json), which carries the host, the janela version and
+the scriptc pin behind every column — a figure cannot outlive what produced it
+without saying so.
+
+<!-- sizes:start -->
+<!-- sizes:end -->
+
+Raw byte counts are only comparable when the project name is the same length:
+the name is embedded in the binary, so a two-character name builds 16 bytes
+smaller than a sixteen-character one. The script always scaffolds as
+`size-<template>`, which is why `--check --measure` reproduces the record
+exactly; your own app will land a few bytes either side. Rounded KiB is
+unaffected.
 
 ### What tree-shaking did to every column
 
