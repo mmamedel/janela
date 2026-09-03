@@ -188,6 +188,11 @@ rebuilt across the pin bump and nothing else:
 | vue | 531,320 | 261,832 | **−51%** |
 | react | 663,416 | 393,944 | **−41%** |
 
+Both columns here were measured under the project names those runs happened to
+use, which is why `vanilla` reads 230,600 above and 230,608 in the generated
+table — the same 16-byte name effect, not a change in the binary. The other
+four names were the same length in both places and agree exactly.
+
 **Mobile did not move on the bump alone** — iOS grew by 64 B and the Android
 APK by one 4 KB alignment block — because the elimination is section-based
 dead-stripping applied at scriptc's own *executable* link step, and iOS and
