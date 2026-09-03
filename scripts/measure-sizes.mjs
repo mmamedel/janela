@@ -272,19 +272,26 @@ function spans(rec) {
   return out;
 }
 
-/** Every "N–M KB" span in a file, in bytes. */
+/** A line carrying this is quoting something other than an absolute size. */
+const EXEMPT_MARK = "<!-- sizes:not-a-size -->";
+
+/** Every "N–M KB" span in a file, in bytes, with its line's exemption state. */
 function quotedRanges(text) {
   const out = [];
   // 200–400 KB, 200-400 KB, 200&nbsp;–&nbsp;400&nbsp;KB
   const re = /(\d{2,4})(?:&nbsp;|\s)*[–-](?:&nbsp;|\s)*(\d{2,4})(?:&nbsp;|\s)*KB/g;
-  for (const m of text.matchAll(re)) {
-    out.push({ text: m[0], lo: Number(m[1]) * 1024, hi: Number(m[2]) * 1024 });
+  for (const line of text.split("\n")) {
+    const exempt = line.includes(EXEMPT_MARK);
+    for (const m of line.matchAll(re)) {
+      out.push({ text: m[0], lo: Number(m[1]) * 1024, hi: Number(m[2]) * 1024, exempt });
+    }
   }
   return out;
 }
 
 function checkProse(rec) {
   const problems = [];
+  const exempt = [];
   const candidates = spans(rec);
   for (const file of PROSE_FILES) {
     const text = readText(join(REPO, file));
@@ -294,6 +301,15 @@ function checkProse(rec) {
       continue;
     }
     for (const r of ranges) {
+      // Not every "N-M KB" is a size: a sentence can legitimately quote a
+      // spread between templates, a saving, or a delta, and none of those
+      // bracket an absolute span. Marking the line opts it out — and the
+      // check reports what it skipped, so an exemption cannot quietly become
+      // the place stale numbers live.
+      if (r.exempt) {
+        exempt.push(`${file}: "${r.text}" (marked ${EXEMPT_MARK})`);
+        continue;
+      }
       // Compared in rounded KB, because that is what the prose quotes: the
       // true Android floor is 483,851 B, which a writer correctly renders as
       // "473 KB" — 501 bytes ABOVE the real number. A byte-exact comparison
@@ -312,6 +328,10 @@ function checkProse(rec) {
         );
       }
     }
+  }
+  if (exempt.length) {
+    console.error(`  Not checked (${EXEMPT_MARK}):`);
+    for (const e of exempt) console.error(`    ${e}`);
   }
   return problems;
 }
