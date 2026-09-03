@@ -11,7 +11,7 @@
       "label": "iOS `.app`",
       "kind": "mobile",
       "host": "iOS 26.5 simulator SDK, built on darwin-arm64",
-      "janela": "0.14.2",
+      "janela": "0.14.3",
       "scriptc": "0.0.36",
       "measured": "2026-09-03",
       "sizes": {
@@ -35,7 +35,7 @@
       "label": "Android `.apk`",
       "kind": "mobile",
       "host": "Android arm64-v8a, build-tools 36.0.0, built on darwin-arm64",
-      "janela": "0.14.2",
+      "janela": "0.14.3",
       "scriptc": "0.0.36",
       "measured": "2026-09-03",
       "sizes": {
@@ -59,7 +59,7 @@
       "label": "desktop (darwin-arm64)",
       "kind": "desktop",
       "host": "darwin-arm64",
-      "janela": "0.14.2",
+      "janela": "0.14.3",
       "scriptc": "0.0.36",
       "measured": "2026-09-03",
       "sizes": {
