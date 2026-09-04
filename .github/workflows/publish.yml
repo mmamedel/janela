@@ -70,8 +70,16 @@ jobs:
 
   # Build and run a scaffolded app end to end before anything reaches npm.
   sanity:
-    needs: check-version
-    if: needs.check-version.outputs.should-publish == 'true'
+    # Runs when EITHER package is publishing. It scaffolds through
+    # create-janela and runs the binary, so it is the gate a scaffolder release
+    # most needs — and publish-create requires it to have succeeded. Gating it
+    # on janela's version alone meant a create-janela-only release skipped
+    # sanity, which skipped publish-create, so that release could never reach
+    # the registry at all.
+    needs: [check-version, check-create-version]
+    if: |
+      needs.check-version.outputs.should-publish == 'true' ||
+      needs.check-create-version.outputs.should-publish == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

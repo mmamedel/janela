@@ -24,6 +24,16 @@ import { REPO } from "./lib/project.mjs";
 
 const read = (p) => JSON.parse(readFileSync(join(REPO, p), "utf8"));
 
+/**
+ * Read a repo file with line endings normalised.
+ *
+ * Windows checks the repo out with CRLF, so a regex anchored on "\n" — or one
+ * using /m with $ — finds nothing there and fails on a difference that does
+ * not exist. This suite has been caught by that twice now; nothing here cares
+ * about line endings.
+ */
+const readText = (p) => readFileSync(join(REPO, p), "utf8").replace(/\r\n/g, "\n");
+
 const janela = read("packages/janela/package.json");
 const createJanela = read("packages/create-janela/package.json");
 
@@ -46,7 +56,7 @@ test("the published range is >=, not a caret", () => {
   // because installing it succeeds. A scaffolder wants the newest framework,
   // and republishing it on every janela minor is not a mechanism, it is a
   // thing to forget.
-  const wf = readFileSync(join(REPO, ".github/workflows/publish.yml"), "utf8");
+  const wf = readText(".github/workflows/publish.yml");
   const m = /npm pkg set dependencies\.janela="([^"]+)"/.exec(wf);
   assert.ok(m, "publish.yml must pin the janela dependency");
   assert.ok(
@@ -57,11 +67,26 @@ test("the published range is >=, not a caret", () => {
   );
 });
 
+test("the smoke gate runs for a create-janela-only release", () => {
+  // publish-create requires sanity to have succeeded. While sanity was gated
+  // on janela's version alone, a create-janela-only release skipped sanity,
+  // which skipped publish-create — so that release could never reach the
+  // registry, and the run went green while publishing nothing.
+  const wf = readText(".github/workflows/publish.yml");
+  const sanity = /^  sanity:\n(?:.*\n)*?    runs-on:/m.exec(wf);
+  assert.ok(sanity, "could not find the sanity job — update this test's parser");
+  assert.match(
+    sanity[0],
+    /check-create-version\.outputs\.should-publish/,
+    "sanity must also run when only create-janela is publishing, or publish-create can never run",
+  );
+});
+
 test("the workflow that publishes create-janela rewrites that spec", () => {
   // The guard above is only safe because something replaces the workspace
   // spec before it reaches npm. If that step is ever dropped, the published
   // package would carry "workspace:^", which no consumer can install.
-  const wf = readFileSync(join(REPO, ".github/workflows/publish.yml"), "utf8");
+  const wf = readText(".github/workflows/publish.yml");
   assert.match(
     wf,
     /npm pkg set dependencies\.janela=/,
