@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 /**
  * Pure helpers shared by the CLI and its tests.
  *
@@ -383,4 +384,25 @@ export function installCommand(pm) {
   if (pm === "yarn") return ["yarn"];
   if (pm === "npm") return ["npm", "install", "--no-fund", "--no-audit"];
   return [pm, "install"];
+}
+
+/**
+ * The cache key for the compiled webview shim.
+ *
+ * Keyed on the shim's CONTENT, not its mtime. The mtime test this replaced was
+ * wrong in the one case that matters — upgrading janela: pnpm's store is
+ * content-addressed and hard-links files into node_modules carrying the
+ * STORE's mtime, which is older than an object compiled minutes earlier from
+ * the previous version. The cache then looked fresh, the stale archive was
+ * reused, and the link failed naming symbols the new shim exports and the old
+ * object does not.
+ *
+ * `version` is in the key so a shim that happens to be byte-identical across
+ * releases still recompiles when anything else about the build moved.
+ */
+export function shimCacheKey(source, version, platform, includeFlag) {
+  return createHash("sha256")
+    .update(source)
+    .update(`\u0000${version}\u0000${platform}\u0000${includeFlag}`)
+    .digest("hex");
 }

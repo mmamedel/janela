@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import {
   ANDROID_ABI, ANDROID_TARGET_SDK, androidConf, ffiManifest, iosConf,
   installCommand, libraryProfile, mimeFor, NAME_RE, packageManager as pmFor,
+  shimCacheKey,
   patchPeSubsystem, PeError, rewriteHostSpecifier, suggestName,
 } from "./lib.mjs";
 
@@ -730,10 +731,29 @@ function buildShim(cacheDir) {
   // part of an MSVC toolchain, and a lone object needs no archive index.
   const obj = join(cacheDir, win ? "wvshim.obj" : "wvshim.o");
   const lib = win ? obj : join(cacheDir, "libwvshim.a");
-  if (existsSync(lib) && statSync(lib).mtimeMs > statSync(src).mtimeMs) return lib;
+  const inc = `-I${join(KIT, "vendor-webview", "core", "include")}`;
+
+  // Keyed on the shim's CONTENT, not its mtime.
+  //
+  // The mtime test this replaces was wrong in the one case that matters:
+  // upgrading janela. pnpm's store is content-addressed and hard-links files
+  // into node_modules with the STORE's mtime, which is older than a cached
+  // object built minutes earlier from the previous version — so the cache
+  // looked fresh and a stale archive was reused. The symptom is a link failure
+  // naming symbols the new shim exports and the old object does not
+  // ("Undefined symbols: _wv_set_menu, _wv_on_menu"), which reads as a broken
+  // install rather than a stale cache.
+  //
+  // The version is in the key too: a shim that happens to be byte-identical
+  // across versions still gets recompiled if anything else about the build
+  // moved, which is cheap insurance against the next variant of this.
+  const key = shimCacheKey(readFileSync(src), VERSION, process.platform, inc);
+  const keyFile = join(cacheDir, "wvshim.key");
+  if (existsSync(lib) && existsSync(keyFile) && readFileSync(keyFile, "utf8") === key) {
+    return lib;
+  }
 
   console.log("janela: compiling webview shim");
-  const inc = `-I${join(KIT, "vendor-webview", "core", "include")}`;
   if (win) {
     console.log(`janela: building for ${winCcOrFail()}`);
     run([
@@ -743,6 +763,7 @@ function buildShim(cacheDir) {
       `-I${join(KIT, "vendor-webview", "compatibility", "mingw", "include")}`,
       "-DWIN32_LEAN_AND_MEAN", "-D_WIN32_WINNT=0x0601",
     ]);
+    writeFileSync(keyFile, key);
     return lib;
   }
   if (process.platform === "darwin") {
@@ -752,6 +773,7 @@ function buildShim(cacheDir) {
     run(["g++", "-c", src, "-o", obj, "-std=c++17", "-O2", inc, ...cflags]);
   }
   run(["ar", "rcs", lib, obj]);
+  writeFileSync(keyFile, key);
   return lib;
 }
 
