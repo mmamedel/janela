@@ -358,6 +358,137 @@ bool run_file_dialog(const DialogRequest &req, std::vector<std::string> &out,
 
 #if defined(__APPLE__)
 
+// A standard macOS main menu.
+//
+// On macOS a Command-key shortcut is a MENU key equivalent, not a
+// window-manager gesture the way Alt+F4 is on Windows. With no main menu
+// nothing claims Cmd+Q, Cmd+C, Cmd+V, Cmd+Z or Cmd+A, and a webview app simply
+// appears to ignore them — the window had zero menu bars, which is exactly
+// what that looks like from the outside.
+//
+// webview.h leaves this to the embedder on purpose: webview/webview#127 is
+// still open, and #237, which added precisely this Edit menu, was closed with
+// "anyone who is impatient can always take this code on their own". Tauri does
+// the same thing one layer up, through muda.
+//
+// Every item here is a STANDARD AppKit selector travelling up the responder
+// chain, so there is nothing to call back into TypeScript for and no new FFI
+// surface. WKWebView answers the editing ones itself. Custom menus — a
+// declarative table passed down from the host — are a separate feature.
+static void install_main_menu() {
+  using namespace webview::detail;
+  objc::autoreleasepool arp;
+
+  id app = objc::msg_send<id>(objc::get_class("NSApplication"),
+                              objc::selector("sharedApplication"));
+  if (!app) return;
+  // Idempotent: an embedder that already installed a menu keeps it.
+  if (objc::msg_send<id>(app, objc::selector("mainMenu"))) return;
+
+  // NSEventModifierFlags. The default for a key equivalent is Command alone,
+  // so only the combinations need naming.
+  const NSUInteger kShift = 1UL << 17;
+  const NSUInteger kControl = 1UL << 18;
+  const NSUInteger kOption = 1UL << 19;
+  const NSUInteger kCommand = 1UL << 20;
+
+  auto str = [](const std::string &v) {
+    return cocoa::NSString_stringWithUTF8String(v);
+  };
+  auto alloc_init = [](const char *cls) {
+    return objc::msg_send<id>(
+        objc::msg_send<id>(objc::get_class(cls), objc::selector("alloc")),
+        objc::selector("init"));
+  };
+
+  // AppKit labels the first submenu from the bundle, not from this title, but
+  // "About <name>" and "Quit <name>" are ours to spell.
+  id process = objc::msg_send<id>(objc::get_class("NSProcessInfo"),
+                                  objc::selector("processInfo"));
+  const char *raw =
+      process ? objc::msg_send<const char *>(
+                    objc::msg_send<id>(process, objc::selector("processName")),
+                    objc::selector("UTF8String"))
+              : nullptr;
+  std::string name = raw ? raw : "App";
+
+  id menubar = alloc_init("NSMenu");
+
+  auto submenu = [&](const std::string &title) {
+    id holder = alloc_init("NSMenuItem");
+    id menu = objc::msg_send<id>(
+        objc::msg_send<id>(objc::get_class("NSMenu"), objc::selector("alloc")),
+        objc::selector("initWithTitle:"), str(title));
+    objc::msg_send<void>(holder, objc::selector("setSubmenu:"), menu);
+    objc::msg_send<void>(menubar, objc::selector("addItem:"), holder);
+    return menu;
+  };
+
+  auto item = [&](id menu, const std::string &title, const char *sel,
+                  const std::string &key, NSUInteger mods) {
+    id it = objc::msg_send<id>(
+        objc::msg_send<id>(objc::get_class("NSMenuItem"),
+                           objc::selector("alloc")),
+        objc::selector("initWithTitle:action:keyEquivalent:"), str(title),
+        sel ? objc::selector(sel) : nullptr, str(key));
+    if (mods) {
+      objc::msg_send<void>(
+          it, objc::selector("setKeyEquivalentModifierMask:"), mods);
+    }
+    objc::msg_send<void>(menu, objc::selector("addItem:"), it);
+  };
+  auto separator = [&](id menu) {
+    objc::msg_send<void>(menu, objc::selector("addItem:"),
+                         objc::msg_send<id>(objc::get_class("NSMenuItem"),
+                                            objc::selector("separatorItem")));
+  };
+
+  id app_menu = submenu(name);
+  item(app_menu, "About " + name, "orderFrontStandardAboutPanel:", "", 0);
+  separator(app_menu);
+  item(app_menu, "Hide " + name, "hide:", "h", 0);
+  item(app_menu, "Hide Others", "hideOtherApplications:", "h",
+       kOption | kCommand);
+  item(app_menu, "Show All", "unhideAllApplications:", "", 0);
+  separator(app_menu);
+  // performClose:, not terminate: — measured, not assumed. Both quit and
+  // both exit 0, but terminate: exits the process itself, so the host never
+  // returns from wv_run and anything after app.run() is skipped;
+  // performClose: goes through the same window-close path the red button
+  // uses, the run loop unwinds, and the host prints its own "run returned 0".
+  // One shutdown path instead of two. muda picks terminate: because Tauri's
+  // app logic is native and multi-window; janela is single-window, so closing
+  // the window IS quitting. If janela ever grows multiple windows this has to
+  // become a real Quit that closes all of them.
+  //
+  // (An earlier note here claimed performClose: did not fire at all. That was
+  // a bad test: posted key events go to the FRONTMOST app, and the app was not
+  // active. With it activated first, both actions work.)
+  item(app_menu, "Quit " + name, "performClose:", "q", 0);
+
+  id edit = submenu("Edit");
+  item(edit, "Undo", "undo:", "z", 0);
+  item(edit, "Redo", "redo:", "z", kShift | kCommand);
+  separator(edit);
+  item(edit, "Cut", "cut:", "x", 0);
+  item(edit, "Copy", "copy:", "c", 0);
+  item(edit, "Paste", "paste:", "v", 0);
+  item(edit, "Select All", "selectAll:", "a", 0);
+
+  id view = submenu("View");
+  item(view, "Enter Full Screen", "toggleFullScreen:", "f",
+       kControl | kCommand);
+
+  id window = submenu("Window");
+  item(window, "Minimize", "performMiniaturize:", "m", 0);
+  item(window, "Close", "performClose:", "w", 0);
+
+  objc::msg_send<void>(app, objc::selector("setMainMenu:"), menubar);
+  // Lets AppKit add the standard Window-menu bookkeeping (window list,
+  // Bring All to Front).
+  objc::msg_send<void>(app, objc::selector("setWindowsMenu:"), window);
+}
+
 bool run_file_dialog(const DialogRequest &req, std::vector<std::string> &out,
                      std::string &error) {
   (void)error;
@@ -608,6 +739,14 @@ bool run_file_dialog(const DialogRequest &req, std::vector<std::string> &out,
 
 #endif
 
+#if !defined(__APPLE__)
+// Windows and Linux need no menu for these shortcuts: Alt+F4 is a
+// window-manager message the win32 backend already answers as WM_CLOSE, and
+// the editing keys are handled inside WebView2 and WebKitGTK. A menu here
+// would be a feature, not a fix.
+static void install_main_menu() {}
+#endif
+
 // Runs on the UI thread with no TS frame beneath it — see the note on the job
 // pool above for why that matters.
 void dialog_on_ui_thread(webview_t, void *arg) {
@@ -728,6 +867,9 @@ int32_t wv_create(int32_t debug) {
     if (g_apps[i].used) continue;
     webview_t w = webview_create(debug, nullptr);
     if (!w) return -1;
+    // After webview_create, which is what brings NSApplication into being.
+    // A no-op off macOS.
+    install_main_menu();
     // Field-wise reset: App holds a thread and atomics, so it is not
     // copy-assignable from a temporary.
     g_apps[i].binds.clear();
