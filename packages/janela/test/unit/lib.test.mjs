@@ -14,6 +14,7 @@ import {
   NAME_RE, patchPeSubsystem, PeError, rewriteHostSpecifier, suggestName,
   installCommand,
   packageManager,
+  shimCacheKey,
 } from "../../bin/lib.mjs";
 
 // ---- project names ---------------------------------------------------------
@@ -335,4 +336,34 @@ test("each manager's install invocation is the one it actually accepts", () => {
   assert.deepEqual(installCommand("pnpm"), ["pnpm", "install"]);
   assert.deepEqual(installCommand("bun"), ["bun", "install"]);
   assert.deepEqual(installCommand("npm"), ["npm", "install", "--no-fund", "--no-audit"]);
+});
+
+// The shim cache was keyed on mtime, which is exactly wrong when janela is
+// upgraded: pnpm hard-links from a content-addressed store, so the NEW source
+// arrives with an OLDER mtime than an object compiled from the previous
+// version. The cache looked fresh, the stale archive was reused, and the link
+// failed on symbols only the new shim exports.
+test("the shim cache key follows the source's content", () => {
+  const a = shimCacheKey("int main() { return 0; }", "1.0.0", "darwin", "-Iinc");
+  const b = shimCacheKey("int main() { return 1; }", "1.0.0", "darwin", "-Iinc");
+  assert.notEqual(a, b, "a changed shim must produce a different key");
+  assert.equal(a, shimCacheKey("int main() { return 0; }", "1.0.0", "darwin", "-Iinc"),
+    "the same inputs must produce the same key, or nothing is ever cached");
+});
+
+test("the key also moves with the version, the platform and the include flag", () => {
+  const base = ["src", "1.0.0", "darwin", "-Iinc"];
+  const key = shimCacheKey(...base);
+  assert.notEqual(key, shimCacheKey("src", "1.0.1", "darwin", "-Iinc"), "version");
+  assert.notEqual(key, shimCacheKey("src", "1.0.0", "win32", "-Iinc"), "platform");
+  assert.notEqual(key, shimCacheKey("src", "1.0.0", "darwin", "-Iother"), "include flag");
+});
+
+test("the key accepts a Buffer, which is what readFileSync returns", () => {
+  const text = "int main() { return 0; }";
+  assert.equal(
+    shimCacheKey(Buffer.from(text), "1.0.0", "darwin", "-Iinc"),
+    shimCacheKey(text, "1.0.0", "darwin", "-Iinc"),
+    "the caller passes readFileSync's Buffer; a Buffer and its string must agree",
+  );
 });
