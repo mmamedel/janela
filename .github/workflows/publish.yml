@@ -90,7 +90,12 @@ jobs:
       # because this smoke project is the no-framework template.
       - name: Scaffold a smoke project through create-janela
         run: node packages/create-janela/index.mjs smoke --template vanilla --yes
-      - name: Make the smoke page self-terminating
+      # Both sides are the smoke test's own, not the template's. A CI runner
+      # has nobody to close the window, so the app has to quit itself — and
+      # when the starter stopped registering `quit`, this page's invoke never
+      # resolved and the job hung until it timed out. The suite in tests/e2e
+      # owns its host for exactly this reason; so does this.
+      - name: Give the smoke project a self-terminating page and host
         run: |
           cat > smoke/index.html <<'EOF'
           <!doctype html><html><body>
@@ -100,6 +105,18 @@ jobs:
             await janela.invoke("quit");
           };
           </script></body></html>
+          EOF
+          cat > smoke/src-host/main.ts <<'EOF'
+          import type { JanelaApp } from "janela/host";
+
+          export function setup(app: JanelaApp): void {
+            app.command("log", (args) => {
+              console.log("[host] page says:", args as string);
+            });
+            app.command("quit", (_args) => {
+              app.quit();
+            });
+          }
           EOF
       - name: Build the smoke app
         working-directory: smoke
