@@ -1,6 +1,6 @@
 {
   "name": "create-janela",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Scaffold a janela app — desktop and mobile in pure TypeScript, compiled to native.",
   "keywords": ["janela", "create", "scaffold", "desktop", "webview", "tauri-alternative"],
   "license": "MIT",

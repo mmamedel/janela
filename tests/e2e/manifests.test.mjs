@@ -39,6 +39,24 @@ test("create-janela depends on janela through the workspace protocol", () => {
   );
 });
 
+test("the published range is >=, not a caret", () => {
+  // The third instance of one bug. On a 0.x version the caret pins the MINOR:
+  // `^0.15.0` is `>=0.15.0 <0.16.0`, so a create-janela published during 0.15
+  // went on scaffolding the 0.15 starter after janela 0.16 shipped — silently,
+  // because installing it succeeds. A scaffolder wants the newest framework,
+  // and republishing it on every janela minor is not a mechanism, it is a
+  // thing to forget.
+  const wf = readFileSync(join(REPO, ".github/workflows/publish.yml"), "utf8");
+  const m = /npm pkg set dependencies\.janela="([^"]+)"/.exec(wf);
+  assert.ok(m, "publish.yml must pin the janela dependency");
+  assert.ok(
+    m[1].startsWith(">="),
+    `publish.yml pins janela as ${JSON.stringify(m[1])}. It has to be a >= range: ` +
+      `a caret on a 0.x version excludes the next minor, which is how a published ` +
+      `create-janela kept installing a superseded janela.`,
+  );
+});
+
 test("the workflow that publishes create-janela rewrites that spec", () => {
   // The guard above is only safe because something replaces the workspace
   // spec before it reaches npm. If that step is ever dropped, the published
