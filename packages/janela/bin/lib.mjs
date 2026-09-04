@@ -223,6 +223,18 @@ export function ffiManifest(shimLib, { platform = process.platform, macSdkPath =
       returns: "i32",
     },
     { name: "wvSetFullscreen", symbol: "wv_set_fullscreen", params: ["i32", "i32"], returns: "i32" },
+    STR("wvSetMenu", "wv_set_menu"),
+    // Retained like wvOnInvoke: registered once, valid until the app exits.
+    // The clicked item's id rides in as a `string` param (format 3).
+    {
+      name: "wvOnMenu", symbol: "wv_on_menu",
+      params: [
+        "i32",
+        { callback: { id: "menu", params: ["string", { context: "menu" }], returns: "i32", lifetime: "retained" } },
+        { context: "menu" },
+      ],
+      returns: "i32",
+    },
   ];
 
   if (platform === "win32") {

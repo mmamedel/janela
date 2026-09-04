@@ -75,6 +75,15 @@ struct App {
   void *on_invoke_ctx = nullptr;
   void (*on_timer)(int32_t, void *) = nullptr;
   void *on_timer_ctx = nullptr;
+  int32_t (*on_menu)(const uint8_t *, size_t, void *) = nullptr;
+  void *on_menu_ctx = nullptr;
+
+  // Custom menu item ids, indexed by the NSMenuItem's tag. The menu bar is
+  // process-global on macOS, so only one app can own it — see g_menu_owner.
+  std::vector<std::string> menu_ids;
+  // How many submenus the standard bar installed, so setMenu appends after
+  // them and can remove only its own on a later call.
+  size_t std_menu_count = 0;
 
   // Staging for the in-flight request.
   std::string req;      // JSON args array from JS
@@ -489,6 +498,153 @@ static void install_main_menu() {
   objc::msg_send<void>(app, objc::selector("setWindowsMenu:"), window);
 }
 
+// How many submenus the standard bar has; custom ones are appended after these
+// and only those are removed on a later setMenu.
+static size_t standard_menu_count() {
+  using namespace webview::detail;
+  objc::autoreleasepool arp;
+  id app = objc::msg_send<id>(objc::get_class("NSApplication"),
+                              objc::selector("sharedApplication"));
+  id menubar = app ? objc::msg_send<id>(app, objc::selector("mainMenu")) : nullptr;
+  if (!menubar) return 0;
+  return static_cast<size_t>(
+      objc::msg_send<NSUInteger>(menubar, objc::selector("numberOfItems")));
+}
+
+// ---- custom menus ------------------------------------------------------
+//
+// The host describes its menus declaratively in TypeScript and this renders
+// them. Nothing here parses JSON: the runtime flattens the tree into one row
+// per line, fields separated by 0x1f, which needs a split and nothing more.
+//
+//   S<US>Label      open a submenu
+//   E               close it
+//   I<US>tag<US>Label<US>key<US>mods   an item
+//   -               a separator
+//
+// A click sends the item's tag back, which indexes App::menu_ids, and the id
+// string goes up to TypeScript on the retained on_menu callback — the same
+// shape as on_invoke. The menu bar is process-global on macOS, so exactly one
+// app owns it at a time.
+static int32_t g_menu_owner = -1;
+
+static void menu_clicked(long tag) {
+  App *a = g_menu_owner >= 0 ? app_at(g_menu_owner) : nullptr;
+  if (!a || !a->on_menu) return;
+  if (tag < 0 || static_cast<size_t>(tag) >= a->menu_ids.size()) return;
+  const std::string &id = a->menu_ids[static_cast<size_t>(tag)];
+  a->on_menu(reinterpret_cast<const uint8_t *>(id.data()), id.size(),
+             a->on_menu_ctx);
+}
+
+// One shared target for every custom item; the tag says which one fired.
+static id menu_target() {
+  static id instance = nullptr;
+  if (instance) return instance;
+  constexpr auto class_name = "JanelaMenuTarget";
+  // Registering the same class twice crashes, and this runs once per process
+  // anyway — the lookup keeps a reload honest.
+  Class cls = objc_lookUpClass(class_name);
+  if (!cls) {
+    cls = objc_allocateClassPair(
+        webview::detail::objc::get_class("NSObject"), class_name, 0);
+    class_addMethod(cls, webview::detail::objc::selector("janelaMenuAction:"),
+                    (IMP)(+[](id, SEL, id sender) {
+                      menu_clicked(webview::detail::objc::msg_send<long>(
+                          sender, webview::detail::objc::selector("tag")));
+                    }),
+                    "v@:@");
+    objc_registerClassPair(cls);
+  }
+  instance = webview::detail::objc::msg_send<id>(
+      webview::detail::objc::msg_send<id>((id)cls,
+                                          webview::detail::objc::selector("alloc")),
+      webview::detail::objc::selector("init"));
+  return instance;
+}
+
+// Appends the host's submenus to the standard menu bar rather than replacing
+// it: a custom menu must not be able to cost the app Cmd+Q and Cmd+V, which is
+// what replacing the bar wholesale would do.
+static int32_t apply_custom_menu(App *a, const std::string &spec) {
+  using namespace webview::detail;
+  objc::autoreleasepool arp;
+
+  id app = objc::msg_send<id>(objc::get_class("NSApplication"),
+                              objc::selector("sharedApplication"));
+  id menubar = objc::msg_send<id>(app, objc::selector("mainMenu"));
+  if (!menubar) return -1;
+
+  // Drop whatever a previous call added, so setMenu is idempotent and can
+  // shrink the bar as well as grow it.
+  for (size_t n = objc::msg_send<NSUInteger>(menubar,
+                                             objc::selector("numberOfItems"));
+       n > a->std_menu_count; n--) {
+    objc::msg_send<void>(menubar, objc::selector("removeItemAtIndex:"),
+                         static_cast<NSInteger>(n - 1));
+  }
+  a->menu_ids.clear();
+
+  std::vector<id> stack;
+  stack.push_back(menubar);
+
+  for (const std::string &line : split_on(spec, '\n')) {
+    if (line.empty()) continue;
+    std::vector<std::string> f = split_on(line, '\x1f');
+    const std::string &kind = f[0];
+
+    if (kind == "S" && f.size() >= 2) {
+      id holder = objc::msg_send<id>(
+          objc::msg_send<id>(objc::get_class("NSMenuItem"),
+                             objc::selector("alloc")),
+          objc::selector("init"));
+      id menu = objc::msg_send<id>(
+          objc::msg_send<id>(objc::get_class("NSMenu"),
+                             objc::selector("alloc")),
+          objc::selector("initWithTitle:"),
+          cocoa::NSString_stringWithUTF8String(f[1]));
+      objc::msg_send<void>(holder, objc::selector("setTitle:"),
+                           cocoa::NSString_stringWithUTF8String(f[1]));
+      objc::msg_send<void>(holder, objc::selector("setSubmenu:"), menu);
+      objc::msg_send<void>(stack.back(), objc::selector("addItem:"), holder);
+      stack.push_back(menu);
+    } else if (kind == "E") {
+      if (stack.size() > 1) stack.pop_back();
+    } else if (kind == "-") {
+      if (stack.size() > 1) {
+        objc::msg_send<void>(
+            stack.back(), objc::selector("addItem:"),
+            objc::msg_send<id>(objc::get_class("NSMenuItem"),
+                               objc::selector("separatorItem")));
+      }
+    } else if (kind == "I" && f.size() >= 5 && stack.size() > 1) {
+      a->menu_ids.push_back(f[1]);
+      long tag = static_cast<long>(a->menu_ids.size()) - 1;
+      id it = objc::msg_send<id>(
+          objc::msg_send<id>(objc::get_class("NSMenuItem"),
+                             objc::selector("alloc")),
+          objc::selector("initWithTitle:action:keyEquivalent:"),
+          cocoa::NSString_stringWithUTF8String(f[2]),
+          objc::selector("janelaMenuAction:"),
+          cocoa::NSString_stringWithUTF8String(f[3]));
+      objc::msg_send<void>(it, objc::selector("setTarget:"), menu_target());
+      objc::msg_send<void>(it, objc::selector("setTag:"), tag);
+      // Always set the mask, including 0: AppKit's default for a key
+      // equivalent is Command, so leaving it alone would turn an accelerator
+      // with no modifiers into a Command shortcut.
+      NSUInteger mods = static_cast<NSUInteger>(strtoul(f[4].c_str(), nullptr, 10));
+      objc::msg_send<void>(it, objc::selector("setKeyEquivalentModifierMask:"),
+                           mods);
+      objc::msg_send<void>(stack.back(), objc::selector("addItem:"), it);
+    }
+  }
+  g_menu_owner = -1;
+  for (int32_t i = 0; i < 8; i++) {
+    if (app_at(i) == a) { g_menu_owner = i; break; }
+  }
+  return 0;
+}
+
 bool run_file_dialog(const DialogRequest &req, std::vector<std::string> &out,
                      std::string &error) {
   (void)error;
@@ -745,6 +901,14 @@ bool run_file_dialog(const DialogRequest &req, std::vector<std::string> &out,
 // the editing keys are handled inside WebView2 and WebKitGTK. A menu here
 // would be a feature, not a fix.
 static void install_main_menu() {}
+static size_t standard_menu_count() { return 0; }
+
+// Custom menus are macOS-only for now. Two things have to be solved first:
+// webview.h's win32 loop never calls TranslateAcceleratorW, without which
+// accelerators do not fire, and the GTK backend keeps both GTK 3 and GTK 4
+// alive where GTK 4 removed GtkMenuBar. Reporting -1 lets the host say
+// "unsupported here" rather than pretend it worked.
+static int32_t apply_custom_menu(App *, const std::string &) { return -1; }
 #endif
 
 // Runs on the UI thread with no TS frame beneath it — see the note on the job
@@ -868,8 +1032,9 @@ int32_t wv_create(int32_t debug) {
     webview_t w = webview_create(debug, nullptr);
     if (!w) return -1;
     // After webview_create, which is what brings NSApplication into being.
-    // A no-op off macOS.
+    // Both are no-ops off macOS.
     install_main_menu();
+    g_apps[i].std_menu_count = standard_menu_count();
     // Field-wise reset: App holds a thread and atomics, so it is not
     // copy-assignable from a temporary.
     g_apps[i].binds.clear();
@@ -877,6 +1042,9 @@ int32_t wv_create(int32_t debug) {
     g_apps[i].on_invoke_ctx = nullptr;
     g_apps[i].on_timer = nullptr;
     g_apps[i].on_timer_ctx = nullptr;
+    g_apps[i].on_menu = nullptr;
+    g_apps[i].on_menu_ctx = nullptr;
+    g_apps[i].menu_ids.clear();
     g_apps[i].req.clear();
     g_apps[i].cur_id.clear();
     g_apps[i].reply.clear();
@@ -1178,6 +1346,27 @@ int32_t wv_dialog(int32_t h, int32_t kind, int32_t flags, const uint8_t *tp,
 }
 
 // ---- window control ---------------------------------------------------------
+
+// Renders the host's declarative menu. The spec is one row per line with 0x1f
+// between fields; the runtime flattens the tree, so nothing here parses JSON.
+// Returns -1 where custom menus are not supported yet (everything but macOS),
+// which the host reports rather than swallowing.
+int32_t wv_set_menu(int32_t h, const uint8_t *p, size_t n) {
+  App *a = app_at(h);
+  if (!a) return -1;
+  return apply_custom_menu(a, to_str(p, n));
+}
+
+// Retained, like wv_on_invoke: registered once and valid until the app exits.
+int32_t wv_on_menu(int32_t h,
+                   int32_t (*cb)(const uint8_t *, size_t, void *),
+                   void *ctx) {
+  App *a = app_at(h);
+  if (!a) return -1;
+  a->on_menu = cb;
+  a->on_menu_ctx = ctx;
+  return 0;
+}
 
 int32_t wv_set_fullscreen(int32_t h, int32_t on) {
   App *a = app_at(h);

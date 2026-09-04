@@ -124,22 +124,74 @@ Costs 208 bytes.
 
 ### Custom menus
 
-Not supported yet, and deliberately not muda-shaped when they are. muda is a
-builder API in native code because Tauri's app logic is native too; janela's is
-TypeScript, and there is already a JSON channel and an event channel between
-the two. So the shape to build is a declarative table passed down from the host,
-with clicks arriving on the existing event path — the native side stays a dumb
-renderer.
+Your own submenus go in with `app.setMenu`, and clicks arrive on `app.onMenu`:
 
-Two obstacles to solve first, both in code janela vendors rather than owns:
-webview.h's win32 message loop calls `TranslateMessage` and `DispatchMessageW`
-but never `TranslateAcceleratorW`, without which Windows menu accelerators do
-not fire; and the GTK backend keeps both GTK 3 and GTK 4 alive, where GTK 4
-removed `GtkMenuBar` in favour of `GMenu`. Upstream leaves menus to the
-embedder on purpose — [webview/webview#127](https://github.com/webview/webview/issues/127)
+```ts
+import { menuItem, menuSeparator, submenu } from "janela/host";
+
+app.setMenu([
+  submenu("File", [
+    menuItem("Open…", "open", "CmdOrCtrl+O"),
+    menuSeparator(),
+    submenu("Recent", [menuItem("Clear", "clear", "")]),
+  ]),
+]);
+
+app.onMenu((id) => {
+  if (id === "open") { /* … */ }
+});
+```
+
+**They are added to the standard menus, not swapped for them.** Replacing the
+bar wholesale is what would cost the app ⌘Q and ⌘V, so `setMenu` appends and a
+later call replaces only what an earlier one added — the menu can shrink as
+well as grow. `setMenu` returns `false` where custom menus are not supported
+yet (everything but macOS) and the standard menu is left alone either way.
+
+Modifiers in `accel`: `Cmd`, `Ctrl`, `CmdOrCtrl`, `Alt`/`Option`, `Shift`. Pass
+`""` for no shortcut. The mask is always set explicitly, including empty,
+because AppKit's default for a key equivalent is Command — so an accelerator
+with no modifiers would silently become a Command shortcut.
+
+#### Why it is shaped this way
+
+Not like Tauri's `muda`, which is a builder API in native code — that fits
+Tauri because its app logic is native too. janela's app logic is TypeScript, so
+the tree is declared there and the native side only renders it: the runtime
+flattens the entries into one row per line with `0x1f` between fields, and the
+shim splits on those. **Nothing native parses JSON, and no new concepts were
+added** — clicks come back on a retained callback with the same shape as
+`on_invoke`.
+
+`MenuEntry` is a *total* record, built by the three helpers rather than written
+as a literal. That is a scriptc constraint turned into a nicer API: a record
+whose fields are all optional infers as `{ label: string | undefined, … }`, and
+an array mixing a submenu, an item and a separator becomes a union scriptc
+refuses to re-tag (`SC2003: union types must match exactly`). The helpers each
+return the same shape, so the array is homogeneous and the call site still
+reads as a tree.
+
+#### What it costs
+
+Nothing at all unless you call it. A scaffolded app that never mentions
+`setMenu` is **byte-identical** with the feature added — 195,792 both sides —
+because scriptc tree-shakes the unused runtime and the linker dead-strips the
+shim's menu code. Adding the two calls above costs **16,800 bytes**
+(195,784 → 212,584), which is the flattening, the accelerator parsing, the
+NSMenu construction and the retained callback. Same shape as every other
+platform API here: what you pay is what you call.
+
+#### Still macOS-only
+
+Two obstacles, both in code janela vendors rather than owns. webview.h's win32
+message loop calls `TranslateMessage` and `DispatchMessageW` but never
+`TranslateAcceleratorW`, without which Windows menu accelerators do not fire.
+And the GTK backend keeps both GTK 3 and GTK 4 alive, where GTK 4 removed
+`GtkMenuBar` in favour of `GMenu`. Upstream leaves menus to the embedder on
+purpose — [webview/webview#127](https://github.com/webview/webview/issues/127)
 is open, and [#237](https://github.com/webview/webview/pull/237), which added
-exactly this Edit menu, was closed with "anyone who is impatient can always
-take this code on their own".
+exactly the Edit menu above, was closed with "anyone who is impatient can
+always take this code on their own".
 
 ## Windows: GUI subsystem
 

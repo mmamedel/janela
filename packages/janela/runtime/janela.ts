@@ -42,6 +42,8 @@ declare function wvDialog(
   filters: string,
 ): number;
 declare function wvSetFullscreen(h: number, on: number): number;
+declare function wvSetMenu(h: number, spec: string): number;
+declare function wvOnMenu(h: number, cb: (id: string) => number): number;
 
 const JOB_PENDING = 0;
 const JOB_OK = 1;
@@ -90,6 +92,7 @@ export type {
   DialogFilter,
   Events,
   FsCallback,
+  MenuEntry,
   OpenDialogOptions,
   SaveDialogOptions,
   WindowConfig,
@@ -99,6 +102,7 @@ export type {
 // A project's `import { defineCommands } from "janela/host"` is rewritten to
 // this module by the CLI before scriptc sees it.
 export { defineCommands, defineEvents } from "./types";
+export { menuItem, menuSeparator, submenu } from "./types";
 
 import type {
   AsyncCommandHandler,
@@ -110,6 +114,7 @@ import type {
   DialogFilter,
   Events,
   FsCallback,
+  MenuEntry,
   OpenDialogOptions,
   SaveDialogOptions,
   WindowConfig,
@@ -156,6 +161,68 @@ const TIMER_JOBS = -1;
  * interface (being signature-only) never is. A class receiver works even as a
  * plain function parameter, which is what `setup(app)` is.
  */
+// ---- menu flattening ---------------------------------------------------
+//
+// The shim renders menus but parses nothing structural: the tree is flattened
+// here into one row per line with 0x1f between fields, which needs only a
+// split on the native side. Keeping the parsing in TypeScript is the whole
+// point — the native side stays a renderer.
+
+// NSEventModifierFlags.
+const MENU_SHIFT = 131072;
+const MENU_CONTROL = 262144;
+const MENU_OPTION = 524288;
+const MENU_COMMAND = 1048576;
+
+/** "CmdOrCtrl+Shift+O" -> "o<US>1179648". Unknown words are taken as the key. */
+function parseAccel(accel: string): string {
+  const parts = accel.split("+");
+  let mods = 0;
+  let key = "";
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i].toLowerCase();
+    if (p === "cmd" || p === "command" || p === "meta" || p === "super") {
+      mods = mods | MENU_COMMAND;
+    } else if (p === "cmdorctrl" || p === "commandorcontrol") {
+      // macOS is the only platform with custom menus so far, so this is
+      // Command here; the Windows and Linux renderers will read it as Control.
+      mods = mods | MENU_COMMAND;
+    } else if (p === "ctrl" || p === "control") {
+      mods = mods | MENU_CONTROL;
+    } else if (p === "alt" || p === "option") {
+      mods = mods | MENU_OPTION;
+    } else if (p === "shift") {
+      mods = mods | MENU_SHIFT;
+    } else if (p !== "") {
+      key = p;
+    }
+  }
+  return key + "\x1f" + mods;
+}
+
+/** 0x1f and newlines are the wire format's own delimiters. */
+function menuSafe(v: string): string {
+  return v.split("\x1f").join(" ").split("\n").join(" ");
+}
+
+function flattenMenu(entries: MenuEntry[], rows: string[]): void {
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (e.separator) {
+      rows.push("-");
+      continue;
+    }
+    const label = menuSafe(e.label);
+    if (e.items.length > 0) {
+      rows.push("S\x1f" + label);
+      flattenMenu(e.items, rows);
+      rows.push("E");
+      continue;
+    }
+    rows.push("I\x1f" + menuSafe(e.id) + "\x1f" + label + "\x1f" + parseAccel(e.accel));
+  }
+}
+
 export class JanelaAppImpl<
   C extends CommandShapes = CommandShapes,
   E = Record<string, unknown>,
@@ -507,6 +574,44 @@ export class JanelaAppImpl<
   /** Enter or leave fullscreen. */
   setFullscreen(on: boolean): void {
     wvSetFullscreen(this.handle, on ? 1 : 0);
+  }
+
+  /**
+   * Put submenus in the application menu.
+   *
+   * They are ADDED to the standard ones rather than replacing them, so a
+   * custom menu can never cost the app Cmd+Q or Cmd+V — replacing the bar
+   * wholesale is what would. Calling it again replaces only what a previous
+   * call added, so the menu can shrink as well as grow.
+   *
+   * Clicks arrive on `onMenu` with the entry's `id`.
+   *
+   * ```ts
+   * app.setMenu([
+   *   { label: "File", items: [
+   *     { label: "Open…", id: "open", accel: "CmdOrCtrl+O" },
+   *     { separator: true },
+   *     { label: "Close", id: "close" },
+   *   ]},
+   * ]);
+   * app.onMenu((id) => { if (id === "open") … });
+   * ```
+   *
+   * Returns false where custom menus are not supported yet — everything but
+   * macOS. The standard menu is unaffected either way.
+   */
+  setMenu(entries: MenuEntry[]): boolean {
+    const rows: string[] = [];
+    flattenMenu(entries, rows);
+    return wvSetMenu(this.handle, rows.join("\n")) === 0;
+  }
+
+  /** Called with the `id` of the clicked menu entry. */
+  onMenu(cb: (id: string) => void): void {
+    wvOnMenu(this.handle, (id) => {
+      cb(id);
+      return 0;
+    });
   }
 
   /**
