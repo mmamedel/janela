@@ -184,17 +184,17 @@ Sizes are rounded KiB of the shipped artifact. Raw bytes:
 
 | template | desktop (darwin-arm64) | Android `.apk` | Android `.so` | iOS `.app` | iOS binary |
 |---|---|---|---|---|---|
-| vanilla | 195,584 | 328,203 | 840,256 | 199,585 | 198,768 |
-| solid | 212,104 | 332,299 | 850,320 | 216,113 | 215,304 |
-| svelte | 228,616 | 344,587 | 875,200 | 232,629 | 231,816 |
-| vue | 261,640 | 356,875 | 905,648 | 265,641 | 264,840 |
-| react | 393,752 | 393,739 | 1,039,328 | 397,761 | 396,952 |
+| vanilla | 195,792 | 328,203 | 840,256 | 199,585 | 198,768 |
+| solid | 212,312 | 332,299 | 850,320 | 216,113 | 215,304 |
+| svelte | 228,824 | 344,587 | 875,200 | 232,629 | 231,816 |
+| vue | 261,848 | 356,875 | 905,648 | 265,641 | 264,840 |
+| react | 393,960 | 393,739 | 1,039,328 | 397,761 | 396,952 |
 
 Where each column comes from:
 
-- **desktop (darwin-arm64)** — janela 0.16.0, scriptc 0.0.36, measured 2026-09-03 on darwin-arm64.
-- **Android `.apk`** — janela 0.16.0, scriptc 0.0.36, measured 2026-09-03 on Android arm64-v8a, build-tools 36.0.0, built on darwin-arm64.
-- **iOS `.app`** — janela 0.16.0, scriptc 0.0.36, measured 2026-09-03 on iOS 26.5 simulator SDK, built on darwin-arm64.
+- **desktop (darwin-arm64)** — janela 0.16.1, scriptc 0.0.36, measured 2026-09-04 on darwin-arm64.
+- **Android `.apk`** — janela 0.16.1, scriptc 0.0.36, measured 2026-09-04 on Android arm64-v8a, build-tools 36.0.0, built on darwin-arm64.
+- **iOS `.app`** — janela 0.16.1, scriptc 0.0.36, measured 2026-09-04 on iOS 26.5 simulator SDK, built on darwin-arm64.
 
 <!-- sizes:end -->
 

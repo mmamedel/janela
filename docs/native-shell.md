@@ -1,4 +1,4 @@
-# Native shell: dialogs, window control, Windows subsystem
+# Native shell: dialogs, window control, the macOS menu, Windows subsystem
 
 ## File dialogs
 
@@ -83,6 +83,63 @@ call only toggles), `gtk_window_fullscreen`/`unfullscreen` on Linux, and the
 save-placement / strip-`WS_OVERLAPPEDWINDOW` / fill-monitor dance on Windows.
 
 `app.center()` is not implemented.
+
+## macOS: the main menu
+
+Every janela app installs a standard macOS main menu. There is no API for it
+and nothing to call — it is set up in the shim right after the webview exists,
+and it is a no-op on Windows and Linux.
+
+It is there because **on macOS a Command-key shortcut is a menu key
+equivalent, not a window-manager gesture.** With no main menu nothing claims
+⌘Q, ⌘C, ⌘V, ⌘X, ⌘Z or ⌘A, and the app silently ignores all of them — an app
+window with a text input where paste does nothing. Alt+F4 on Windows is
+unaffected by any of this: it is a `WM_CLOSE` the win32 backend already
+answers, and the editing keys are handled inside WebView2 and WebKitGTK. So
+this is a macOS-only fix, not a cross-platform feature.
+
+| submenu | items |
+|---|---|
+| *app name* | About · Hide (⌘H) · Hide Others (⌥⌘H) · Show All · **Quit (⌘Q)** |
+| Edit | Undo (⌘Z) · Redo (⇧⌘Z) · Cut (⌘X) · Copy (⌘C) · Paste (⌘V) · Select All (⌘A) |
+| View | Enter Full Screen (⌃⌘F) |
+| Window | Minimize (⌘M) · Close (⌘W) |
+
+Every item is a **standard AppKit selector** travelling up the responder
+chain, so there are no custom actions and nothing calls back into TypeScript.
+WKWebView answers the editing ones itself. AppKit also adds its own standard
+extras to correctly-named menus, which is why the Edit menu gains Writing
+Tools and Emoji & Symbols, and Window gains the window list, without us asking.
+
+**Quit is wired to `performClose:`, not `terminate:`.** Both quit and both exit
+0, but `terminate:` exits the process itself, so the host never returns from
+`wv_run` and anything after `app.run()` is skipped. `performClose:` goes
+through the same path the window's red button uses, so the run loop unwinds and
+the host finishes normally — one shutdown path instead of two. Tauri's `muda`
+picks `terminate:` because its app logic is native and multi-window; janela is
+single-window, so closing the window *is* quitting. If janela grows multiple
+windows, this has to become a real Quit that closes all of them.
+
+Costs 208 bytes.
+
+### Custom menus
+
+Not supported yet, and deliberately not muda-shaped when they are. muda is a
+builder API in native code because Tauri's app logic is native too; janela's is
+TypeScript, and there is already a JSON channel and an event channel between
+the two. So the shape to build is a declarative table passed down from the host,
+with clicks arriving on the existing event path — the native side stays a dumb
+renderer.
+
+Two obstacles to solve first, both in code janela vendors rather than owns:
+webview.h's win32 message loop calls `TranslateMessage` and `DispatchMessageW`
+but never `TranslateAcceleratorW`, without which Windows menu accelerators do
+not fire; and the GTK backend keeps both GTK 3 and GTK 4 alive, where GTK 4
+removed `GtkMenuBar` in favour of `GMenu`. Upstream leaves menus to the
+embedder on purpose — [webview/webview#127](https://github.com/webview/webview/issues/127)
+is open, and [#237](https://github.com/webview/webview/pull/237), which added
+exactly this Edit menu, was closed with "anyone who is impatient can always
+take this code on their own".
 
 ## Windows: GUI subsystem
 
