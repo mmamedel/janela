@@ -57,6 +57,21 @@ test("the published range is >=, not a caret", () => {
   );
 });
 
+test("the smoke gate runs for a create-janela-only release", () => {
+  // publish-create requires sanity to have succeeded. While sanity was gated
+  // on janela's version alone, a create-janela-only release skipped sanity,
+  // which skipped publish-create — so that release could never reach the
+  // registry, and the run went green while publishing nothing.
+  const wf = readFileSync(join(REPO, ".github/workflows/publish.yml"), "utf8");
+  const sanity = /^  sanity:\n(?:.*\n)*?    runs-on:/m.exec(wf);
+  assert.ok(sanity, "could not find the sanity job — update this test's parser");
+  assert.match(
+    sanity[0],
+    /check-create-version\.outputs\.should-publish/,
+    "sanity must also run when only create-janela is publishing, or publish-create can never run",
+  );
+});
+
 test("the workflow that publishes create-janela rewrites that spec", () => {
   // The guard above is only safe because something replaces the workspace
   // spec before it reaches npm. If that step is ever dropped, the published
