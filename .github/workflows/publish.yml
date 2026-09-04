@@ -179,10 +179,16 @@ jobs:
       # janela's version is the right pin whether or not this run published it:
       # if the publish job was skipped, that version is already on the
       # registry.
-      - name: Pin the janela dependency to ^${{ needs.check-version.outputs.version }}
+      # `>=`, deliberately, not `^`. On a 0.x version the caret pins the MINOR:
+      # `^0.15.0` means `>=0.15.0 <0.16.0`, so a create-janela published during
+      # 0.15 kept scaffolding the 0.15 starter after janela 0.16 shipped, and
+      # only a republish here would have fixed it. A scaffolder wants the
+      # newest framework, and its surface on janela is one command line
+      # (`init <name> --template <t>`) plus a defensively-imported validator.
+      - name: Pin the janela dependency to >=${{ needs.check-version.outputs.version }}
         working-directory: packages/create-janela
         run: |
-          npm pkg set dependencies.janela="^${{ needs.check-version.outputs.version }}"
+          npm pkg set dependencies.janela=">=${{ needs.check-version.outputs.version }}"
           node -e "
             const dep = require('./package.json').dependencies.janela;
             if (dep.startsWith('workspace:')) { console.error('workspace spec survived the rewrite: ' + dep); process.exit(1); }
