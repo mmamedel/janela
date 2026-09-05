@@ -11,6 +11,7 @@
 // battery script drives the assertions.
 
 import type { JanelaApp } from "janela/host";
+import { menuItem, menuCheckItem, menuSeparator, submenu, predefined } from "janela/host";
 
 /**
  * Template-compatible result shapes, named rather than inlined: a bare `null`
@@ -61,6 +62,27 @@ export type AppCommands = {
   bigRead: (args: { path: string }) => { ok: boolean; ms: number; length: number };
   /** Starts a long read and a long timer, then returns immediately. */
   startWork: (args: { path: string; runId: string }) => null;
+  /**
+   * What the menu renderer actually did.
+   *
+   * The page cannot click a native menu, so this asserts the next best thing
+   * and the thing that actually breaks: that a real bar was built and that the
+   * live items are addressable afterwards. `setEnabled` and friends go through
+   * the renderer's tag table, so a bar that failed to build reports `set` true
+   * and these false — which is exactly the failure a return-value-only check
+   * would miss.
+   */
+  menuState: () => { set: boolean; enabled: boolean; checked: boolean; label: boolean };
+  /**
+   * What the platform actions report.
+   *
+   * Not asserted against fixed values — they legitimately differ per platform,
+   * and the host cannot tell which one it is on. The point is that each call
+   * returns a boolean rather than crashing, and that the VALUES reach the CI
+   * log: on Windows the editing commands travel over the DevTools protocol,
+   * and this is the only place that path is exercised outside a real desktop.
+   */
+  menuActions: () => { selectAll: boolean; copy: boolean; undo: boolean };
 };
 
 export type AppEvents = {
@@ -70,6 +92,48 @@ export type AppEvents = {
 export type App = JanelaApp<AppCommands, AppEvents>;
 
 export function setup(app: App): void {
+  // --- menus ---------------------------------------------------------------
+  //
+  // Installed during setup, like a real app would, so the whole run happens
+  // with a menu bar present. On Linux that is the load-bearing part: the bar
+  // means re-parenting the webview into a GtkBox, and getting that wrong
+  // leaves a blank window — every assertion below would then fail, which is
+  // the point of setting it here rather than in the command.
+  const item = menuItem("Rename me", "CmdOrCtrl+R", () => {});
+  const tick = menuCheckItem("Ticked", "", () => {});
+
+  // Called twice on purpose: the second replaces the first, which is the path
+  // that leaks widgets or nests a second box if a renderer appends instead.
+  app.setMenu([submenu("Fixture", [item])]);
+  const menu = {
+    set: app.setMenu([
+      submenu("Fixture", [
+        item,
+        menuSeparator(),
+        tick,
+        submenu("Nested", [menuItem("Deep", "CmdOrCtrl+Shift+D", () => {})]),
+        // A platform action. Rendered where it exists and dropped where it
+        // does not, so this row proves the predefined path parses either way.
+        // Not invoked: closing the window mid-run would end the test.
+        menuItem("Close", "CmdOrCtrl+W", () => predefined.close()),
+      ]),
+    ]),
+    enabled: item.setEnabled(false),
+    checked: tick.setChecked(true),
+    label: item.setLabel("Renamed"),
+  };
+  app.command("menuState", () => menu);
+
+  // Called at request time rather than during setup: the editing commands act
+  // on the focused document, which does not exist yet while setup runs.
+  // `about` is deliberately absent — it opens a dialog, and a CI runner has
+  // nobody to dismiss it.
+  app.command("menuActions", () => ({
+    selectAll: predefined.selectAll(),
+    copy: predefined.copy(),
+    undo: predefined.undo(),
+  }));
+
   // --- template-compatible commands ---
 
   app.command("add", (args) => {

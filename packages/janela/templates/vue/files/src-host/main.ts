@@ -10,6 +10,7 @@
 // returns `null`; every command answers the page's promise with a value.
 
 import type { JanelaApp } from "janela/host";
+import { menuItem, menuSeparator, submenu, predefined } from "janela/host";
 
 /** Every command this app answers. Declared once; the page checks against it. */
 export type AppCommands = {
@@ -30,6 +31,24 @@ export type App = JanelaApp<AppCommands, AppEvents>;
 // name must be one of the declared ones, `args` is inferred from it, and the
 // return value has to match.
 export function setup(app: App): void {
+  // A menu bar. Items carry their own handlers — there are no ids to declare
+  // or match — and `predefined` is the platform's own behaviour, callable like
+  // any other function.
+  //
+  // On macOS the standard submenus (App, Edit, View, Window) are kept around
+  // whatever you declare here, so this adds File without costing the app ⌘Q or
+  // ⌘V. Windows and Linux need no such floor: their editing keys belong to the
+  // webview, and Alt+F4 to the window manager.
+  app.setMenu([
+    submenu("File", [
+      menuItem("Say hello", "CmdOrCtrl+G", () => {
+        console.log("[host] hello from the menu");
+      }),
+      menuSeparator(),
+      menuItem("Close", "CmdOrCtrl+W", () => predefined.close()),
+    ]),
+  ]);
+
   app.command("greet", (args) => {
     return "Hello, " + args.name + "! You've been greeted from a native TypeScript binary.";
   });

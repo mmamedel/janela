@@ -11,23 +11,23 @@
       "label": "iOS `.app`",
       "kind": "mobile",
       "host": "iOS 26.5 simulator SDK, built on darwin-arm64",
-      "janela": "0.18.1",
+      "janela": "0.19.0",
       "scriptc": "0.0.36",
       "measured": "2026-09-05",
       "sizes": {
-        "vanilla": 199585,
-        "react": 397761,
-        "solid": 216113,
-        "svelte": 232629,
-        "vue": 265641
+        "vanilla": 199633,
+        "react": 397809,
+        "solid": 216161,
+        "svelte": 232677,
+        "vue": 265689
       },
       "components": {
         "iOS binary": {
-          "vanilla": 198768,
-          "react": 396952,
-          "solid": 215304,
-          "svelte": 231816,
-          "vue": 264840
+          "vanilla": 198816,
+          "react": 397000,
+          "solid": 215352,
+          "svelte": 231864,
+          "vue": 264888
         }
       }
     },
@@ -35,23 +35,23 @@
       "label": "Android `.apk`",
       "kind": "mobile",
       "host": "Android arm64-v8a, build-tools 36.0.0, built on darwin-arm64",
-      "janela": "0.18.1",
+      "janela": "0.19.0",
       "scriptc": "0.0.36",
       "measured": "2026-09-05",
       "sizes": {
-        "vanilla": 328203,
+        "vanilla": 332299,
         "react": 393739,
-        "solid": 332299,
+        "solid": 336395,
         "svelte": 344587,
         "vue": 356875
       },
       "components": {
         "Android `.so`": {
-          "vanilla": 840256,
-          "react": 1039328,
-          "solid": 850320,
-          "svelte": 875200,
-          "vue": 905648
+          "vanilla": 844880,
+          "react": 1043968,
+          "solid": 854960,
+          "svelte": 879840,
+          "vue": 910288
         }
       }
     },
@@ -59,15 +59,15 @@
       "label": "desktop (darwin-arm64)",
       "kind": "desktop",
       "host": "darwin-arm64",
-      "janela": "0.18.1",
+      "janela": "0.19.0",
       "scriptc": "0.0.36",
       "measured": "2026-09-05",
       "sizes": {
-        "vanilla": 195792,
-        "react": 393976,
-        "solid": 212328,
-        "svelte": 228840,
-        "vue": 261864
+        "vanilla": 229392,
+        "react": 427560,
+        "solid": 245912,
+        "svelte": 262424,
+        "vue": 295448
       }
     }
   }

@@ -117,6 +117,41 @@
       { resolvedAt: asyncAt, syncAnsweredAt: syncAnsweredAt },
     );
 
+    // 3b. The menu bar the host installed during setup.
+    //
+    // A native menu cannot be clicked from the page, so this asserts what
+    // actually breaks: that a real bar was built, and that its items are still
+    // addressable afterwards. `setEnabled` and friends go through the
+    // renderer's tag table, so a bar that silently failed to build reports
+    // `set` true and the rest false — the failure a return-value-only check
+    // would sail past. On Linux it is doubly load-bearing: the bar means
+    // re-parenting the webview into a GtkBox, and getting that wrong leaves a
+    // blank window in which no assertion here would run at all.
+    var menu = await window.janela.invoke("menuState", null);
+    await report(
+      "menu-installed",
+      menu.set === true &&
+        menu.enabled === true &&
+        menu.checked === true &&
+        menu.label === true,
+      menu,
+    );
+
+    // 3c. The platform actions answer without crashing, and the values land in
+    // the log. Windows routes the editing commands over the DevTools protocol
+    // (WebView2 exposes no copy/paste entry point), and this is the only place
+    // that path runs outside a real desktop — so what is asserted is "three
+    // booleans came back", and what is READ is which ones were true.
+    var acts = await window.janela.invoke("menuActions", null);
+    await report(
+      "menu-actions",
+      acts !== null &&
+        typeof acts.selectAll === "boolean" &&
+        typeof acts.copy === "boolean" &&
+        typeof acts.undo === "boolean",
+      acts,
+    );
+
     // 4. Timers fire in DUE order, not registration order (registered 80,20,50).
     var order = await window.janela.invoke("sleepOrder", null);
     await report("sleep-due-order", sameArray(order, ["s20", "s50", "s80"]), order);
