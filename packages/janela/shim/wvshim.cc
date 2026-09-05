@@ -75,12 +75,16 @@ struct App {
   void *on_invoke_ctx = nullptr;
   void (*on_timer)(int32_t, void *) = nullptr;
   void *on_timer_ctx = nullptr;
-  int32_t (*on_menu)(const uint8_t *, size_t, void *) = nullptr;
+  // The tag identifies the item; the host owns the numbering and hands it
+  // down, because the click handler lives in TypeScript now.
+  int32_t (*on_menu)(int32_t, void *) = nullptr;
   void *on_menu_ctx = nullptr;
 
-  // Custom menu item ids, indexed by the NSMenuItem's tag. The menu bar is
-  // process-global on macOS, so only one app can own it — see g_menu_owner.
-  std::vector<std::string> menu_ids;
+  // Live NSMenuItems, indexed by tag, so setEnabled/setChecked/setLabel can
+  // reach one without rebuilding the bar. Retained; released on the next
+  // setMenu. The menu bar is process-global on macOS, so only one app can own
+  // it — see g_menu_owner.
+  std::vector<id> menu_items;
   // How many submenus the standard bar installed, so setMenu appends after
   // them and can remove only its own on a later call.
   size_t std_menu_count = 0;
@@ -531,10 +535,7 @@ static int32_t g_menu_owner = -1;
 static void menu_clicked(long tag) {
   App *a = g_menu_owner >= 0 ? app_at(g_menu_owner) : nullptr;
   if (!a || !a->on_menu) return;
-  if (tag < 0 || static_cast<size_t>(tag) >= a->menu_ids.size()) return;
-  const std::string &id = a->menu_ids[static_cast<size_t>(tag)];
-  a->on_menu(reinterpret_cast<const uint8_t *>(id.data()), id.size(),
-             a->on_menu_ctx);
+  a->on_menu(static_cast<int32_t>(tag), a->on_menu_ctx);
 }
 
 // One shared target for every custom item; the tag says which one fired.
@@ -563,6 +564,21 @@ static id menu_target() {
   return instance;
 }
 
+// Retains the item under its tag so a later setEnabled/setChecked/setLabel can
+// find it. The vector is sized to fit rather than pushed, because the host's
+// tags are registry indices and need not arrive in order.
+static void remember_item(App *a, long tag, id item) {
+  if (tag < 0) return;
+  size_t at = static_cast<size_t>(tag);
+  if (a->menu_items.size() <= at) a->menu_items.resize(at + 1, nullptr);
+  a->menu_items[at] = webview::detail::objc::retain(item);
+}
+
+static id item_at(App *a, int32_t tag) {
+  if (tag < 0 || static_cast<size_t>(tag) >= a->menu_items.size()) return nullptr;
+  return a->menu_items[static_cast<size_t>(tag)];
+}
+
 // Appends the host's submenus to the standard menu bar rather than replacing
 // it: a custom menu must not be able to cost the app Cmd+Q and Cmd+V, which is
 // what replacing the bar wholesale would do.
@@ -583,7 +599,10 @@ static int32_t apply_custom_menu(App *a, const std::string &spec) {
     objc::msg_send<void>(menubar, objc::selector("removeItemAtIndex:"),
                          static_cast<NSInteger>(n - 1));
   }
-  a->menu_ids.clear();
+  for (id old_item : a->menu_items) {
+    if (old_item) objc::release(old_item);
+  }
+  a->menu_items.clear();
 
   std::vector<id> stack;
   stack.push_back(menubar);
@@ -605,6 +624,10 @@ static int32_t apply_custom_menu(App *a, const std::string &spec) {
           cocoa::NSString_stringWithUTF8String(f[1]));
       objc::msg_send<void>(holder, objc::selector("setTitle:"),
                            cocoa::NSString_stringWithUTF8String(f[1]));
+      // Without this AppKit decides each item's enabled state from the
+      // responder chain and setEnabled: is silently ignored — the item stays
+      // live however many times the host disables it.
+      objc::msg_send<void>(menu, objc::selector("setAutoenablesItems:"), false);
       objc::msg_send<void>(holder, objc::selector("setSubmenu:"), menu);
       objc::msg_send<void>(stack.back(), objc::selector("addItem:"), holder);
       stack.push_back(menu);
@@ -617,9 +640,11 @@ static int32_t apply_custom_menu(App *a, const std::string &spec) {
             objc::msg_send<id>(objc::get_class("NSMenuItem"),
                                objc::selector("separatorItem")));
       }
-    } else if (kind == "I" && f.size() >= 5 && stack.size() > 1) {
-      a->menu_ids.push_back(f[1]);
-      long tag = static_cast<long>(a->menu_ids.size()) - 1;
+    } else if (kind == "I" && f.size() >= 7 && stack.size() > 1) {
+      // The host owns the tag: it indexes the handler registry in TypeScript,
+      // so the numbering has to come from there rather than from insertion
+      // order here.
+      long tag = strtol(f[1].c_str(), nullptr, 10);
       id it = objc::msg_send<id>(
           objc::msg_send<id>(objc::get_class("NSMenuItem"),
                              objc::selector("alloc")),
@@ -635,9 +660,14 @@ static int32_t apply_custom_menu(App *a, const std::string &spec) {
       NSUInteger mods = static_cast<NSUInteger>(strtoul(f[4].c_str(), nullptr, 10));
       objc::msg_send<void>(it, objc::selector("setKeyEquivalentModifierMask:"),
                            mods);
+      objc::msg_send<void>(it, objc::selector("setEnabled:"), f[5] == "1");
+      objc::msg_send<void>(it, objc::selector("setState:"),
+                           static_cast<NSInteger>(f[6] == "1" ? 1 : 0));
       objc::msg_send<void>(stack.back(), objc::selector("addItem:"), it);
+      remember_item(a, tag, it);
     }
   }
+
   g_menu_owner = -1;
   for (int32_t i = 0; i < 8; i++) {
     if (app_at(i) == a) { g_menu_owner = i; break; }
@@ -1044,7 +1074,7 @@ int32_t wv_create(int32_t debug) {
     g_apps[i].on_timer_ctx = nullptr;
     g_apps[i].on_menu = nullptr;
     g_apps[i].on_menu_ctx = nullptr;
-    g_apps[i].menu_ids.clear();
+    g_apps[i].menu_items.clear();
     g_apps[i].req.clear();
     g_apps[i].cur_id.clear();
     g_apps[i].reply.clear();
@@ -1358,14 +1388,66 @@ int32_t wv_set_menu(int32_t h, const uint8_t *p, size_t n) {
 }
 
 // Retained, like wv_on_invoke: registered once and valid until the app exits.
-int32_t wv_on_menu(int32_t h,
-                   int32_t (*cb)(const uint8_t *, size_t, void *),
-                   void *ctx) {
+int32_t wv_on_menu(int32_t h, int32_t (*cb)(int32_t, void *), void *ctx) {
   App *a = app_at(h);
   if (!a) return -1;
   a->on_menu = cb;
   a->on_menu_ctx = ctx;
   return 0;
+}
+
+// Change one live item without rebuilding the bar. The tag is the host's
+// registry index, handed down by wv_set_menu. -1 for an unknown tag rather
+// than silence, so a stale handle is visible instead of a no-op.
+int32_t wv_menu_set_enabled(int32_t h, int32_t tag, int32_t on) {
+  App *a = app_at(h);
+  if (!a) return -1;
+#if defined(__APPLE__)
+  using namespace webview::detail;
+  objc::autoreleasepool arp;
+  id it = item_at(a, tag);
+  if (!it) return -1;
+  objc::msg_send<void>(it, objc::selector("setEnabled:"), on != 0);
+  return 0;
+#else
+  (void)tag; (void)on;
+  return -1;
+#endif
+}
+
+int32_t wv_menu_set_checked(int32_t h, int32_t tag, int32_t on) {
+  App *a = app_at(h);
+  if (!a) return -1;
+#if defined(__APPLE__)
+  using namespace webview::detail;
+  objc::autoreleasepool arp;
+  id it = item_at(a, tag);
+  if (!it) return -1;
+  // NSControlStateValueOn / Off.
+  objc::msg_send<void>(it, objc::selector("setState:"),
+                       static_cast<NSInteger>(on != 0 ? 1 : 0));
+  return 0;
+#else
+  (void)tag; (void)on;
+  return -1;
+#endif
+}
+
+int32_t wv_menu_set_label(int32_t h, int32_t tag, const uint8_t *p, size_t n) {
+  App *a = app_at(h);
+  if (!a) return -1;
+#if defined(__APPLE__)
+  using namespace webview::detail;
+  objc::autoreleasepool arp;
+  id it = item_at(a, tag);
+  if (!it) return -1;
+  objc::msg_send<void>(it, objc::selector("setTitle:"),
+                       cocoa::NSString_stringWithUTF8String(to_str(p, n)));
+  return 0;
+#else
+  (void)tag; (void)p; (void)n;
+  return -1;
+#endif
 }
 
 int32_t wv_set_fullscreen(int32_t h, int32_t on) {
