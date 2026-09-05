@@ -17,6 +17,7 @@ jobs:
   # no-op: this job always succeeds and the later jobs are skipped.
   check-version:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     outputs:
       should-publish: ${{ steps.check.outputs.should-publish }}
       version: ${{ steps.check.outputs.version }}
@@ -46,6 +47,7 @@ jobs:
   # the framework must not republish the scaffolder, and vice versa.
   check-create-version:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     outputs:
       should-publish: ${{ steps.check.outputs.should-publish }}
       version: ${{ steps.check.outputs.version }}
@@ -81,6 +83,7 @@ jobs:
       needs.check-version.outputs.should-publish == 'true' ||
       needs.check-create-version.outputs.should-publish == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -137,6 +140,7 @@ jobs:
     needs: [check-version, sanity]
     if: needs.check-version.outputs.should-publish == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     permissions:
       contents: read
       # OIDC token for npm trusted publishing — no NPM_TOKEN secret involved.
@@ -165,6 +169,7 @@ jobs:
       needs.publish.result != 'failure' &&
       needs.publish.result != 'cancelled'
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     permissions:
       contents: read
       id-token: write
@@ -214,6 +219,7 @@ jobs:
     needs: [check-version, publish]
     if: needs.check-version.outputs.should-publish == 'true' && needs.publish.result == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     permissions:
       # The only job that writes to the repo; the rest stay read-only.
       contents: write
