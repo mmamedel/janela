@@ -118,6 +118,40 @@ const flagValues = new Set(
 );
 const nameArg = positional.find((p) => !flagValues.has(p));
 
+/**
+ * The newest published janela, or null if the registry cannot be reached.
+ *
+ * Deliberately best-effort and time-boxed: scaffolding must work offline, on a
+ * plane, behind a proxy. A failure here means "use what is bundled", never an
+ * error.
+ */
+async function latestJanela() {
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 3000);
+    const res = await fetch("https://registry.npmjs.org/janela/latest", {
+      signal: ctl.signal,
+      headers: { accept: "application/vnd.npm.install-v1+json, application/json" },
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const body = await res.json();
+    return typeof body.version === "string" ? body.version : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Numeric semver compare, enough for x.y.z. A prerelease sorts as its base. */
+function isOlder(a, b) {
+  const parts = (v) => String(v).split("-")[0].split(".").map((n) => Number(n) || 0);
+  const [x, y] = [parts(a), parts(b)];
+  for (let i = 0; i < 3; i++) {
+    if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) < (y[i] ?? 0);
+  }
+  return false;
+}
+
 // ---- prompts -----------------------------------------------------------------
 
 const DEFAULT_NAME = "janela-app";
@@ -206,10 +240,23 @@ async function main() {
   const cli = join(root, "bin", "janela.mjs");
   if (!existsSync(cli)) die(`janela's CLI is missing at ${cli}`);
 
-  const args = [cli, "init", name, "--template", template];
-  if (has("--no-install")) args.push("--no-install");
+  const bundled = require("janela/package.json").version;
+  const newest = await latestJanela();
+  const stale = newest && isOlder(bundled, newest);
 
-  const r = spawnSync(process.execPath, args, { stdio: "inherit" });
+  const tail = ["init", name, "--template", template];
+  if (has("--no-install")) tail.push("--no-install");
+
+  // The bundled janela can be months out of date through no fault of anyone's:
+  // `pnpm create` caches the whole resolved tree for 24 hours, so a scaffolder
+  // fetched yesterday still carries yesterday's janela — and therefore
+  // yesterday's TEMPLATES. Running the newest one instead is the difference
+  // between warning that the project is stale and it simply not being.
+  const r = stale
+    ? (console.log(`  ${C.dim(`using janela ${newest} (this scaffolder bundles ${bundled})`)}\n`),
+       spawnSync("npm", ["exec", "--yes", "--package", `janela@${newest}`, "--", "janela", ...tail],
+                 { stdio: "inherit", shell: process.platform === "win32" }))
+    : spawnSync(process.execPath, [cli, ...tail], { stdio: "inherit" });
   if (r.status !== 0) process.exit(r.status ?? 1);
 
   console.log(
