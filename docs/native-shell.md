@@ -124,62 +124,99 @@ Costs 208 bytes.
 
 ### Custom menus
 
-Your own submenus go in with `app.setMenu`, and clicks arrive on `app.onMenu`:
+A menu item is an **object that carries its own handler**. There are no ids —
+nothing to declare, nothing to match, nothing to mistype.
 
 ```ts
 import { menuItem, menuSeparator, submenu } from "janela/host";
 
+const save = menuItem("Save", "CmdOrCtrl+S", () => writeDocument());
+
 app.setMenu([
   submenu("File", [
-    menuItem("Open…", "open", "CmdOrCtrl+O"),
+    menuItem("Open…", "CmdOrCtrl+O", () => openDocument()),
     menuSeparator(),
-    submenu("Recent", [menuItem("Clear", "clear", "")]),
+    save,
+    submenu("Recent", [menuItem("Clear", "", () => clearRecents())]),
   ]),
 ]);
 
-app.onMenu((id) => {
-  if (id === "open") { /* … */ }
-});
+save.setEnabled(false);          // later, without rebuilding
+save.setLabel("Save As…");
 ```
 
-**They are added to the standard menus, not swapped for them.** Replacing the
-bar wholesale is what would cost the app ⌘Q and ⌘V, so `setMenu` appends and a
-later call replaces only what an earlier one added — the menu can shrink as
-well as grow. `setMenu` returns `false` where custom menus are not supported
-yet (everything but macOS) and the standard menu is left alone either way.
+A tick needs `menuCheckItem`, not `menuItem`:
+
+```ts
+const dark = menuCheckItem("Dark mode", "", () => toggleTheme());
+dark.setChecked(true);
+```
+
+`setChecked` exists only on those, and calling it on a plain item is a compile
+error. That is GTK's constraint made visible: a tick needs `GtkCheckMenuItem`,
+a different widget chosen at construction, and an item cannot become one later.
+macOS and Windows would allow any item to carry a check — but a method that
+works on two platforms and silently does nothing on the third is worse than one
+that is simply absent.
+
+Keep the reference if you want to change an item later; there is no lookup,
+because there is no name to look up by. For a menu built from data, keep your
+own map:
+
+```ts
+const items = new Map(docs.map((d) => [d.id, menuItem(d.name, "", () => open(d))]));
+items.get("a")?.setEnabled(false);
+```
+
+**Custom submenus are added to the standard ones, not swapped for them.**
+Replacing the bar wholesale is what would cost the app ⌘Q and ⌘V, so `setMenu`
+appends and a later call replaces only what an earlier one added — the menu can
+shrink as well as grow. `setMenu` returns `false` where custom menus are not
+supported yet (everything but macOS) and the standard menu is left alone either
+way.
 
 Modifiers in `accel`: `Cmd`, `Ctrl`, `CmdOrCtrl`, `Alt`/`Option`, `Shift`. Pass
 `""` for no shortcut. The mask is always set explicitly, including empty,
 because AppKit's default for a key equivalent is Command — so an accelerator
 with no modifiers would silently become a Command shortcut.
 
-#### Why it is shaped this way
+#### Why there are no ids
 
-Not like Tauri's `muda`, which is a builder API in native code — that fits
-Tauri because its app logic is native too. janela's app logic is TypeScript, so
-the tree is declared there and the native side only renders it: the runtime
-flattens the entries into one row per line with `0x1f` between fields, and the
-shim splits on those. **Nothing native parses JSON, and no new concepts were
-added** — clicks come back on a retained callback with the same shape as
-`on_invoke`.
+Tauri's menu crate, [muda](https://github.com/tauri-apps/muda), gives every
+item a `MenuId(String)` and delivers clicks on a global channel, so you match
+the id afterwards:
 
-`MenuEntry` is a *total* record, built by the three helpers rather than written
-as a literal. That is a scriptc constraint turned into a nicer API: a record
-whose fields are all optional infers as `{ label: string | undefined, … }`, and
-an array mixing a submenu, an item and a separator becomes a union scriptc
-refuses to re-tag (`SC2003: union types must match exactly`). The helpers each
-return the same shape, so the array is homogeneous and the call site still
-reads as a tree.
+```rust
+pub struct MenuId(pub String);
+impl<T: ToString> From<T> for MenuId { … }   // anything stringifiable is an id
+```
+
+That is not a design choice so much as a Rust constraint: a closure cannot
+easily be attached to an item across a global static channel, so a name has to
+stand in for it — and a typo in the match arm is silent. TypeScript has no such
+problem. Attaching the handler to the item removes the name, and with it the
+whole class of bug that typing the name would have been protecting against.
+
+Two implementation notes, both of which are silent when got wrong:
+
+- Custom submenus set **`autoenablesItems: NO`**. AppKit otherwise decides each
+  item's enabled state from the responder chain and ignores `setEnabled:`
+  entirely.
+- **The tag is assigned in TypeScript**, not by the renderer: it indexes the
+  handler registry, is written into the wire format, comes back on a click, and
+  is what the setters address. Handlers live in an array rather than on the
+  item, because scriptc cannot call a closure held on an object property
+  (`SC1090`) — the same reason command handlers live in one.
 
 #### What it costs
 
 Nothing at all unless you call it. A scaffolded app that never mentions
-`setMenu` is **byte-identical** with the feature added — 195,792 both sides —
-because scriptc tree-shakes the unused runtime and the linker dead-strips the
-shim's menu code. Adding the two calls above costs **16,800 bytes**
-(195,784 → 212,584), which is the flattening, the accelerator parsing, the
-NSMenu construction and the retained callback. Same shape as every other
-platform API here: what you pay is what you call.
+`setMenu` is byte-identical with the feature present, because scriptc
+tree-shakes the unused runtime and the linker dead-strips the shim's menu code.
+Adding a one-item menu with a handler and one `setEnabled` costs **16,832
+bytes** (195,784 → 212,616): the flattening, the accelerator parsing, the
+NSMenu construction, the retained callback and the three setters. Same shape as
+every other platform API here — what you pay is what you call.
 
 #### Still macOS-only
 

@@ -231,10 +231,19 @@ export function ffiManifest(shimLib, { platform = process.platform, macSdkPath =
       name: "wvOnMenu", symbol: "wv_on_menu",
       params: [
         "i32",
-        { callback: { id: "menu", params: ["string", { context: "menu" }], returns: "i32", lifetime: "retained" } },
+        // The tag is the host's own registry index, so the click comes back as
+        // a number and TypeScript looks up the item's handler. Nothing is
+        // matched by string.
+        { callback: { id: "menu", params: ["i32", { context: "menu" }], returns: "i32", lifetime: "retained" } },
         { context: "menu" },
       ],
       returns: "i32",
+    },
+    { name: "wvMenuSetEnabled", symbol: "wv_menu_set_enabled", params: ["i32", "i32", "i32"], returns: "i32" },
+    { name: "wvMenuSetChecked", symbol: "wv_menu_set_checked", params: ["i32", "i32", "i32"], returns: "i32" },
+    {
+      name: "wvMenuSetLabel", symbol: "wv_menu_set_label",
+      params: ["i32", "i32", "string"], returns: "i32",
     },
   ];
 

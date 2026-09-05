@@ -41,56 +41,6 @@ export type AsyncCommandHandler = (
  */
 export type FsCallback = (err: string | null, text: string) => void;
 
-/**
- * One entry in the application menu.
- *
- * Every field is required rather than optional, and the entries are built with
- * `submenu`, `menuItem` and `menuSeparator` rather than written as literals.
- * That is a scriptc constraint made into a nicer API: a record whose fields are
- * all optional infers as `{ label: string | undefined, … }`, and an array
- * mixing a submenu, an item and a separator is a union that will not re-tag
- * into it ("union types must match exactly", SC2003). The helpers each return
- * the same total shape, so the array is homogeneous and the call site reads as
- * a tree.
- *
- * ```ts
- * app.setMenu([
- *   submenu("File", [
- *     menuItem("Open…", "open", "CmdOrCtrl+O"),
- *     menuSeparator(),
- *   ]),
- * ]);
- * ```
- */
-export type MenuEntry = {
-  label: string;
-  /** Sent to `onMenu` when clicked. Empty for submenus and separators. */
-  id: string;
-  /**
-   * A shortcut like "CmdOrCtrl+O" or "CmdOrCtrl+Shift+S". Modifiers: Cmd,
-   * Ctrl, CmdOrCtrl, Alt/Option, Shift. Empty for none.
-   */
-  accel: string;
-  separator: boolean;
-  /** Children. Empty for a leaf. */
-  items: MenuEntry[];
-};
-
-/** A clickable entry. `accel` is "" for no shortcut. */
-export function menuItem(label: string, id: string, accel: string): MenuEntry {
-  return { label: label, id: id, accel: accel, separator: false, items: [] };
-}
-
-/** A divider. */
-export function menuSeparator(): MenuEntry {
-  return { label: "", id: "", accel: "", separator: true, items: [] };
-}
-
-/** A submenu holding other entries. Nestable. */
-export function submenu(label: string, items: MenuEntry[]): MenuEntry {
-  return { label: label, id: "", accel: "", separator: false, items: items };
-}
-/** A named group of extensions offered in a dialog's file-type popup. */
 export interface DialogFilter {
   name: string;
   /** Bare extensions, no dot and no glob: ["png", "jpg"]. */

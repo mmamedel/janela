@@ -43,7 +43,10 @@ declare function wvDialog(
 ): number;
 declare function wvSetFullscreen(h: number, on: number): number;
 declare function wvSetMenu(h: number, spec: string): number;
-declare function wvOnMenu(h: number, cb: (id: string) => number): number;
+declare function wvOnMenu(h: number, cb: (tag: number) => number): number;
+declare function wvMenuSetEnabled(h: number, tag: number, on: number): number;
+declare function wvMenuSetChecked(h: number, tag: number, on: number): number;
+declare function wvMenuSetLabel(h: number, tag: number, label: string): number;
 
 const JOB_PENDING = 0;
 const JOB_OK = 1;
@@ -92,7 +95,6 @@ export type {
   DialogFilter,
   Events,
   FsCallback,
-  MenuEntry,
   OpenDialogOptions,
   SaveDialogOptions,
   WindowConfig,
@@ -102,7 +104,6 @@ export type {
 // A project's `import { defineCommands } from "janela/host"` is rewritten to
 // this module by the CLI before scriptc sees it.
 export { defineCommands, defineEvents } from "./types";
-export { menuItem, menuSeparator, submenu } from "./types";
 
 import type {
   AsyncCommandHandler,
@@ -114,7 +115,6 @@ import type {
   DialogFilter,
   Events,
   FsCallback,
-  MenuEntry,
   OpenDialogOptions,
   SaveDialogOptions,
   WindowConfig,
@@ -161,12 +161,18 @@ const TIMER_JOBS = -1;
  * interface (being signature-only) never is. A class receiver works even as a
  * plain function parameter, which is what `setup(app)` is.
  */
-// ---- menu flattening ---------------------------------------------------
+// ---- menus -------------------------------------------------------------
 //
-// The shim renders menus but parses nothing structural: the tree is flattened
-// here into one row per line with 0x1f between fields, which needs only a
-// split on the native side. Keeping the parsing in TypeScript is the whole
-// point — the native side stays a renderer.
+// A menu item is an OBJECT that carries its own click handler, not a row with
+// an id that something matches on later. muda — Tauri's menu crate — uses ids
+// because Rust cannot attach a closure to an item across its global event
+// channel, so it hands you `MenuId(String)` and you match on it; a typo there
+// is silent. TypeScript has no such problem: the handler lives on the item, so
+// there is no name to declare, to keep in sync, or to get wrong.
+//
+// The tag is an implementation detail the caller never sees: it indexes the
+// handler registry here, is written into the wire format, comes back on a
+// click, and is what setEnabled/setChecked/setLabel address.
 
 // NSEventModifierFlags.
 const MENU_SHIFT = 131072;
@@ -205,22 +211,114 @@ function menuSafe(v: string): string {
   return v.split("\x1f").join(" ").split("\n").join(" ");
 }
 
-function flattenMenu(entries: MenuEntry[], rows: string[]): void {
-  for (let i = 0; i < entries.length; i++) {
-    const e = entries[i];
-    if (e.separator) {
-      rows.push("-");
-      continue;
-    }
-    const label = menuSafe(e.label);
-    if (e.items.length > 0) {
-      rows.push("S\x1f" + label);
-      flattenMenu(e.items, rows);
-      rows.push("E");
-      continue;
-    }
-    rows.push("I\x1f" + menuSafe(e.id) + "\x1f" + label + "\x1f" + parseAccel(e.accel));
+/** Submenus and separators have nothing to run. */
+function noop(): void {}
+
+/**
+ * An entry in the application menu.
+ *
+ * Build one with `menuItem`, `menuSeparator` or `submenu` and keep the
+ * reference if you want to change it later — there is no lookup by name,
+ * because there are no names.
+ */
+export class MenuItem {
+  label: string;
+  accel: string;
+  separator: boolean;
+  items: MenuItem[];
+  onClick: () => void;
+  enabled = true;
+  // Data on the base so the flattener can read it without a type test; only
+  // CheckMenuItem exposes a way to change it.
+  checkable = false;
+  checked = false;
+
+  // Assigned when the item is mounted by setMenu; -1 while detached. The
+  // window handle is enough to reach the FFI — holding the app itself would
+  // drag its two type parameters in here for no benefit.
+  tag = -1;
+  ownerHandle = -1;
+
+  constructor(
+    label: string,
+    accel: string,
+    separator: boolean,
+    items: MenuItem[],
+    onClick: () => void,
+  ) {
+    this.label = label;
+    this.accel = accel;
+    this.separator = separator;
+    this.items = items;
+    this.onClick = onClick;
   }
+
+  /**
+   * Grey the item out, or bring it back.
+   *
+   * Applied immediately when the item is already in a menu, and remembered
+   * for the next `setMenu` when it is not — so state set before mounting is
+   * not lost.
+   */
+  setEnabled(on: boolean): void {
+    this.enabled = on;
+    if (this.ownerHandle >= 0 && this.tag >= 0) {
+      wvMenuSetEnabled(this.ownerHandle, this.tag, on ? 1 : 0);
+    }
+  }
+
+  /** Change the text without rebuilding the menu. */
+  setLabel(label: string): void {
+    this.label = label;
+    if (this.ownerHandle >= 0 && this.tag >= 0) {
+      wvMenuSetLabel(this.ownerHandle, this.tag, label);
+    }
+  }
+}
+
+/**
+ * An item that can carry a tick.
+ *
+ * Separate from `MenuItem` because GTK decides this at construction: a tick
+ * needs `GtkCheckMenuItem`, a different widget, and an item cannot become one
+ * later. macOS and Windows would let any item show a check, but a method that
+ * works on two platforms and silently does nothing on the third is worse than
+ * one that is simply absent — so `setChecked` lives here, and calling it on a
+ * plain item is a compile error rather than a surprise on Linux.
+ */
+export class CheckMenuItem extends MenuItem {
+  constructor(label: string, accel: string, onClick: () => void) {
+    super(label, accel, false, [], onClick);
+    this.checkable = true;
+  }
+
+  /** Tick or untick the item. */
+  setChecked(on: boolean): void {
+    this.checked = on;
+    if (this.ownerHandle >= 0 && this.tag >= 0) {
+      wvMenuSetChecked(this.ownerHandle, this.tag, on ? 1 : 0);
+    }
+  }
+}
+
+/** A clickable entry. `accel` is "" for no shortcut. */
+export function menuItem(label: string, accel: string, onClick: () => void): MenuItem {
+  return new MenuItem(label, accel, false, [], onClick);
+}
+
+/** A clickable entry that carries a tick. `accel` is "" for no shortcut. */
+export function menuCheckItem(label: string, accel: string, onClick: () => void): CheckMenuItem {
+  return new CheckMenuItem(label, accel, onClick);
+}
+
+/** A divider. */
+export function menuSeparator(): MenuItem {
+  return new MenuItem("", "", true, [], noop);
+}
+
+/** A submenu holding other entries. Nestable. */
+export function submenu(label: string, items: MenuItem[]): MenuItem {
+  return new MenuItem(label, "", false, items, noop);
 }
 
 export class JanelaAppImpl<
@@ -230,6 +328,14 @@ export class JanelaAppImpl<
   handle: number;
   names: string[] = [];
   handlers: CommandHandler[] = [];
+
+  // Menu items in tag order; the tag IS the index. Rebuilt by setMenu.
+  menuItems: MenuItem[] = [];
+  // The handlers, separately: scriptc does not support calling a closure held
+  // on an object property (SC1090), only one reached through an array — the
+  // same reason command handlers live in `handlers`.
+  menuHandlers: (() => void)[] = [];
+  menuBound = false;
 
   // ---- scheduling ----------------------------------------------------------
   // scriptc's event loop is parked for as long as the program sits inside the
@@ -584,34 +690,75 @@ export class JanelaAppImpl<
    * wholesale is what would. Calling it again replaces only what a previous
    * call added, so the menu can shrink as well as grow.
    *
-   * Clicks arrive on `onMenu` with the entry's `id`.
+   * Each item carries its own handler; there are no ids to declare or match.
+   * Keep a reference to change an item later.
    *
    * ```ts
-   * app.setMenu([
-   *   { label: "File", items: [
-   *     { label: "Open…", id: "open", accel: "CmdOrCtrl+O" },
-   *     { separator: true },
-   *     { label: "Close", id: "close" },
-   *   ]},
-   * ]);
-   * app.onMenu((id) => { if (id === "open") … });
+   * const save = menuItem("Save", "CmdOrCtrl+S", () => write());
+   * app.setMenu([submenu("File", [
+   *   menuItem("Open…", "CmdOrCtrl+O", () => open()),
+   *   menuSeparator(),
+   *   save,
+   * ])]);
+   *
+   * save.setEnabled(false);   // later, without rebuilding
    * ```
    *
    * Returns false where custom menus are not supported yet — everything but
    * macOS. The standard menu is unaffected either way.
    */
-  setMenu(entries: MenuEntry[]): boolean {
+  setMenu(entries: MenuItem[]): boolean {
+    // A rebuild invalidates every tag from the previous call, so the registry
+    // is rebuilt with it. Items carried over keep working because they are
+    // re-tagged here; items dropped from the tree go inert, which is what
+    // "removed from the menu" should mean.
+    for (let i = 0; i < this.menuItems.length; i++) {
+      this.menuItems[i].tag = -1;
+      this.menuItems[i].ownerHandle = -1;
+    }
+    this.menuItems = [];
+    this.menuHandlers = [];
+
     const rows: string[] = [];
-    flattenMenu(entries, rows);
+    this.flattenMenu(entries, rows);
+
+    if (!this.menuBound) {
+      // Registered once: the tag comes back and the item's own closure runs.
+      wvOnMenu(this.handle, (tag) => {
+        if (tag >= 0 && tag < this.menuHandlers.length) this.menuHandlers[tag]();
+        return 0;
+      });
+      this.menuBound = true;
+    }
     return wvSetMenu(this.handle, rows.join("\n")) === 0;
   }
 
-  /** Called with the `id` of the clicked menu entry. */
-  onMenu(cb: (id: string) => void): void {
-    wvOnMenu(this.handle, (id) => {
-      cb(id);
-      return 0;
-    });
+  /** Walks the tree, assigns each clickable item its registry tag. */
+  flattenMenu(entries: MenuItem[], rows: string[]): void {
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+      if (e.separator) {
+        rows.push("-");
+        continue;
+      }
+      const label = menuSafe(e.label);
+      if (e.items.length > 0) {
+        rows.push("S\x1f" + label);
+        this.flattenMenu(e.items, rows);
+        rows.push("E");
+        continue;
+      }
+      const tag = this.menuItems.length;
+      this.menuItems.push(e);
+      this.menuHandlers.push(e.onClick);
+      e.tag = tag;
+      e.ownerHandle = this.handle;
+      rows.push(
+        "I\x1f" + tag + "\x1f" + label + "\x1f" + parseAccel(e.accel) +
+          "\x1f" + (e.enabled ? "1" : "0") + "\x1f" + (e.checked ? "1" : "0") +
+          "\x1f" + (e.checkable ? "1" : "0"),
+      );
+    }
   }
 
   /**
