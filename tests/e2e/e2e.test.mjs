@@ -18,6 +18,7 @@ import { selectedLanes, selectedTemplates } from "./lib/lanes.mjs";
 import { assertKnownEnv, KNOBS } from "./lib/env.mjs";
 import {
   CORE_ASSERTIONS,
+  DESKTOP_ASSERTIONS,
   FRAMEWORK_ASSERTION,
   parse,
   summarise,
@@ -75,6 +76,7 @@ for (const lane of lanes) {
         const parsed = parse(output, project.config.runId);
         const expected = [...CORE_ASSERTIONS];
         if (project.config.framework) expected.push(FRAMEWORK_ASSERTION);
+        if (lane.name === "desktop") expected.push(...DESKTOP_ASSERTIONS);
         const v = verdict(parsed, expected);
 
         // Reported even on success: the numbers are the interesting part.

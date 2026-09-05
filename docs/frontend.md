@@ -174,27 +174,27 @@ without saying so.
 
 | template | desktop (darwin-arm64) | Android `.apk` | iOS `.app` |
 |---|---|---|---|
-| vanilla | 191 KB | 321 KB | 195 KB |
-| solid | 207 KB | 325 KB | 211 KB |
-| svelte | 223 KB | 337 KB | 227 KB |
-| vue | 256 KB | 349 KB | 259 KB |
-| react | 385 KB | 385 KB | 388 KB |
+| vanilla | 224 KB | 325 KB | 195 KB |
+| solid | 240 KB | 329 KB | 211 KB |
+| svelte | 256 KB | 337 KB | 227 KB |
+| vue | 289 KB | 349 KB | 259 KB |
+| react | 418 KB | 385 KB | 388 KB |
 
 Sizes are rounded KiB of the shipped artifact. Raw bytes:
 
 | template | desktop (darwin-arm64) | Android `.apk` | Android `.so` | iOS `.app` | iOS binary |
 |---|---|---|---|---|---|
-| vanilla | 195,792 | 328,203 | 840,256 | 199,585 | 198,768 |
-| solid | 212,328 | 332,299 | 850,320 | 216,113 | 215,304 |
-| svelte | 228,840 | 344,587 | 875,200 | 232,629 | 231,816 |
-| vue | 261,864 | 356,875 | 905,648 | 265,641 | 264,840 |
-| react | 393,976 | 393,739 | 1,039,328 | 397,761 | 396,952 |
+| vanilla | 229,392 | 332,299 | 844,880 | 199,633 | 198,816 |
+| solid | 245,912 | 336,395 | 854,960 | 216,161 | 215,352 |
+| svelte | 262,424 | 344,587 | 879,840 | 232,677 | 231,864 |
+| vue | 295,448 | 356,875 | 910,288 | 265,689 | 264,888 |
+| react | 427,560 | 393,739 | 1,043,968 | 397,809 | 397,000 |
 
 Where each column comes from:
 
-- **desktop (darwin-arm64)** — janela 0.18.1, scriptc 0.0.36, measured 2026-09-05 on darwin-arm64.
-- **Android `.apk`** — janela 0.18.1, scriptc 0.0.36, measured 2026-09-05 on Android arm64-v8a, build-tools 36.0.0, built on darwin-arm64.
-- **iOS `.app`** — janela 0.18.1, scriptc 0.0.36, measured 2026-09-05 on iOS 26.5 simulator SDK, built on darwin-arm64.
+- **desktop (darwin-arm64)** — janela 0.19.0, scriptc 0.0.36, measured 2026-09-05 on darwin-arm64.
+- **Android `.apk`** — janela 0.19.0, scriptc 0.0.36, measured 2026-09-05 on Android arm64-v8a, build-tools 36.0.0, built on darwin-arm64.
+- **iOS `.app`** — janela 0.19.0, scriptc 0.0.36, measured 2026-09-05 on iOS 26.5 simulator SDK, built on darwin-arm64.
 
 <!-- sizes:end -->
 
@@ -316,7 +316,7 @@ Two things worth noticing. **`solid` is smaller than `vanilla`** — not because
 Solid is free, but because the `vanilla` template ships a larger hand-written
 `index.html` (it demonstrates dialogs, file reading and window control inline)
 while Solid's flattened bundle is ~11 KB. And **the APK spread is much
-narrower** than the desktop spread — 321–385 KB against 191–385 KB — because an
+narrower** than the desktop spread — 325–385 KB against 224–418 KB — because an
 APK is dominated by the shared `.so` (853 KB–1.04 MB uncompressed) rather than
 by the frontend. Stripping the `.so` narrowed the APK range further, from 56 KB
 to 61 KB in absolute terms but from 12% to 18% of the smallest APK, so the

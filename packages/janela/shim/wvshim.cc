@@ -22,10 +22,12 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -42,6 +44,10 @@
 #include <commdlg.h>
 #elif !defined(__APPLE__)
 #include <gtk/gtk.h>
+// The editing actions (Copy, Paste, Undo) are WebKit's, not GTK's, and this is
+// the only header that declares them. It costs nothing to include: the build
+// already compiles and links against webkit2gtk-4.1 for the backend itself.
+#include <webkit2/webkit2.h>
 #endif
 
 namespace {
@@ -89,9 +95,10 @@ struct App {
   // `id` is Objective-C, so naming it here breaks the Linux and Windows
   // builds. The Apple code casts on the way in and out.
   std::vector<void *> menu_items;
-  // How many submenus the standard bar installed, so setMenu appends after
-  // them and can remove only its own on a later call.
-  size_t std_menu_count = 0;
+  // Whether the host ever called setMenu. If it never does, wv_run installs
+  // the whole standard bar, so an app that says nothing about menus still gets
+  // Cmd+Q and Cmd+V.
+  bool menu_set = false;
 
   // Staging for the in-flight request.
   std::string req;      // JSON args array from JS
@@ -373,6 +380,54 @@ std::string json_array(const std::vector<std::string> &items) {
 bool run_file_dialog(const DialogRequest &req, std::vector<std::string> &out,
                      std::string &error);
 
+// ---- menus: the part that is the same everywhere ---------------------------
+//
+// Three renderers sit below this: AppKit, Win32 and GTK. They agree on the
+// wire format (see the note above apply_custom_menu) and on who owns a click.
+//
+// Ownership is a real question because the callback is per-app while the menu
+// is not: on macOS the menu bar is process-global, on Windows and Linux it
+// belongs to a window. The rule that works for both is the same one — the
+// last app to call setMenu owns the clicks — so it lives here rather than
+// three times below.
+static int32_t g_menu_owner = -1;
+
+static void menu_clicked(long tag) {
+  App *a = g_menu_owner >= 0 ? app_at(g_menu_owner) : nullptr;
+  if (!a || !a->on_menu) return;
+  a->on_menu(static_cast<int32_t>(tag), a->on_menu_ctx);
+}
+
+static void claim_menu_owner(App *a) {
+  g_menu_owner = -1;
+  for (int32_t i = 0; i < 8; i++) {
+    if (app_at(i) == a) { g_menu_owner = i; break; }
+  }
+}
+
+// The app a handle-free call acts on.
+//
+// wv_perform_action takes no handle because on macOS it needs none: the
+// responder chain and the key window are process state. Win32 and GTK do need
+// a window, and `predefined.copy()` is imported as a bare function with no app
+// in scope, so the shim resolves it here. janela opens one window, which is
+// what makes "the app" unambiguous rather than a guess; the menu owner is
+// preferred so a two-window future picks the one the user is driving.
+// Fullscreen is both a window API (app.setFullscreen) and a menu action
+// (predefined.fullscreen), and the action has to toggle, so it needs to read
+// the state as well as set it. Declared here, defined by each renderer.
+static int32_t platform_set_fullscreen(void *win, bool on);
+static bool platform_is_fullscreen(void *win);
+
+static App *current_app() {
+  App *a = g_menu_owner >= 0 ? app_at(g_menu_owner) : nullptr;
+  if (a) return a;
+  for (int32_t i = 0; i < 8; i++) {
+    if (g_apps[i].used) return &g_apps[i];
+  }
+  return nullptr;
+}
+
 #if defined(__APPLE__)
 
 // A standard macOS main menu.
@@ -392,34 +447,21 @@ bool run_file_dialog(const DialogRequest &req, std::vector<std::string> &out,
 // chain, so there is nothing to call back into TypeScript for and no new FFI
 // surface. WKWebView answers the editing ones itself. Custom menus — a
 // declarative table passed down from the host — are a separate feature.
-static void install_main_menu() {
-  using namespace webview::detail;
-  objc::autoreleasepool arp;
+static NSUInteger cocoa_mods(unsigned long symbolic);
+static void add_app_submenu(id menubar, const std::string &name);
+static void add_standard_editing_menus(id menubar);
 
+// The application submenu, which AppKit requires be FIRST: it turns the main
+// menu's first item into the app menu whatever that item is titled. A host
+// menu starting with "File" would otherwise be rendered as the app menu and
+// labelled with the bundle name, so this always goes in front of whatever the
+// host asked for.
+static id build_menubar_with_app_menu() {
+  using namespace webview::detail;
   id app = objc::msg_send<id>(objc::get_class("NSApplication"),
                               objc::selector("sharedApplication"));
-  if (!app) return;
-  // Idempotent: an embedder that already installed a menu keeps it.
-  if (objc::msg_send<id>(app, objc::selector("mainMenu"))) return;
+  if (!app) return nullptr;
 
-  // NSEventModifierFlags. The default for a key equivalent is Command alone,
-  // so only the combinations need naming.
-  const NSUInteger kShift = 1UL << 17;
-  const NSUInteger kControl = 1UL << 18;
-  const NSUInteger kOption = 1UL << 19;
-  const NSUInteger kCommand = 1UL << 20;
-
-  auto str = [](const std::string &v) {
-    return cocoa::NSString_stringWithUTF8String(v);
-  };
-  auto alloc_init = [](const char *cls) {
-    return objc::msg_send<id>(
-        objc::msg_send<id>(objc::get_class(cls), objc::selector("alloc")),
-        objc::selector("init"));
-  };
-
-  // AppKit labels the first submenu from the bundle, not from this title, but
-  // "About <name>" and "Quit <name>" are ours to spell.
   id process = objc::msg_send<id>(objc::get_class("NSProcessInfo"),
                                   objc::selector("processInfo"));
   const char *raw =
@@ -427,96 +469,128 @@ static void install_main_menu() {
                     objc::msg_send<id>(process, objc::selector("processName")),
                     objc::selector("UTF8String"))
               : nullptr;
-  std::string name = raw ? raw : "App";
-
-  id menubar = alloc_init("NSMenu");
-
-  auto submenu = [&](const std::string &title) {
-    id holder = alloc_init("NSMenuItem");
-    id menu = objc::msg_send<id>(
-        objc::msg_send<id>(objc::get_class("NSMenu"), objc::selector("alloc")),
-        objc::selector("initWithTitle:"), str(title));
-    objc::msg_send<void>(holder, objc::selector("setSubmenu:"), menu);
-    objc::msg_send<void>(menubar, objc::selector("addItem:"), holder);
-    return menu;
-  };
-
-  auto item = [&](id menu, const std::string &title, const char *sel,
-                  const std::string &key, NSUInteger mods) {
-    id it = objc::msg_send<id>(
-        objc::msg_send<id>(objc::get_class("NSMenuItem"),
-                           objc::selector("alloc")),
-        objc::selector("initWithTitle:action:keyEquivalent:"), str(title),
-        sel ? objc::selector(sel) : nullptr, str(key));
-    if (mods) {
-      objc::msg_send<void>(
-          it, objc::selector("setKeyEquivalentModifierMask:"), mods);
-    }
-    objc::msg_send<void>(menu, objc::selector("addItem:"), it);
-  };
-  auto separator = [&](id menu) {
-    objc::msg_send<void>(menu, objc::selector("addItem:"),
-                         objc::msg_send<id>(objc::get_class("NSMenuItem"),
-                                            objc::selector("separatorItem")));
-  };
-
-  id app_menu = submenu(name);
-  item(app_menu, "About " + name, "orderFrontStandardAboutPanel:", "", 0);
-  separator(app_menu);
-  item(app_menu, "Hide " + name, "hide:", "h", 0);
-  item(app_menu, "Hide Others", "hideOtherApplications:", "h",
-       kOption | kCommand);
-  item(app_menu, "Show All", "unhideAllApplications:", "", 0);
-  separator(app_menu);
-  // performClose:, not terminate: — measured, not assumed. Both quit and
-  // both exit 0, but terminate: exits the process itself, so the host never
-  // returns from wv_run and anything after app.run() is skipped;
-  // performClose: goes through the same window-close path the red button
-  // uses, the run loop unwinds, and the host prints its own "run returned 0".
-  // One shutdown path instead of two. muda picks terminate: because Tauri's
-  // app logic is native and multi-window; janela is single-window, so closing
-  // the window IS quitting. If janela ever grows multiple windows this has to
-  // become a real Quit that closes all of them.
-  //
-  // (An earlier note here claimed performClose: did not fire at all. That was
-  // a bad test: posted key events go to the FRONTMOST app, and the app was not
-  // active. With it activated first, both actions work.)
-  item(app_menu, "Quit " + name, "performClose:", "q", 0);
-
-  id edit = submenu("Edit");
-  item(edit, "Undo", "undo:", "z", 0);
-  item(edit, "Redo", "redo:", "z", kShift | kCommand);
-  separator(edit);
-  item(edit, "Cut", "cut:", "x", 0);
-  item(edit, "Copy", "copy:", "c", 0);
-  item(edit, "Paste", "paste:", "v", 0);
-  item(edit, "Select All", "selectAll:", "a", 0);
-
-  id view = submenu("View");
-  item(view, "Enter Full Screen", "toggleFullScreen:", "f",
-       kControl | kCommand);
-
-  id window = submenu("Window");
-  item(window, "Minimize", "performMiniaturize:", "m", 0);
-  item(window, "Close", "performClose:", "w", 0);
-
-  objc::msg_send<void>(app, objc::selector("setMainMenu:"), menubar);
-  // Lets AppKit add the standard Window-menu bookkeeping (window list,
-  // Bring All to Front).
-  objc::msg_send<void>(app, objc::selector("setWindowsMenu:"), window);
+  id menubar = objc::msg_send<id>(
+      objc::msg_send<id>(objc::get_class("NSMenu"), objc::selector("alloc")),
+      objc::selector("init"));
+  add_app_submenu(menubar, raw ? raw : "App");
+  return menubar;
 }
 
-// How many submenus the standard bar has; custom ones are appended after these
-// and only those are removed on a later setMenu.
-static size_t standard_menu_count() {
+// The whole standard bar. Installed only when the host never calls setMenu —
+// a scratch app still gets Cmd+Q and Cmd+V, while an app that sets its own
+// menu owns the bar beyond the app submenu.
+static void install_main_menu() {
   using namespace webview::detail;
   objc::autoreleasepool arp;
+
   id app = objc::msg_send<id>(objc::get_class("NSApplication"),
                               objc::selector("sharedApplication"));
-  id menubar = app ? objc::msg_send<id>(app, objc::selector("mainMenu")) : nullptr;
-  if (!menubar) return 0;
-  return static_cast<size_t>(
-      objc::msg_send<NSUInteger>(menubar, objc::selector("numberOfItems")));
+  if (!app) return;
+  if (objc::msg_send<id>(app, objc::selector("mainMenu"))) return;
+
+  id menubar = build_menubar_with_app_menu();
+  if (!menubar) return;
+  add_standard_editing_menus(menubar);
+  objc::msg_send<void>(app, objc::selector("setMainMenu:"), menubar);
+}
+
+// Shared by both paths: a submenu of items wired to standard selectors.
+static void menu_add(id menu, const std::string &title, const char *sel,
+                     const std::string &key, unsigned long symbolic) {
+  using namespace webview::detail;
+  id it = objc::msg_send<id>(
+      objc::msg_send<id>(objc::get_class("NSMenuItem"), objc::selector("alloc")),
+      objc::selector("initWithTitle:action:keyEquivalent:"),
+      cocoa::NSString_stringWithUTF8String(title),
+      sel ? objc::selector(sel) : nullptr,
+      cocoa::NSString_stringWithUTF8String(key));
+  objc::msg_send<void>(it, objc::selector("setKeyEquivalentModifierMask:"),
+                       cocoa_mods(symbolic));
+  objc::msg_send<void>(menu, objc::selector("addItem:"), it);
+}
+
+static void menu_add_separator(id menu) {
+  using namespace webview::detail;
+  objc::msg_send<void>(menu, objc::selector("addItem:"),
+                       objc::msg_send<id>(objc::get_class("NSMenuItem"),
+                                          objc::selector("separatorItem")));
+}
+
+static id menu_add_submenu(id menubar, const std::string &title) {
+  using namespace webview::detail;
+  id holder = objc::msg_send<id>(
+      objc::msg_send<id>(objc::get_class("NSMenuItem"), objc::selector("alloc")),
+      objc::selector("init"));
+  id menu = objc::msg_send<id>(
+      objc::msg_send<id>(objc::get_class("NSMenu"), objc::selector("alloc")),
+      objc::selector("initWithTitle:"),
+      cocoa::NSString_stringWithUTF8String(title));
+  objc::msg_send<void>(holder, objc::selector("setTitle:"),
+                       cocoa::NSString_stringWithUTF8String(title));
+  objc::msg_send<void>(holder, objc::selector("setSubmenu:"), menu);
+  objc::msg_send<void>(menubar, objc::selector("addItem:"), holder);
+  return menu;
+}
+
+static void add_app_submenu(id menubar, const std::string &name) {
+  id m = menu_add_submenu(menubar, name);
+  menu_add(m, "About " + name, "orderFrontStandardAboutPanel:", "", 0);
+  menu_add_separator(m);
+  menu_add(m, "Hide " + name, "hide:", "h", 1);
+  menu_add(m, "Hide Others", "hideOtherApplications:", "h", 1 | 4);
+  menu_add(m, "Show All", "unhideAllApplications:", "", 0);
+  menu_add_separator(m);
+  // performClose:, not terminate: — measured: terminate: exits the process
+  // itself so the host never returns from wv_run, while performClose: unwinds
+  // through the window-close path the red button uses.
+  menu_add(m, "Quit " + name, "performClose:", "q", 1);
+}
+
+// True if the bar already has a submenu with this title — the host declaring
+// its own "Edit" must not get two.
+static bool menubar_has(id menubar, const std::string &title) {
+  using namespace webview::detail;
+  NSUInteger n = objc::msg_send<NSUInteger>(menubar,
+                                            objc::selector("numberOfItems"));
+  for (NSUInteger i = 0; i < n; i++) {
+    id item = objc::msg_send<id>(menubar, objc::selector("itemAtIndex:"), i);
+    const char *got = cocoa::NSString_get_UTF8String(
+        objc::msg_send<id>(item, objc::selector("title")));
+    if (got && title == got) return true;
+  }
+  return false;
+}
+
+// Each of the three is filled in only if the host has not declared one under
+// the same title. Guarded SEPARATELY, and not with an early return: a host
+// that declares its own Edit would otherwise silently lose View and Window
+// too — measured, before this was three checks instead of one.
+static void add_standard_editing_menus(id menubar) {
+  using namespace webview::detail;
+  if (!menubar_has(menubar, "Edit")) {
+    id edit = menu_add_submenu(menubar, "Edit");
+    menu_add(edit, "Undo", "undo:", "z", 1);
+    menu_add(edit, "Redo", "redo:", "z", 1 | 2);
+    menu_add_separator(edit);
+    menu_add(edit, "Cut", "cut:", "x", 1);
+    menu_add(edit, "Copy", "copy:", "c", 1);
+    menu_add(edit, "Paste", "paste:", "v", 1);
+    menu_add(edit, "Select All", "selectAll:", "a", 1);
+  }
+
+  if (!menubar_has(menubar, "View")) {
+    id view = menu_add_submenu(menubar, "View");
+    menu_add(view, "Enter Full Screen", "toggleFullScreen:", "f", 1 | 8);
+  }
+
+  if (!menubar_has(menubar, "Window")) {
+    id window = menu_add_submenu(menubar, "Window");
+    menu_add(window, "Minimize", "performMiniaturize:", "m", 1);
+    menu_add(window, "Close", "performClose:", "w", 1);
+    id app = objc::msg_send<id>(objc::get_class("NSApplication"),
+                                objc::selector("sharedApplication"));
+    objc::msg_send<void>(app, objc::selector("setWindowsMenu:"), window);
+  }
 }
 
 // ---- custom menus ------------------------------------------------------
@@ -527,20 +601,12 @@ static size_t standard_menu_count() {
 //
 //   S<US>Label      open a submenu
 //   E               close it
-//   I<US>tag<US>Label<US>key<US>mods   an item
+//   I<US>tag<US>Label<US>key<US>mods<US>enabled<US>checked<US>checkable
 //   -               a separator
 //
-// A click sends the item's tag back, which indexes App::menu_ids, and the id
-// string goes up to TypeScript on the retained on_menu callback — the same
-// shape as on_invoke. The menu bar is process-global on macOS, so exactly one
-// app owns it at a time.
-static int32_t g_menu_owner = -1;
-
-static void menu_clicked(long tag) {
-  App *a = g_menu_owner >= 0 ? app_at(g_menu_owner) : nullptr;
-  if (!a || !a->on_menu) return;
-  a->on_menu(static_cast<int32_t>(tag), a->on_menu_ctx);
-}
+// A click sends the item's tag back, which indexes the host's handler
+// registry, and the tag goes up to TypeScript on the retained on_menu
+// callback — the same shape as on_invoke.
 
 // One shared target for every custom item; the tag says which one fired.
 static id menu_target() {
@@ -568,6 +634,103 @@ static id menu_target() {
   return instance;
 }
 
+// The platform's own menu items, by the host's action name.
+//
+// These carry a SELECTOR rather than a callback: Paste has to travel up the
+// responder chain for WKWebView to handle it, so the behaviour is AppKit's and
+// the click never reaches TypeScript. An unknown action renders nothing rather
+// than a dead item.
+struct Predefined {
+  const char *action;
+  const char *title;
+  const char *selector;
+  const char *key;
+  unsigned long mods;  // symbolic, as the host sends them
+};
+
+static const Predefined *predefined_for(const std::string &action) {
+  static const Predefined table[] = {
+      {"about", "About", "orderFrontStandardAboutPanel:", "", 0},
+      {"services", "Services", nullptr, "", 0},
+      {"hide", "Hide", "hide:", "h", 1},
+      {"hideOthers", "Hide Others", "hideOtherApplications:", "h", 1 | 4},
+      {"showAll", "Show All", "unhideAllApplications:", "", 0},
+      // performClose:, not terminate: — see the note on the standard menu.
+      {"quit", "Quit", "performClose:", "q", 1},
+      {"undo", "Undo", "undo:", "z", 1},
+      {"redo", "Redo", "redo:", "z", 1 | 2},
+      {"cut", "Cut", "cut:", "x", 1},
+      {"copy", "Copy", "copy:", "c", 1},
+      {"paste", "Paste", "paste:", "v", 1},
+      {"selectAll", "Select All", "selectAll:", "a", 1},
+      {"minimize", "Minimize", "performMiniaturize:", "m", 1},
+      {"zoom", "Zoom", "performZoom:", "", 0},
+      {"fullscreen", "Enter Full Screen", "toggleFullScreen:", "f", 1 | 8},
+      {"closeWindow", "Close Window", "performClose:", "w", 1},
+  };
+  for (const Predefined &p : table) {
+    if (action == p.action) return &p;
+  }
+  return nullptr;
+}
+
+// Perform a platform action right now, from wherever the host calls it.
+//
+// The interesting case is copy/paste/undo: those are not "do this" but a
+// SELECTOR sent up the responder chain, and by the time a TypeScript handler
+// runs the menu click has already been delivered to us. sendAction:to:nil
+// walks the chain at this moment instead, which is what lets it still reach
+// the WKWebView's editing context.
+static int32_t perform_action(const std::string &action) {
+  using namespace webview::detail;
+  objc::autoreleasepool arp;
+  const Predefined *pd = predefined_for(action);
+  if (!pd || !pd->selector) return -1;
+  id app = objc::msg_send<id>(objc::get_class("NSApplication"),
+                              objc::selector("sharedApplication"));
+  if (!app) return -1;
+
+  // to:nil walks the responder chain from the key window's first responder,
+  // which is how this reaches the WKWebView's editing context.
+  if (objc::msg_send<bool>(app, objc::selector("sendAction:to:from:"),
+                           objc::selector(pd->selector), nullptr, app)) {
+    return 0;
+  }
+
+  // Falls back to addressing the first responder directly. Observed once, on
+  // the very first launch: the window had not become key yet, so the chain
+  // walk above found nobody. Three runs in a row succeed on the first path
+  // once the app is settled, so this is a belt for the startup edge.
+  id key_window = objc::msg_send<id>(app, objc::selector("keyWindow"));
+  id responder = key_window ? objc::msg_send<id>(
+                                  key_window, objc::selector("firstResponder"))
+                            : nullptr;
+  if (responder &&
+      objc::msg_send<bool>(app, objc::selector("sendAction:to:from:"),
+                           objc::selector(pd->selector), responder, app)) {
+    return 0;
+  }
+  return -1;
+}
+
+
+// The host sends modifiers symbolically; this is the AppKit half of the map.
+// MOD_PRIMARY is Command here — on Windows and Linux the same bit becomes
+// Control, which is the whole point of sending intent rather than constants.
+static NSUInteger cocoa_mods(unsigned long symbolic) {
+  const NSUInteger kShift = 1UL << 17;
+  const NSUInteger kControl = 1UL << 18;
+  const NSUInteger kOption = 1UL << 19;
+  const NSUInteger kCommand = 1UL << 20;
+  NSUInteger out = 0;
+  if (symbolic & 1) out |= kCommand;   // primary
+  if (symbolic & 2) out |= kShift;
+  if (symbolic & 4) out |= kOption;
+  if (symbolic & 8) out |= kControl;
+  if (symbolic & 16) out |= kCommand;
+  return out;
+}
+
 // Retains the item under its tag so a later setEnabled/setChecked/setLabel can
 // find it. The vector is sized to fit rather than pushed, because the host's
 // tags are registry indices and need not arrive in order.
@@ -592,17 +755,18 @@ static int32_t apply_custom_menu(App *a, const std::string &spec) {
 
   id app = objc::msg_send<id>(objc::get_class("NSApplication"),
                               objc::selector("sharedApplication"));
-  id menubar = objc::msg_send<id>(app, objc::selector("mainMenu"));
+  if (!app) return -1;
+
+  // A fresh bar every time: the host owns what it declared, so setMenu
+  // replaces rather than appends and the menu can shrink as well as grow.
+  //
+  // The application submenu is prepended regardless, because AppKit turns the
+  // main menu's FIRST item into the app menu whatever it is titled — a host
+  // menu starting with "File" would otherwise be rendered as the app menu and
+  // labelled with the bundle name. It is also the floor under Cmd+Q.
+  id menubar = build_menubar_with_app_menu();
   if (!menubar) return -1;
 
-  // Drop whatever a previous call added, so setMenu is idempotent and can
-  // shrink the bar as well as grow it.
-  for (size_t n = objc::msg_send<NSUInteger>(menubar,
-                                             objc::selector("numberOfItems"));
-       n > a->std_menu_count; n--) {
-    objc::msg_send<void>(menubar, objc::selector("removeItemAtIndex:"),
-                         static_cast<NSInteger>(n - 1));
-  }
   for (void *old_item : a->menu_items) {
     if (old_item) objc::release(static_cast<id>(old_item));
   }
@@ -661,9 +825,8 @@ static int32_t apply_custom_menu(App *a, const std::string &spec) {
       // Always set the mask, including 0: AppKit's default for a key
       // equivalent is Command, so leaving it alone would turn an accelerator
       // with no modifiers into a Command shortcut.
-      NSUInteger mods = static_cast<NSUInteger>(strtoul(f[4].c_str(), nullptr, 10));
       objc::msg_send<void>(it, objc::selector("setKeyEquivalentModifierMask:"),
-                           mods);
+                           cocoa_mods(strtoul(f[4].c_str(), nullptr, 10)));
       objc::msg_send<void>(it, objc::selector("setEnabled:"), f[5] == "1");
       // f[7] says the item is checkable. AppKit lets any item carry a state,
       // so it is unused here — it is on the wire for the GTK renderer, which
@@ -675,10 +838,50 @@ static int32_t apply_custom_menu(App *a, const std::string &spec) {
     }
   }
 
-  g_menu_owner = -1;
-  for (int32_t i = 0; i < 8; i++) {
-    if (app_at(i) == a) { g_menu_owner = i; break; }
-  }
+  // The floor goes back on AFTER the host's menus, which also puts them in
+  // macOS's conventional order: App, File, …, Edit, View, Window. Without this
+  // any setMenu at all would cost the app ⌘C and ⌘V — the exact bug the
+  // standard bar exists to prevent, reintroduced by the feature that was
+  // supposed to build on it. A host that declares its own Edit, View or Window
+  // keeps it; only the missing ones are filled in.
+  add_standard_editing_menus(menubar);
+
+  objc::msg_send<void>(app, objc::selector("setMainMenu:"), menubar);
+  a->menu_set = true;
+  claim_menu_owner(a);
+  return 0;
+}
+
+// The live-item setters. Each takes the host's tag, which is a registry index
+// in TypeScript, and -1 for an unknown one rather than silence — a stale
+// handle should be visible, not a no-op.
+static int32_t menu_set_enabled(App *a, int32_t tag, int32_t on) {
+  using namespace webview::detail;
+  objc::autoreleasepool arp;
+  id it = item_at(a, tag);
+  if (!it) return -1;
+  objc::msg_send<void>(it, objc::selector("setEnabled:"), on != 0);
+  return 0;
+}
+
+static int32_t menu_set_checked(App *a, int32_t tag, int32_t on) {
+  using namespace webview::detail;
+  objc::autoreleasepool arp;
+  id it = item_at(a, tag);
+  if (!it) return -1;
+  // NSControlStateValueOn / Off.
+  objc::msg_send<void>(it, objc::selector("setState:"),
+                       static_cast<NSInteger>(on != 0 ? 1 : 0));
+  return 0;
+}
+
+static int32_t menu_set_label(App *a, int32_t tag, const std::string &label) {
+  using namespace webview::detail;
+  objc::autoreleasepool arp;
+  id it = item_at(a, tag);
+  if (!it) return -1;
+  objc::msg_send<void>(it, objc::selector("setTitle:"),
+                       cocoa::NSString_stringWithUTF8String(label));
   return 0;
 }
 
@@ -763,6 +966,41 @@ bool run_file_dialog(const DialogRequest &req, std::vector<std::string> &out,
   return !out.empty();
 }
 
+
+// Releases the retained items. The menu bar itself belongs to NSApplication,
+// which replaces it wholesale on the next setMenu.
+static void menu_teardown(App *a) {
+  using namespace webview::detail;
+  for (void *it : a->menu_items) {
+    if (it) objc::release(static_cast<id>(it));
+  }
+  a->menu_items.clear();
+}
+
+// AppKit parents the webview eagerly, so nothing here has to wait for run.
+static void menu_realize(App *) {}
+
+static bool platform_is_fullscreen(void *win) {
+  using namespace webview::detail;
+  objc::autoreleasepool arp;
+  // NSWindowStyleMaskFullScreen.
+  const NSUInteger full = 1UL << 14;
+  NSUInteger mask = objc::msg_send<NSUInteger>(static_cast<id>(win),
+                                               objc::selector("styleMask"));
+  return (mask & full) != 0;
+}
+
+static int32_t platform_set_fullscreen(void *win, bool on) {
+  using namespace webview::detail;
+  objc::autoreleasepool arp;
+  // toggleFullScreen: only toggles, so read the current state first and leave
+  // it alone when it already matches.
+  if (platform_is_fullscreen(win) != on) {
+    objc::msg_send<void>(static_cast<id>(win),
+                         objc::selector("toggleFullScreen:"), nullptr);
+  }
+  return 0;
+}
 #elif defined(_WIN32)
 
 std::string from_wide(const wchar_t *w, int wlen) {
@@ -932,20 +1170,743 @@ bool run_file_dialog(const DialogRequest &req, std::vector<std::string> &out,
 
 #endif
 
-#if !defined(__APPLE__)
-// Windows and Linux need no menu for these shortcuts: Alt+F4 is a
-// window-manager message the win32 backend already answers as WM_CLOSE, and
-// the editing keys are handled inside WebView2 and WebKitGTK. A menu here
-// would be a feature, not a fix.
-static void install_main_menu() {}
-static size_t standard_menu_count() { return 0; }
+#if defined(__APPLE__)
+// The AppKit renderer is further up, beside the standard menu bar it shares
+// its helpers with. This chain covers the other two.
+#elif defined(_WIN32)
 
-// Custom menus are macOS-only for now. Two things have to be solved first:
-// webview.h's win32 loop never calls TranslateAcceleratorW, without which
-// accelerators do not fire, and the GTK backend keeps both GTK 3 and GTK 4
-// alive where GTK 4 removed GtkMenuBar. Reporting -1 lets the host say
-// "unsupported here" rather than pretend it worked.
+// ---- Win32 menus -----------------------------------------------------------
+//
+// There is no standard bar to install here. Alt+F4 is a window-manager
+// message the win32 backend already answers as WM_CLOSE, and Ctrl+C/V/Z/A are
+// handled inside WebView2 — so unlike macOS, an app that says nothing about
+// menus loses nothing by having none. A menu on Windows is a feature the app
+// asked for, not a floor under the keyboard.
+static void install_main_menu() {}
+
+// The window that owns the menu bar, and the wndproc that was there before we
+// subclassed it. Process-wide because janela opens one window; the menu bar
+// itself is per-window, so a second one would need these per App.
+static HWND g_menu_hwnd = nullptr;
+static WNDPROC g_prev_wndproc = nullptr;
+static HACCEL g_accel = nullptr;
+static HHOOK g_accel_hook = nullptr;
+static HMENU g_menu_bar = nullptr;
+static bool g_win_fullscreen = false;
+
+// WM_COMMAND's id is 16 bits, and Windows reserves the low range for its own
+// controls (IDOK is 1), so item ids start well clear of it.
+static const UINT kIdItemBase = 0x4000;
+
+static std::wstring widen(const std::string &s) {
+  if (s.empty()) return std::wstring();
+  int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()),
+                              nullptr, 0);
+  if (n <= 0) return std::wstring();
+  std::wstring out(static_cast<size_t>(n), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()),
+                      &out[0], n);
+  return out;
+}
+
+// A literal ampersand in a menu label is a mnemonic marker, so a label like
+// "Cut && Paste" has to be escaped or Windows eats the character and
+// underlines the P.
+static std::string escape_mnemonics(const std::string &s) {
+  std::string out;
+  for (char c : s) {
+    out.push_back(c);
+    if (c == '&') out.push_back('&');
+  }
+  return out;
+}
+
+// The host sends a lowercased key name. A single character goes through the
+// keyboard layout; everything else is a named key, which is the only way F5 or
+// Delete can be an accelerator at all. `shown` is what the menu prints, which
+// is not always the name that was sent.
+static bool vk_for_key(const std::string &key, WORD &vk, std::string &shown) {
+  if (key.empty()) return false;
+  if (key.size() == 1) {
+    SHORT s = VkKeyScanW(static_cast<wchar_t>(
+        static_cast<unsigned char>(std::toupper(
+            static_cast<unsigned char>(key[0])))));
+    if (s == -1) return false;
+    vk = static_cast<WORD>(s & 0xFF);
+    shown = std::string(1, static_cast<char>(std::toupper(
+        static_cast<unsigned char>(key[0]))));
+    return true;
+  }
+  if (key[0] == 'f' && key.size() <= 3) {
+    int n = atoi(key.c_str() + 1);
+    if (n >= 1 && n <= 24) {
+      vk = static_cast<WORD>(VK_F1 + n - 1);
+      shown = "F" + std::to_string(n);
+      return true;
+    }
+  }
+  struct Named { const char *name; WORD vk; const char *shown; };
+  static const Named table[] = {
+      {"enter", VK_RETURN, "Enter"},   {"return", VK_RETURN, "Enter"},
+      {"escape", VK_ESCAPE, "Esc"},    {"esc", VK_ESCAPE, "Esc"},
+      {"space", VK_SPACE, "Space"},    {"tab", VK_TAB, "Tab"},
+      {"backspace", VK_BACK, "Backspace"},
+      {"delete", VK_DELETE, "Del"},    {"del", VK_DELETE, "Del"},
+      {"insert", VK_INSERT, "Ins"},    {"up", VK_UP, "Up"},
+      {"down", VK_DOWN, "Down"},       {"left", VK_LEFT, "Left"},
+      {"right", VK_RIGHT, "Right"},    {"home", VK_HOME, "Home"},
+      {"end", VK_END, "End"},          {"pageup", VK_PRIOR, "PgUp"},
+      {"pagedown", VK_NEXT, "PgDn"},
+  };
+  for (const Named &n : table) {
+    if (key == n.name) {
+      vk = n.vk;
+      shown = n.shown;
+      return true;
+    }
+  }
+  return false;
+}
+
+// What the menu prints to the right of the label. MOD_PRIMARY is Control here
+// — the same symbolic bit AppKit renders as Command, which is the whole point
+// of the host sending intent rather than platform constants.
+static std::string accel_text(const std::string &shown, unsigned long mods) {
+  std::string out;
+  if (mods & (1 | 8)) out += "Ctrl+";
+  if (mods & 4) out += "Alt+";
+  if (mods & 2) out += "Shift+";
+  return out.empty() && shown.empty() ? std::string() : out + shown;
+}
+
+static int32_t perform_action(const std::string &action) {
+  App *a = current_app();
+  HWND hwnd = a && a->w ? static_cast<HWND>(webview_get_window(a->w))
+                        : g_menu_hwnd;
+  if (!hwnd) return -1;
+  // performClose:'s counterpart: WM_CLOSE unwinds through the same path the
+  // title bar's X uses, so the host returns from wv_run instead of the process
+  // vanishing under it.
+  if (action == "quit" || action == "closeWindow") {
+    PostMessageW(hwnd, WM_CLOSE, 0, 0);
+    return 0;
+  }
+  if (action == "minimize") {
+    ShowWindow(hwnd, SW_MINIMIZE);
+    return 0;
+  }
+  if (action == "zoom") {
+    ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+    return 0;
+  }
+  if (action == "fullscreen") {
+    platform_set_fullscreen(hwnd, !g_win_fullscreen);
+    return 0;
+  }
+  // Everything else has no Windows equivalent. The editing actions are the
+  // interesting refusal: WebView2 runs the page out of process and exposes no
+  // copy/paste entry point, and a webview blocks document.execCommand("paste")
+  // — but it handles Ctrl+C/X/V/Z/A itself, so the keys work and only a menu
+  // ITEM for them cannot. about/hide/hideOthers/showAll/services are macOS
+  // concepts with nothing to map to. False beats a dead menu entry.
+  return -1;
+}
+
+// A menu click and an accelerator both arrive as WM_COMMAND on the window that
+// owns the menu; the high word says which (0 for a menu, 1 for an accelerator)
+// and both are ours. Everything else goes back to webview.h's own wndproc —
+// this subclass adds a case, it does not replace the window's behaviour.
+static LRESULT CALLBACK menu_wndproc(HWND hwnd, UINT msg, WPARAM wp,
+                                     LPARAM lp) {
+  if (msg == WM_COMMAND && lp == 0 && (HIWORD(wp) == 0 || HIWORD(wp) == 1)) {
+    UINT id = LOWORD(wp);
+    if (id >= kIdItemBase) {
+      menu_clicked(static_cast<long>(id - kIdItemBase));
+      return 0;
+    }
+  }
+  return g_prev_wndproc
+             ? CallWindowProcW(g_prev_wndproc, hwnd, msg, wp, lp)
+             : DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+// Accelerators need TranslateAcceleratorW, and webview.h's loop never calls it
+// (win32_edge.hh, run_impl: GetMessageW / TranslateMessage / DispatchMessageW
+// and nothing else). We do not own that loop — but a WH_GETMESSAGE hook runs
+// INSIDE its GetMessageW, which is the same point in the cycle. Rewriting a
+// consumed message to WM_NULL is how the key stops here instead of also
+// reaching the page, which is what a real accelerator does.
+static LRESULT CALLBACK accel_hook(int code, WPARAM wp, LPARAM lp) {
+  if (code == HC_ACTION && wp == PM_REMOVE && g_accel && g_menu_hwnd) {
+    MSG *msg = reinterpret_cast<MSG *>(lp);
+    if (msg && msg->message >= WM_KEYFIRST && msg->message <= WM_KEYLAST &&
+        (msg->hwnd == g_menu_hwnd || IsChild(g_menu_hwnd, msg->hwnd))) {
+      if (TranslateAcceleratorW(g_menu_hwnd, g_accel, msg)) {
+        msg->message = WM_NULL;
+        msg->wParam = 0;
+        msg->lParam = 0;
+      }
+    }
+  }
+  return CallNextHookEx(nullptr, code, wp, lp);
+}
+
+static int32_t apply_custom_menu(App *a, const std::string &spec) {
+  HWND hwnd = a->w ? static_cast<HWND>(webview_get_window(a->w)) : nullptr;
+  if (!hwnd) return -1;
+
+  // A fresh bar every time: the host owns what it declared, so setMenu
+  // replaces rather than appends and the menu can shrink as well as grow.
+  HMENU bar = CreateMenu();
+  if (!bar) return -1;
+
+  a->menu_items.clear();
+  std::vector<ACCEL> accels;
+
+  // The bar itself plus one popup per open submenu. Popups are appended to
+  // their parent as they are created, so destroying the bar destroys them all.
+  std::vector<HMENU> stack;
+  stack.push_back(bar);
+
+  for (const std::string &line : split_on(spec, '\n')) {
+    if (line.empty()) continue;
+    std::vector<std::string> f = split_on(line, '\x1f');
+    const std::string &kind = f[0];
+
+    if (kind == "S" && f.size() >= 2) {
+      HMENU popup = CreatePopupMenu();
+      if (!popup) continue;
+      AppendMenuW(stack.back(), MF_POPUP,
+                  reinterpret_cast<UINT_PTR>(popup),
+                  widen(escape_mnemonics(f[1])).c_str());
+      stack.push_back(popup);
+    } else if (kind == "E") {
+      if (stack.size() > 1) stack.pop_back();
+    } else if (kind == "-") {
+      if (stack.size() > 1) {
+        AppendMenuW(stack.back(), MF_SEPARATOR, 0, nullptr);
+      }
+    } else if (kind == "I" && f.size() >= 8 && stack.size() > 1) {
+      // The host owns the tag: it indexes the handler registry in TypeScript,
+      // so the numbering comes from there rather than from insertion order.
+      long tag = strtol(f[1].c_str(), nullptr, 10);
+      UINT id = kIdItemBase + static_cast<UINT>(tag);
+      WORD vk = 0;
+      std::string shown;
+      std::string label = escape_mnemonics(f[2]);
+      unsigned long mods = strtoul(f[4].c_str(), nullptr, 10);
+      if (!f[3].empty() && vk_for_key(f[3], vk, shown)) {
+        label += "\t" + accel_text(shown, mods);
+        ACCEL ac{};
+        ac.fVirt = FVIRTKEY;
+        if (mods & (1 | 8)) ac.fVirt |= FCONTROL;
+        if (mods & 2) ac.fVirt |= FSHIFT;
+        if (mods & 4) ac.fVirt |= FALT;
+        ac.key = vk;
+        ac.cmd = static_cast<WORD>(id);
+        accels.push_back(ac);
+      }
+      UINT flags = MF_STRING;
+      if (f[5] != "1") flags |= MF_GRAYED;
+      if (f[6] == "1") flags |= MF_CHECKED;
+      AppendMenuW(stack.back(), flags, id, widen(label).c_str());
+      // The owning popup, not the bar: EnableMenuItem searches submenus by
+      // command but SetMenuItemInfoW does not, and setLabel needs the latter.
+      if (tag >= 0) {
+        size_t at = static_cast<size_t>(tag);
+        if (a->menu_items.size() <= at) a->menu_items.resize(at + 1, nullptr);
+        a->menu_items[at] = stack.back();
+      }
+    }
+  }
+
+  if (!SetMenu(hwnd, bar)) {
+    DestroyMenu(bar);
+    return -1;
+  }
+  // Destroying the previous bar only after the new one is installed: it is
+  // still the window's menu until SetMenu returns.
+  if (g_menu_bar && g_menu_bar != bar) DestroyMenu(g_menu_bar);
+  g_menu_bar = bar;
+  DrawMenuBar(hwnd);
+  // A menu bar takes a row out of the client area, and webview.h sizes its
+  // widget only from WM_SIZE — which SetMenu does not send. Without this the
+  // webview keeps its old height and the bottom of the page is clipped off
+  // the window. SWP_FRAMECHANGED forces the WM_NCCALCSIZE/WM_SIZE pair.
+  SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER |
+                   SWP_FRAMECHANGED);
+
+  if (g_accel) {
+    DestroyAcceleratorTable(g_accel);
+    g_accel = nullptr;
+  }
+  if (!accels.empty()) {
+    g_accel = CreateAcceleratorTableW(accels.data(),
+                                      static_cast<int>(accels.size()));
+  }
+
+  if (g_menu_hwnd != hwnd) {
+    g_prev_wndproc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(
+        hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(menu_wndproc)));
+    g_menu_hwnd = hwnd;
+  }
+  if (!g_accel_hook) {
+    g_accel_hook = SetWindowsHookExW(WH_GETMESSAGE, accel_hook, nullptr,
+                                     GetCurrentThreadId());
+  }
+
+  a->menu_set = true;
+  claim_menu_owner(a);
+  return 0;
+}
+
+static HMENU owner_menu(App *a, int32_t tag) {
+  if (tag < 0 || static_cast<size_t>(tag) >= a->menu_items.size()) return nullptr;
+  return static_cast<HMENU>(a->menu_items[static_cast<size_t>(tag)]);
+}
+
+static int32_t menu_set_enabled(App *a, int32_t tag, int32_t on) {
+  HMENU m = owner_menu(a, tag);
+  if (!m || !g_menu_hwnd) return -1;
+  if (EnableMenuItem(m, kIdItemBase + static_cast<UINT>(tag),
+                     MF_BYCOMMAND | (on ? MF_ENABLED : MF_GRAYED)) == -1) {
+    return -1;
+  }
+  DrawMenuBar(g_menu_hwnd);
+  return 0;
+}
+
+static int32_t menu_set_checked(App *a, int32_t tag, int32_t on) {
+  HMENU m = owner_menu(a, tag);
+  if (!m) return -1;
+  return CheckMenuItem(m, kIdItemBase + static_cast<UINT>(tag),
+                       MF_BYCOMMAND | (on ? MF_CHECKED : MF_UNCHECKED)) ==
+                 static_cast<DWORD>(-1)
+             ? -1
+             : 0;
+}
+
+static int32_t menu_set_label(App *a, int32_t tag, const std::string &label) {
+  HMENU m = owner_menu(a, tag);
+  if (!m || !g_menu_hwnd) return -1;
+  // The accelerator text lives after a tab in the same string, so replacing
+  // the label has to keep whatever was there or the shortcut stops being
+  // printed while it goes on working.
+  wchar_t existing[512];
+  std::wstring text = widen(escape_mnemonics(label));
+  int n = GetMenuStringW(m, kIdItemBase + static_cast<UINT>(tag), existing,
+                         512, MF_BYCOMMAND);
+  if (n > 0) {
+    std::wstring was(existing, static_cast<size_t>(n));
+    size_t tab = was.find(L'\t');
+    if (tab != std::wstring::npos) text += was.substr(tab);
+  }
+  MENUITEMINFOW mii{};
+  mii.cbSize = sizeof(mii);
+  mii.fMask = MIIM_STRING;
+  mii.dwTypeData = const_cast<wchar_t *>(text.c_str());
+  if (!SetMenuItemInfoW(m, kIdItemBase + static_cast<UINT>(tag), FALSE, &mii)) {
+    return -1;
+  }
+  DrawMenuBar(g_menu_hwnd);
+  return 0;
+}
+
+static void menu_teardown(App *) {
+  if (g_accel_hook) {
+    UnhookWindowsHookEx(g_accel_hook);
+    g_accel_hook = nullptr;
+  }
+  if (g_accel) {
+    DestroyAcceleratorTable(g_accel);
+    g_accel = nullptr;
+  }
+  // The menu bar is destroyed with the window; g_menu_bar is only cleared so
+  // a later setMenu does not free a handle Windows already reclaimed.
+  g_menu_bar = nullptr;
+  g_menu_hwnd = nullptr;
+  g_prev_wndproc = nullptr;
+}
+
+static void menu_realize(App *) {}
+
+
+static bool platform_is_fullscreen(void *) { return g_win_fullscreen; }
+
+static int32_t platform_set_fullscreen(void *win, bool on) {
+  HWND hwnd = static_cast<HWND>(win);
+  static WINDOWPLACEMENT saved = {sizeof(saved), 0, 0, {0, 0}, {0, 0}, {0, 0, 0, 0}};
+  LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+  if (on) {
+    MONITORINFO mi;
+    mi.cbSize = sizeof(mi);
+    if (!GetWindowPlacement(hwnd, &saved) ||
+        !GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &mi)) {
+      return -1;
+    }
+    SetWindowLongPtrW(hwnd, GWL_STYLE, style & ~WS_OVERLAPPEDWINDOW);
+    SetWindowPos(hwnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top,
+                 mi.rcMonitor.right - mi.rcMonitor.left,
+                 mi.rcMonitor.bottom - mi.rcMonitor.top,
+                 SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+  } else {
+    SetWindowLongPtrW(hwnd, GWL_STYLE, style | WS_OVERLAPPEDWINDOW);
+    SetWindowPlacement(hwnd, &saved);
+    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER |
+                     SWP_FRAMECHANGED);
+  }
+  g_win_fullscreen = on;
+  return 0;
+}
+
+#else  // GTK
+
+// ---- GTK menus -------------------------------------------------------------
+//
+// As on Windows there is no standard bar to install: WebKitGTK handles the
+// editing keys itself, and closing the window is the window manager's job. A
+// menu here is a feature the app asked for.
+static void install_main_menu() {}
+
+#if GTK_MAJOR_VERSION >= 4
+// GTK 4 removed GtkMenuBar outright — menus there are GMenuModel, a different
+// model with a different lifetime. The build pins gtk+-3.0 (bin/janela.mjs),
+// so this is a compile-out rather than a guess at code nobody has run.
 static int32_t apply_custom_menu(App *, const std::string &) { return -1; }
+static int32_t menu_set_enabled(App *, int32_t, int32_t) { return -1; }
+static int32_t menu_set_checked(App *, int32_t, int32_t) { return -1; }
+static int32_t menu_set_label(App *, int32_t, const std::string &) { return -1; }
+static int32_t perform_action(const std::string &) { return -1; }
+static void menu_teardown(App *) {}
+static void menu_realize(App *) {}
+#else
+
+static GtkAccelGroup *g_accel_group = nullptr;
+// Set when the webview was not parented yet at setMenu time — see attach_menubar.
+static std::string g_pending_spec;
+static bool g_menu_pending = false;
+
+static WebKitWebView *webkit_of(App *a) {
+  if (!a || !a->w) return nullptr;
+  void *h = webview_get_native_handle(
+      a->w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
+  return h ? WEBKIT_WEB_VIEW(h) : nullptr;
+}
+
+static int32_t perform_action(const std::string &action) {
+  App *a = current_app();
+  if (!a || !a->w) return -1;
+  GtkWindow *window = GTK_WINDOW(webview_get_window(a->w));
+  if (!window) return -1;
+
+  // WebKitGTK does expose the editing commands, unlike WebView2 — which is
+  // why Copy and Paste are real menu items on Linux and refusals on Windows.
+  // The names are the literal strings behind the WEBKIT_EDITING_COMMAND_*
+  // macros, spelled out so a webkit2gtk without the newer macro still builds.
+  static const struct { const char *action; const char *command; } edits[] = {
+      {"cut", "Cut"},   {"copy", "Copy"},   {"paste", "Paste"},
+      {"undo", "Undo"}, {"redo", "Redo"},   {"selectAll", "SelectAll"},
+  };
+  for (const auto &e : edits) {
+    if (action != e.action) continue;
+    WebKitWebView *wv = webkit_of(a);
+    if (!wv) return -1;
+    webkit_web_view_execute_editing_command(wv, e.command);
+    return 0;
+  }
+
+  // gtk_window_close, not gtk_main_quit: it unwinds through the same path the
+  // title bar's close button uses, so the host returns from wv_run.
+  if (action == "quit" || action == "closeWindow") {
+    gtk_window_close(window);
+    return 0;
+  }
+  if (action == "minimize") {
+    gtk_window_iconify(window);
+    return 0;
+  }
+  if (action == "zoom") {
+    if (gtk_window_is_maximized(window)) {
+      gtk_window_unmaximize(window);
+    } else {
+      gtk_window_maximize(window);
+    }
+    return 0;
+  }
+  if (action == "fullscreen") {
+    platform_set_fullscreen(window, !platform_is_fullscreen(window));
+    return 0;
+  }
+  // about/hide/hideOthers/showAll/services are macOS concepts. There is no
+  // desktop-wide "hide others" to call here, so false beats a dead item.
+  return -1;
+}
+
+static void on_item_activate(GtkMenuItem *, gpointer data) {
+  menu_clicked(static_cast<long>(reinterpret_cast<intptr_t>(data)));
+}
+
+// Turns the host's symbolic modifiers and key name into something
+// gtk_accelerator_parse understands. <Primary> is GTK's own name for "Control
+// here, Command on a Mac", which is exactly MOD_PRIMARY.
+static bool gtk_accel_for(const std::string &key, unsigned long mods,
+                          guint &out_key, GdkModifierType &out_mods) {
+  if (key.empty()) return false;
+  std::string spec;
+  if (mods & 1) spec += "<Primary>";
+  if (mods & 8) spec += "<Control>";
+  if (mods & 4) spec += "<Alt>";
+  if (mods & 2) spec += "<Shift>";
+  if (mods & 16) spec += "<Super>";  // Cmd, explicitly; Super is the nearest thing
+
+  // GDK key names are case-sensitive ("F5", "Return"), and the host lowercases
+  // everything. Single characters are already right; named keys need their own
+  // spelling, and "Page_Up" is not a capitalisation of "pageup".
+  static const struct { const char *name; const char *gdk; } named[] = {
+      {"enter", "Return"},     {"return", "Return"},
+      {"escape", "Escape"},    {"esc", "Escape"},
+      {"space", "space"},      {"tab", "Tab"},
+      {"backspace", "BackSpace"},
+      {"delete", "Delete"},    {"del", "Delete"},
+      {"insert", "Insert"},    {"up", "Up"},
+      {"down", "Down"},        {"left", "Left"},
+      {"right", "Right"},      {"home", "Home"},
+      {"end", "End"},          {"pageup", "Page_Up"},
+      {"pagedown", "Page_Down"},
+  };
+  std::string name = key;
+  if (key.size() > 1) {
+    bool found = false;
+    for (const auto &n : named) {
+      if (key == n.name) { name = n.gdk; found = true; break; }
+    }
+    if (!found) {
+      // F1-F24 and anything else that is just the lowercase of its GDK name.
+      name[0] = static_cast<char>(std::toupper(
+          static_cast<unsigned char>(name[0])));
+    }
+  }
+  spec += name;
+  out_key = 0;
+  out_mods = static_cast<GdkModifierType>(0);
+  gtk_accelerator_parse(spec.c_str(), &out_key, &out_mods);
+  return out_key != 0;
+}
+
+// Puts the bar above the webview.
+//
+// The GTK backend does gtk_container_add(window, webview) — a GtkWindow is a
+// GtkBin and holds exactly one child — so a menu bar means re-parenting the
+// webview into a box first. That is done once and remembered on the box, so a
+// later setMenu swaps the bar rather than nesting another box.
+//
+// It can also arrive too early: the backend parents the webview lazily, in
+// window_show(), which runs on the first webview_set_size. Adding our box to
+// an empty window then would leave window_show() adding the webview to a
+// GtkBin that is already full — a GTK warning and a blank window. So an
+// unparented window means "not yet", and wv_run retries once setup is done.
+static bool attach_menubar(App *a, GtkWidget *bar) {
+  GtkWidget *window = GTK_WIDGET(webview_get_window(a->w));
+  if (!window) return false;
+  GtkWidget *child = gtk_bin_get_child(GTK_BIN(window));
+  if (!child) return false;
+
+  GtkWidget *box = nullptr;
+  if (GTK_IS_BOX(child) &&
+      g_object_get_data(G_OBJECT(child), "janela-menu-box")) {
+    box = child;
+    GtkWidget *old = GTK_WIDGET(
+        g_object_get_data(G_OBJECT(box), "janela-menubar"));
+    if (old) gtk_container_remove(GTK_CONTAINER(box), old);
+  } else {
+    g_object_ref(child);
+    gtk_container_remove(GTK_CONTAINER(window), child);
+    box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    g_object_set_data(G_OBJECT(box), "janela-menu-box", box);
+    gtk_box_pack_end(GTK_BOX(box), child, TRUE, TRUE, 0);
+    g_object_unref(child);
+    gtk_container_add(GTK_CONTAINER(window), box);
+    gtk_widget_show(box);
+  }
+  gtk_box_pack_start(GTK_BOX(box), bar, FALSE, FALSE, 0);
+  gtk_box_reorder_child(GTK_BOX(box), bar, 0);
+  g_object_set_data(G_OBJECT(box), "janela-menubar", bar);
+  gtk_widget_show_all(bar);
+
+  if (!g_accel_group) return true;
+  GtkWindow *w = GTK_WINDOW(window);
+  if (!g_object_get_data(G_OBJECT(window), "janela-accels")) {
+    gtk_window_add_accel_group(w, g_accel_group);
+    g_object_set_data(G_OBJECT(window), "janela-accels", g_accel_group);
+  }
+  return true;
+}
+
+static int32_t apply_custom_menu(App *a, const std::string &spec) {
+  if (!a->w) return -1;
+
+  // One accel group for the window's lifetime: gtk_window_add_accel_group is
+  // not idempotent, so rebuilding the menu re-uses the group and only the
+  // items inside it change.
+  if (!g_accel_group) g_accel_group = gtk_accel_group_new();
+
+  GtkWidget *bar = gtk_menu_bar_new();
+  a->menu_items.clear();
+
+  std::vector<GtkWidget *> stack;  // containers: the bar, then each open menu
+  stack.push_back(bar);
+
+  for (const std::string &line : split_on(spec, '\n')) {
+    if (line.empty()) continue;
+    std::vector<std::string> f = split_on(line, '\x1f');
+    const std::string &kind = f[0];
+
+    if (kind == "S" && f.size() >= 2) {
+      GtkWidget *holder = gtk_menu_item_new_with_label(f[1].c_str());
+      GtkWidget *menu = gtk_menu_new();
+      gtk_menu_item_set_submenu(GTK_MENU_ITEM(holder), menu);
+      gtk_menu_shell_append(GTK_MENU_SHELL(stack.back()), holder);
+      stack.push_back(menu);
+    } else if (kind == "E") {
+      if (stack.size() > 1) stack.pop_back();
+    } else if (kind == "-") {
+      if (stack.size() > 1) {
+        gtk_menu_shell_append(GTK_MENU_SHELL(stack.back()),
+                              gtk_separator_menu_item_new());
+      }
+    } else if (kind == "I" && f.size() >= 8 && stack.size() > 1) {
+      long tag = strtol(f[1].c_str(), nullptr, 10);
+      // f[7] is why the wire carries "checkable" separately from "checked":
+      // GTK decides this at construction — a tick needs GtkCheckMenuItem, a
+      // different widget — where AppKit lets any item carry a state.
+      const bool checkable = f[7] == "1";
+      GtkWidget *it = checkable
+                          ? gtk_check_menu_item_new_with_label(f[2].c_str())
+                          : gtk_menu_item_new_with_label(f[2].c_str());
+      if (checkable) {
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(it), f[6] == "1");
+      }
+      gtk_widget_set_sensitive(it, f[5] == "1");
+      g_signal_connect(it, "activate", G_CALLBACK(on_item_activate),
+                       reinterpret_cast<gpointer>(
+                           static_cast<intptr_t>(tag)));
+      guint akey = 0;
+      GdkModifierType amods = static_cast<GdkModifierType>(0);
+      if (gtk_accel_for(f[3], strtoul(f[4].c_str(), nullptr, 10), akey, amods)) {
+        gtk_widget_add_accelerator(it, "activate", g_accel_group, akey, amods,
+                                   GTK_ACCEL_VISIBLE);
+      }
+      gtk_menu_shell_append(GTK_MENU_SHELL(stack.back()), it);
+      if (tag >= 0) {
+        size_t at = static_cast<size_t>(tag);
+        if (a->menu_items.size() <= at) a->menu_items.resize(at + 1, nullptr);
+        a->menu_items[at] = g_object_ref_sink(it);
+      }
+    }
+  }
+
+  a->menu_set = true;
+  claim_menu_owner(a);
+
+  if (!attach_menubar(a, bar)) {
+    // Too early. Hold the spec and rebuild at run, when the webview is
+    // certain to be parented; the widgets built here are dropped rather than
+    // kept, because their accelerators would otherwise fire twice.
+    g_object_ref_sink(bar);
+    g_object_unref(bar);
+    for (void *w : a->menu_items) {
+      if (w) g_object_unref(G_OBJECT(w));
+    }
+    a->menu_items.clear();
+    g_pending_spec = spec;
+    g_menu_pending = true;
+  }
+  return 0;
+}
+
+// The retry the note on attach_menubar describes. Called from wv_run, after
+// setup has had its chance to size the window.
+static void menu_realize(App *a) {
+  if (!g_menu_pending) return;
+  g_menu_pending = false;
+  const std::string spec = g_pending_spec;
+  g_pending_spec.clear();
+  apply_custom_menu(a, spec);
+}
+
+static GtkWidget *item_at(App *a, int32_t tag) {
+  if (tag < 0 || static_cast<size_t>(tag) >= a->menu_items.size()) return nullptr;
+  return GTK_WIDGET(a->menu_items[static_cast<size_t>(tag)]);
+}
+
+static int32_t menu_set_enabled(App *a, int32_t tag, int32_t on) {
+  GtkWidget *it = item_at(a, tag);
+  if (!it) return -1;
+  gtk_widget_set_sensitive(it, on != 0);
+  return 0;
+}
+
+static int32_t menu_set_checked(App *a, int32_t tag, int32_t on) {
+  GtkWidget *it = item_at(a, tag);
+  if (!it || !GTK_IS_CHECK_MENU_ITEM(it)) return -1;
+  // set_active emits "activate", which would run the item's own click handler
+  // as a side effect of the host setting the tick. Blocking the handler for
+  // the duration is the difference between reflecting state and inventing a
+  // click.
+  g_signal_handlers_block_matched(G_OBJECT(it), G_SIGNAL_MATCH_FUNC, 0, 0,
+                                  nullptr,
+                                  reinterpret_cast<gpointer>(on_item_activate),
+                                  nullptr);
+  gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(it), on != 0);
+  g_signal_handlers_unblock_matched(
+      G_OBJECT(it), G_SIGNAL_MATCH_FUNC, 0, 0, nullptr,
+      reinterpret_cast<gpointer>(on_item_activate), nullptr);
+  return 0;
+}
+
+static int32_t menu_set_label(App *a, int32_t tag, const std::string &label) {
+  GtkWidget *it = item_at(a, tag);
+  if (!it) return -1;
+  gtk_menu_item_set_label(GTK_MENU_ITEM(it), label.c_str());
+  return 0;
+}
+
+static void menu_teardown(App *a) {
+  for (void *w : a->menu_items) {
+    if (w) g_object_unref(G_OBJECT(w));
+  }
+  a->menu_items.clear();
+  g_menu_pending = false;
+  g_pending_spec.clear();
+}
+
+#endif  // GTK_MAJOR_VERSION >= 4
+
+// Asks the window manager rather than remembering what we last asked for: a
+// GTK window can leave fullscreen without us (the WM's own keybinding), and a
+// toggle that trusts a stale flag then does the wrong thing.
+static bool platform_is_fullscreen(void *win) {
+#if GTK_MAJOR_VERSION >= 4
+  return gtk_window_is_fullscreen(GTK_WINDOW(win));
+#else
+  GdkWindow *gdk = gtk_widget_get_window(GTK_WIDGET(win));
+  if (!gdk) return false;
+  return (gdk_window_get_state(gdk) & GDK_WINDOW_STATE_FULLSCREEN) != 0;
+#endif
+}
+
+static int32_t platform_set_fullscreen(void *win, bool on) {
+  GtkWindow *window = GTK_WINDOW(win);
+  if (on) {
+    gtk_window_fullscreen(window);
+  } else {
+    gtk_window_unfullscreen(window);
+  }
+  return 0;
+}
+
 #endif
 
 // Runs on the UI thread with no TS frame beneath it — see the note on the job
@@ -1068,10 +2029,9 @@ int32_t wv_create(int32_t debug) {
     if (g_apps[i].used) continue;
     webview_t w = webview_create(debug, nullptr);
     if (!w) return -1;
-    // After webview_create, which is what brings NSApplication into being.
-    // Both are no-ops off macOS.
-    install_main_menu();
-    g_apps[i].std_menu_count = standard_menu_count();
+    // The menu is not installed here: an app that calls setMenu owns the bar,
+    // and one that never does gets the standard one at wv_run. Deciding at
+    // create time would mean building a bar only to throw it away.
     // Field-wise reset: App holds a thread and atomics, so it is not
     // copy-assignable from a temporary.
     g_apps[i].binds.clear();
@@ -1082,6 +2042,7 @@ int32_t wv_create(int32_t debug) {
     g_apps[i].on_menu = nullptr;
     g_apps[i].on_menu_ctx = nullptr;
     g_apps[i].menu_items.clear();
+    g_apps[i].menu_set = false;
     g_apps[i].req.clear();
     g_apps[i].cur_id.clear();
     g_apps[i].reply.clear();
@@ -1409,52 +2370,26 @@ int32_t wv_on_menu(int32_t h, int32_t (*cb)(int32_t, void *), void *ctx) {
 int32_t wv_menu_set_enabled(int32_t h, int32_t tag, int32_t on) {
   App *a = app_at(h);
   if (!a) return -1;
-#if defined(__APPLE__)
-  using namespace webview::detail;
-  objc::autoreleasepool arp;
-  id it = item_at(a, tag);
-  if (!it) return -1;
-  objc::msg_send<void>(it, objc::selector("setEnabled:"), on != 0);
-  return 0;
-#else
-  (void)tag; (void)on;
-  return -1;
-#endif
+  return menu_set_enabled(a, tag, on);
 }
 
 int32_t wv_menu_set_checked(int32_t h, int32_t tag, int32_t on) {
   App *a = app_at(h);
   if (!a) return -1;
-#if defined(__APPLE__)
-  using namespace webview::detail;
-  objc::autoreleasepool arp;
-  id it = item_at(a, tag);
-  if (!it) return -1;
-  // NSControlStateValueOn / Off.
-  objc::msg_send<void>(it, objc::selector("setState:"),
-                       static_cast<NSInteger>(on != 0 ? 1 : 0));
-  return 0;
-#else
-  (void)tag; (void)on;
-  return -1;
-#endif
+  return menu_set_checked(a, tag, on);
 }
 
 int32_t wv_menu_set_label(int32_t h, int32_t tag, const uint8_t *p, size_t n) {
   App *a = app_at(h);
   if (!a) return -1;
-#if defined(__APPLE__)
-  using namespace webview::detail;
-  objc::autoreleasepool arp;
-  id it = item_at(a, tag);
-  if (!it) return -1;
-  objc::msg_send<void>(it, objc::selector("setTitle:"),
-                       cocoa::NSString_stringWithUTF8String(to_str(p, n)));
-  return 0;
-#else
-  (void)tag; (void)p; (void)n;
-  return -1;
-#endif
+  return menu_set_label(a, tag, to_str(p, n));
+}
+
+// Run a platform action now — copy, paste, close, quit. Takes no handle
+// because on macOS it needs none: the responder chain and the key window are
+// process state. The other two resolve the window through current_app().
+int32_t wv_perform_action(const uint8_t *p, size_t n) {
+  return perform_action(to_str(p, n));
 }
 
 int32_t wv_set_fullscreen(int32_t h, int32_t on) {
@@ -1462,53 +2397,7 @@ int32_t wv_set_fullscreen(int32_t h, int32_t on) {
   if (!a) return -1;
   void *win = webview_get_window(a->w);
   if (!win) return -1;
-
-#if defined(__APPLE__)
-  using namespace webview::detail;
-  objc::autoreleasepool arp;
-  id window = static_cast<id>(win);
-  // NSWindowStyleMaskFullScreen. toggleFullScreen: only toggles, so read the
-  // current state first and leave it alone when it already matches.
-  const NSUInteger full = 1UL << 14;
-  NSUInteger mask = objc::msg_send<NSUInteger>(window, objc::selector("styleMask"));
-  bool is_full = (mask & full) != 0;
-  if (is_full != (on != 0)) {
-    objc::msg_send<void>(window, objc::selector("toggleFullScreen:"), nullptr);
-  }
-  return 0;
-#elif defined(_WIN32)
-  HWND hwnd = static_cast<HWND>(win);
-  static WINDOWPLACEMENT saved = {sizeof(saved), 0, 0, {0, 0}, {0, 0}, {0, 0, 0, 0}};
-  LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-  if (on) {
-    MONITORINFO mi;
-    mi.cbSize = sizeof(mi);
-    if (!GetWindowPlacement(hwnd, &saved) ||
-        !GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &mi)) {
-      return -1;
-    }
-    SetWindowLongPtrW(hwnd, GWL_STYLE, style & ~WS_OVERLAPPEDWINDOW);
-    SetWindowPos(hwnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top,
-                 mi.rcMonitor.right - mi.rcMonitor.left,
-                 mi.rcMonitor.bottom - mi.rcMonitor.top,
-                 SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
-  } else {
-    SetWindowLongPtrW(hwnd, GWL_STYLE, style | WS_OVERLAPPEDWINDOW);
-    SetWindowPlacement(hwnd, &saved);
-    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER |
-                     SWP_FRAMECHANGED);
-  }
-  return 0;
-#else
-  GtkWindow *window = GTK_WINDOW(win);
-  if (on) {
-    gtk_window_fullscreen(window);
-  } else {
-    gtk_window_unfullscreen(window);
-  }
-  return 0;
-#endif
+  return platform_set_fullscreen(win, on != 0);
 }
 
 // Register the retained handler for page invokes. Valid until the app exits.
@@ -1536,6 +2425,16 @@ int32_t wv_on_timer(int32_t h, void (*cb)(int32_t, void *), void *ctx) {
 int32_t wv_run(int32_t h) {
   App *a = app_at(h);
   if (!a) return -1;
+  // The floor: an app that never set a menu still gets Cmd+Q and Cmd+V. By
+  // now setup() has run, so this is the first moment it is knowable. A no-op
+  // off macOS, where those keys need no menu.
+  if (!a->menu_set) {
+    install_main_menu();
+  } else {
+    // A renderer that could not attach during setup gets its second chance
+    // here — see attach_menubar in the GTK section. A no-op elsewhere.
+    menu_realize(a);
+  }
   int rc = webview_run(a->w);
   // Nothing may call into TS once run() has returned.
   stop_scheduler(a);
@@ -1555,6 +2454,7 @@ int32_t wv_destroy(int32_t h) {
   App *a = app_at(h);
   if (!a) return -1;
   stop_scheduler(a);
+  menu_teardown(a);
   webview_destroy(a->w);
   a->used = false;
   a->w = nullptr;

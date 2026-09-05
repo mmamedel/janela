@@ -44,6 +44,7 @@ declare function wvDialog(
 declare function wvSetFullscreen(h: number, on: number): number;
 declare function wvSetMenu(h: number, spec: string): number;
 declare function wvOnMenu(h: number, cb: (tag: number) => number): number;
+declare function wvPerformAction(action: string): number;
 declare function wvMenuSetEnabled(h: number, tag: number, on: number): number;
 declare function wvMenuSetChecked(h: number, tag: number, on: number): number;
 declare function wvMenuSetLabel(h: number, tag: number, label: string): number;
@@ -174,31 +175,35 @@ const TIMER_JOBS = -1;
 // handler registry here, is written into the wire format, comes back on a
 // click, and is what setEnabled/setChecked/setLabel address.
 
-// NSEventModifierFlags.
-const MENU_SHIFT = 131072;
-const MENU_CONTROL = 262144;
-const MENU_OPTION = 524288;
-const MENU_COMMAND = 1048576;
+// Modifiers travel SYMBOLICALLY, not as one platform's constants.
+//
+// They used to be NSEventModifierFlags integers, which only worked because
+// macOS was the only renderer. Naming the intent instead lets each platform
+// map it — and it is the only way "CmdOrCtrl" can mean what it says, since the
+// runtime does not know which platform it was built for.
+const MOD_PRIMARY = 1; // CmdOrCtrl: Command on macOS, Control elsewhere
+const MOD_SHIFT = 2;
+const MOD_ALT = 4; // Option on macOS
+const MOD_CTRL = 8; // Control, explicitly, on every platform
+const MOD_CMD = 16; // Command, explicitly; ignored where there is none
 
-/** "CmdOrCtrl+Shift+O" -> "o<US>1179648". Unknown words are taken as the key. */
+/** "CmdOrCtrl+Shift+O" -> "o<US>3". Unknown words are taken as the key. */
 function parseAccel(accel: string): string {
   const parts = accel.split("+");
   let mods = 0;
   let key = "";
   for (let i = 0; i < parts.length; i++) {
     const p = parts[i].toLowerCase();
-    if (p === "cmd" || p === "command" || p === "meta" || p === "super") {
-      mods = mods | MENU_COMMAND;
-    } else if (p === "cmdorctrl" || p === "commandorcontrol") {
-      // macOS is the only platform with custom menus so far, so this is
-      // Command here; the Windows and Linux renderers will read it as Control.
-      mods = mods | MENU_COMMAND;
+    if (p === "cmdorctrl" || p === "commandorcontrol") {
+      mods = mods | MOD_PRIMARY;
+    } else if (p === "cmd" || p === "command" || p === "meta" || p === "super") {
+      mods = mods | MOD_CMD;
     } else if (p === "ctrl" || p === "control") {
-      mods = mods | MENU_CONTROL;
+      mods = mods | MOD_CTRL;
     } else if (p === "alt" || p === "option") {
-      mods = mods | MENU_OPTION;
+      mods = mods | MOD_ALT;
     } else if (p === "shift") {
-      mods = mods | MENU_SHIFT;
+      mods = mods | MOD_SHIFT;
     } else if (p !== "") {
       key = p;
     }
@@ -258,21 +263,20 @@ export class MenuItem {
    *
    * Applied immediately when the item is already in a menu, and remembered
    * for the next `setMenu` when it is not — so state set before mounting is
-   * not lost.
+   * not lost. The return says which of the two happened: true when the live
+   * menu was changed, false when the value was only recorded.
    */
-  setEnabled(on: boolean): void {
+  setEnabled(on: boolean): boolean {
     this.enabled = on;
-    if (this.ownerHandle >= 0 && this.tag >= 0) {
-      wvMenuSetEnabled(this.ownerHandle, this.tag, on ? 1 : 0);
-    }
+    if (this.ownerHandle < 0 || this.tag < 0) return false;
+    return wvMenuSetEnabled(this.ownerHandle, this.tag, on ? 1 : 0) === 0;
   }
 
   /** Change the text without rebuilding the menu. */
-  setLabel(label: string): void {
+  setLabel(label: string): boolean {
     this.label = label;
-    if (this.ownerHandle >= 0 && this.tag >= 0) {
-      wvMenuSetLabel(this.ownerHandle, this.tag, label);
-    }
+    if (this.ownerHandle < 0 || this.tag < 0) return false;
+    return wvMenuSetLabel(this.ownerHandle, this.tag, label) === 0;
   }
 }
 
@@ -292,12 +296,11 @@ export class CheckMenuItem extends MenuItem {
     this.checkable = true;
   }
 
-  /** Tick or untick the item. */
-  setChecked(on: boolean): void {
+  /** Tick or untick the item. Returns as `setEnabled` does. */
+  setChecked(on: boolean): boolean {
     this.checked = on;
-    if (this.ownerHandle >= 0 && this.tag >= 0) {
-      wvMenuSetChecked(this.ownerHandle, this.tag, on ? 1 : 0);
-    }
+    if (this.ownerHandle < 0 || this.tag < 0) return false;
+    return wvMenuSetChecked(this.ownerHandle, this.tag, on ? 1 : 0) === 0;
   }
 }
 
@@ -305,6 +308,58 @@ export class CheckMenuItem extends MenuItem {
 export function menuItem(label: string, accel: string, onClick: () => void): MenuItem {
   return new MenuItem(label, accel, false, [], onClick);
 }
+
+/**
+ * The platform's own actions, callable from anywhere.
+ *
+ * ```ts
+ * const close = menuItem("Close", "CmdOrCtrl+W", () => predefined.close());
+ * const copy  = menuItem("Copy",  "CmdOrCtrl+C", () => predefined.copy());
+ *
+ * // and they compose, which a fixed "predefined item" never could:
+ * menuItem("Save and close", "", () => { write(); predefined.close(); });
+ * ```
+ *
+ * Copy, paste and undo are the interesting ones: they are not "do this" but a
+ * selector sent up the responder chain, and by the time a handler here runs
+ * the menu click has already been delivered to us. So these ask the platform
+ * to send the action up the chain at that moment, which is what lets it reach
+ * the webview's editing context. `document.execCommand("paste")` cannot —
+ * webviews block it.
+ *
+ * An action with no equivalent on a platform returns false rather than
+ * pretending, and a menu item built on one is dropped from the bar rather
+ * than rendered dead. What exists where:
+ *
+ * - everywhere: `quit`, `close`, `minimize`, `zoom`, `fullscreen`
+ * - macOS and Linux: `undo`, `redo`, `cut`, `copy`, `paste`, `selectAll`
+ * - macOS only: `about`, `hide`, `hideOthers`, `showAll`
+ *
+ * The editing gap on Windows is WebView2's: it runs the page out of process
+ * and exposes no copy/paste entry point, and a webview blocks
+ * `document.execCommand("paste")`. It does handle Ctrl+C/X/V/Z/A itself, so
+ * the KEYS work there — only a menu item for them cannot. WebKitGTK does
+ * expose the commands, which is why Linux has them.
+ */
+export const predefined = {
+  about: (): boolean => wvPerformAction("about") === 0,
+  hide: (): boolean => wvPerformAction("hide") === 0,
+  hideOthers: (): boolean => wvPerformAction("hideOthers") === 0,
+  showAll: (): boolean => wvPerformAction("showAll") === 0,
+  quit: (): boolean => wvPerformAction("quit") === 0,
+  close: (): boolean => wvPerformAction("closeWindow") === 0,
+
+  undo: (): boolean => wvPerformAction("undo") === 0,
+  redo: (): boolean => wvPerformAction("redo") === 0,
+  cut: (): boolean => wvPerformAction("cut") === 0,
+  copy: (): boolean => wvPerformAction("copy") === 0,
+  paste: (): boolean => wvPerformAction("paste") === 0,
+  selectAll: (): boolean => wvPerformAction("selectAll") === 0,
+
+  minimize: (): boolean => wvPerformAction("minimize") === 0,
+  zoom: (): boolean => wvPerformAction("zoom") === 0,
+  fullscreen: (): boolean => wvPerformAction("fullscreen") === 0,
+};
 
 /** A clickable entry that carries a tick. `accel` is "" for no shortcut. */
 export function menuCheckItem(label: string, accel: string, onClick: () => void): CheckMenuItem {
@@ -704,8 +759,17 @@ export class JanelaAppImpl<
    * save.setEnabled(false);   // later, without rebuilding
    * ```
    *
-   * Returns false where custom menus are not supported yet — everything but
-   * macOS. The standard menu is unaffected either way.
+   * Renders on all three desktop platforms: an NSMenu bar, a Win32 menu, or a
+   * GtkMenuBar above the webview. Returns false if the platform refused —
+   * GTK 4, where GtkMenuBar no longer exists, is the one case that does.
+   *
+   * What differs is the FLOOR beneath it. macOS gets a standard bar whether
+   * you set one or not, because there a Command shortcut is a menu key
+   * equivalent and an app with no menu has no Cmd+Q or Cmd+V. Windows and
+   * Linux need no such floor: Alt+F4 is the window manager's, and the editing
+   * keys belong to WebView2 and WebKitGTK. So an app that never calls this
+   * has a full menu bar on macOS and none elsewhere — which is what an app
+   * with nothing in its menus should look like on each.
    */
   setMenu(entries: MenuItem[]): boolean {
     // A rebuild invalidates every tag from the previous call, so the registry

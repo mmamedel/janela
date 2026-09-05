@@ -84,7 +84,15 @@ save-placement / strip-`WS_OVERLAPPEDWINDOW` / fill-monitor dance on Windows.
 
 `app.center()` is not implemented.
 
-## macOS: the main menu
+## Menus
+
+Two separate things live under this heading, and conflating them is the source
+of most of the confusion:
+
+- **the standard bar**, which exists on macOS only and needs no API, and
+- **`app.setMenu`**, which renders your own menus on all three desktops.
+
+### macOS: the standard bar
 
 Every janela app installs a standard macOS main menu. There is no API for it
 and nothing to call — it is set up in the shim right after the webview exists,
@@ -96,7 +104,8 @@ equivalent, not a window-manager gesture.** With no main menu nothing claims
 window with a text input where paste does nothing. Alt+F4 on Windows is
 unaffected by any of this: it is a `WM_CLOSE` the win32 backend already
 answers, and the editing keys are handled inside WebView2 and WebKitGTK. So
-this is a macOS-only fix, not a cross-platform feature.
+this floor is a macOS-only fix, and an app that never calls `setMenu` correctly
+has a full menu bar there and none elsewhere.
 
 | submenu | items |
 |---|---|
@@ -168,17 +177,25 @@ const items = new Map(docs.map((d) => [d.id, menuItem(d.name, "", () => open(d))
 items.get("a")?.setEnabled(false);
 ```
 
-**Custom submenus are added to the standard ones, not swapped for them.**
-Replacing the bar wholesale is what would cost the app ⌘Q and ⌘V, so `setMenu`
-appends and a later call replaces only what an earlier one added — the menu can
-shrink as well as grow. `setMenu` returns `false` where custom menus are not
-supported yet (everything but macOS) and the standard menu is left alone either
-way.
+`setMenu` replaces what a previous call installed, so the menu can shrink as
+well as grow. On macOS **the application submenu is always prepended** to
+whatever you declared — partly because it is the floor under ⌘Q, and partly
+because AppKit turns the main menu's *first* item into the app menu whatever it
+is titled, so a menu starting with `File` would otherwise be rendered as the
+app menu and labelled with the bundle name.
 
 Modifiers in `accel`: `Cmd`, `Ctrl`, `CmdOrCtrl`, `Alt`/`Option`, `Shift`. Pass
-`""` for no shortcut. The mask is always set explicitly, including empty,
-because AppKit's default for a key equivalent is Command — so an accelerator
-with no modifiers would silently become a Command shortcut.
+`""` for no shortcut. `CmdOrCtrl` is Command on macOS and Control elsewhere;
+the runtime sends the *intent* rather than a platform constant, which is the
+only way one accelerator string can mean the right thing on three platforms —
+the renderer maps it to `NSEventModifierFlags`, an `ACCEL.fVirt`, or GTK's
+`<Primary>`. The mask is always set explicitly, including empty, because
+AppKit's default for a key equivalent is Command — so an accelerator with no
+modifiers would silently become a Command shortcut.
+
+Key names beyond a single character: `F1`–`F24`, `Enter`/`Return`, `Escape`,
+`Space`, `Tab`, `Backspace`, `Delete`, `Insert`, `Up`, `Down`, `Left`, `Right`,
+`Home`, `End`, `PageUp`, `PageDown`.
 
 #### Why there are no ids
 
@@ -197,38 +214,97 @@ stand in for it — and a typo in the match arm is silent. TypeScript has no suc
 problem. Attaching the handler to the item removes the name, and with it the
 whole class of bug that typing the name would have been protecting against.
 
-Two implementation notes, both of which are silent when got wrong:
-
-- Custom submenus set **`autoenablesItems: NO`**. AppKit otherwise decides each
-  item's enabled state from the responder chain and ignores `setEnabled:`
-  entirely.
-- **The tag is assigned in TypeScript**, not by the renderer: it indexes the
-  handler registry, is written into the wire format, comes back on a click, and
-  is what the setters address. Handlers live in an array rather than on the
-  item, because scriptc cannot call a closure held on an object property
-  (`SC1090`) — the same reason command handlers live in one.
+One implementation note, silent when got wrong: **the tag is assigned in
+TypeScript**, not by the renderer. It indexes the handler registry, is written
+into the wire format, comes back on a click, and is what the setters address.
+Handlers live in an array rather than on the item, because scriptc cannot call
+a closure held on an object property (`SC1090`) — the same reason command
+handlers live in one.
 
 #### What it costs
 
-Nothing at all unless you call it. A scaffolded app that never mentions
-`setMenu` is byte-identical with the feature present, because scriptc
-tree-shakes the unused runtime and the linker dead-strips the shim's menu code.
-Adding a one-item menu with a handler and one `setEnabled` costs **16,832
-bytes** (195,784 → 212,616): the flattening, the accelerator parsing, the
-NSMenu construction, the retained callback and the three setters. Same shape as
-every other platform API here — what you pay is what you call.
+Almost nothing unless you call it. An app that never mentions `setMenu` pays
+**272 bytes** for three renderers being present in the source, because scriptc
+tree-shakes the unused runtime and the linker dead-strips the shim's menu code
+— and on macOS arm64 the 16 KB segment alignment absorbs what is left.
 
-#### Still macOS-only
+Using it is what costs. The File menu the templates now ship — a submenu, two
+items, a separator, an accelerator each and one `predefined` call — costs
+**33,328 bytes** (196,064 → 229,392): the flattening, the accelerator parsing,
+the native menu construction, the retained callback and the three setters.
+`predefined` itself is free: dropping it and calling `app.quit()` instead
+measured 16 bytes *larger*. Same shape as every other platform API here — what
+you pay is what you call.
 
-Two obstacles, both in code janela vendors rather than owns. webview.h's win32
-message loop calls `TranslateMessage` and `DispatchMessageW` but never
-`TranslateAcceleratorW`, without which Windows menu accelerators do not fire.
-And the GTK backend keeps both GTK 3 and GTK 4 alive, where GTK 4 removed
-`GtkMenuBar` in favour of `GMenu`. Upstream leaves menus to the embedder on
-purpose — [webview/webview#127](https://github.com/webview/webview/issues/127)
-is open, and [#237](https://github.com/webview/webview/pull/237), which added
-exactly the Edit menu above, was closed with "anyone who is impatient can
-always take this code on their own".
+#### Platform actions
+
+Some menu items are not "run my function". Paste is `paste:` travelling up the
+AppKit responder chain — a TypeScript closure cannot do it, because a webview
+blocks `document.execCommand("paste")`. So the behaviour has to come from the
+platform, and `predefined` exposes those actions as ordinary functions:
+
+```ts
+import { menuItem, predefined } from "janela/host";
+
+const close = menuItem("Close", "CmdOrCtrl+W", () => predefined.close());
+const copy  = menuItem("Copy",  "CmdOrCtrl+C", () => predefined.copy());
+
+// and they compose, which a fixed "predefined item" never could
+menuItem("Save and close", "", () => { write(); predefined.close(); });
+```
+
+They are callable from anywhere, not only from a menu. Each returns `false`
+where the platform has no equivalent, and an item built on an unavailable one
+is dropped from the bar rather than rendered dead:
+
+| action | macOS | Windows | Linux |
+|---|---|---|---|
+| `quit` `close` `minimize` `zoom` `fullscreen` | ✓ | ✓ | ✓ |
+| `undo` `redo` `cut` `copy` `paste` `selectAll` | ✓ | — | ✓ |
+| `about` `hide` `hideOthers` `showAll` | ✓ | — | — |
+
+The Windows gap is WebView2's: it runs the page out of process and exposes no
+copy/paste entry point. It handles Ctrl+C/X/V/Z/A itself, so **the keys work
+there** — only a menu *item* for them cannot. WebKitGTK does expose the
+commands (`webkit_web_view_execute_editing_command`), which is why Linux has
+them.
+
+#### What each renderer had to solve
+
+Upstream leaves menus to the embedder on purpose —
+[webview/webview#127](https://github.com/webview/webview/issues/127) is open,
+and [#237](https://github.com/webview/webview/pull/237), which added exactly
+the Edit menu above, was closed with "anyone who is impatient can always take
+this code on their own". So all three renderers are janela's, and each had one
+non-obvious obstacle:
+
+**macOS.** `autoenablesItems: NO` on every submenu. AppKit otherwise decides
+each item's enabled state from the responder chain and ignores `setEnabled:`
+entirely — the item stays live however many times you disable it.
+
+**Windows.** Accelerators need `TranslateAcceleratorW`, and webview.h's message
+loop never calls it: `run_impl` is `GetMessageW` / `TranslateMessage` /
+`DispatchMessageW` and nothing else. We do not own that loop — but a
+`WH_GETMESSAGE` hook runs *inside* its `GetMessageW`, which is the same point
+in the cycle. On a hit the message is rewritten to `WM_NULL`, which is how the
+key stops there instead of also reaching the page. Clicks arrive as `WM_COMMAND`
+on a subclassed wndproc that chains to webview.h's own.
+
+**Linux.** A `GtkWindow` is a `GtkBin` and holds exactly one child, and the
+backend puts the webview there — so a menu bar means re-parenting the webview
+into a `GtkBox` first. It is done once and remembered on the box, so a later
+`setMenu` swaps the bar rather than nesting another box. The backend also
+parents the webview *lazily*, in `window_show()`, which runs on the first
+`setSize`; a `setMenu` that arrives before it would leave `window_show()`
+adding the webview to a `GtkBin` that is already full — a GTK warning and a
+blank window. So an unparented window means "not yet" and the render is retried
+at `run()`. And `gtk_check_menu_item_set_active` emits `activate`, so
+`setChecked` blocks the item's own handler for the duration: otherwise the host
+reflecting state would invent a click.
+
+GTK 4 is the one platform that returns `false`: it removed `GtkMenuBar` in
+favour of `GMenuModel`, a different model with a different lifetime. The build
+pins `gtk+-3.0`, so that path is compiled out rather than guessed at.
 
 ## Windows: GUI subsystem
 

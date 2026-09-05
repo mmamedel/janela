@@ -102,6 +102,121 @@ function pending(api: string, why: string): string {
  * scheduled by the shell, the library re-entered when they fire) is the whole
  * of that change on this side.
  */
+// ---- menus ---------------------------------------------------------------
+//
+// A mirror of the desktop lane's menu builders, so a project's src-host can
+// declare a menu and still compile for a phone. Nothing renders here — iOS
+// has no menu bar — but the objects are real, so handlers, `setEnabled` and
+// the rest are ordinary no-ops rather than missing symbols.
+//
+// Duplicated rather than shared because the CLI copies ONE of these two files
+// in as `./janela`: a shared module would have to inject the FFI the desktop
+// setters call, which is more machinery than the forty lines it would save.
+
+/** Submenus and separators have nothing to run. */
+function menuNoop(): void {}
+
+/** An entry in the application menu. See the desktop lane for what it does. */
+export class MenuItem {
+  label: string;
+  accel: string;
+  separator: boolean;
+  items: MenuItem[];
+  onClick: () => void;
+  enabled = true;
+  checkable = false;
+  checked = false;
+  tag = -1;
+  ownerHandle = -1;
+
+  constructor(
+    label: string,
+    accel: string,
+    separator: boolean,
+    items: MenuItem[],
+    onClick: () => void,
+  ) {
+    this.label = label;
+    this.accel = accel;
+    this.separator = separator;
+    this.items = items;
+    this.onClick = onClick;
+  }
+
+  /** Records the state. False: there is no live menu here to change. */
+  setEnabled(on: boolean): boolean {
+    this.enabled = on;
+    return false;
+  }
+
+  /** Records the state. False: there is no live menu here to change. */
+  setLabel(label: string): boolean {
+    this.label = label;
+    return false;
+  }
+}
+
+/** An item that can carry a tick. */
+export class CheckMenuItem extends MenuItem {
+  constructor(label: string, accel: string, onClick: () => void) {
+    super(label, accel, false, [], onClick);
+    this.checkable = true;
+  }
+
+  /** Records the state. False: there is no live menu here to change. */
+  setChecked(on: boolean): boolean {
+    this.checked = on;
+    return false;
+  }
+}
+
+/** A clickable entry. `accel` is "" for no shortcut. */
+export function menuItem(label: string, accel: string, onClick: () => void): MenuItem {
+  return new MenuItem(label, accel, false, [], onClick);
+}
+
+/** A clickable entry that carries a tick. */
+export function menuCheckItem(label: string, accel: string, onClick: () => void): CheckMenuItem {
+  return new CheckMenuItem(label, accel, onClick);
+}
+
+/** A divider. */
+export function menuSeparator(): MenuItem {
+  return new MenuItem("", "", true, [], menuNoop);
+}
+
+/** A submenu holding other entries. Nestable. */
+export function submenu(label: string, items: MenuItem[]): MenuItem {
+  return new MenuItem(label, "", false, items, menuNoop);
+}
+
+/**
+ * The platform's own actions.
+ *
+ * Every one returns false here. On desktop these are AppKit selectors, Win32
+ * messages and WebKitGTK editing commands; a phone has none of them, and the
+ * editing gestures it does have belong to UIKit and need no menu to reach.
+ */
+export const predefined = {
+  about: (): boolean => false,
+  hide: (): boolean => false,
+  hideOthers: (): boolean => false,
+  showAll: (): boolean => false,
+  quit: (): boolean => false,
+  close: (): boolean => false,
+
+  undo: (): boolean => false,
+  redo: (): boolean => false,
+  cut: (): boolean => false,
+  copy: (): boolean => false,
+  paste: (): boolean => false,
+  selectAll: (): boolean => false,
+
+  minimize: (): boolean => false,
+  zoom: (): boolean => false,
+  fullscreen: (): boolean => false,
+};
+
 /**
  * A running janela app on iOS, typed by the contract it serves.
  *
@@ -460,6 +575,19 @@ export class JanelaAppImpl<
   /** @remarks No-op on iOS: apps are dismissed by the user, not by code. */
   quit(): void {
     console.error(pending("quit", "iOS apps are dismissed by the user"));
+  }
+
+  /**
+   * @remarks Returns false on iOS: a phone has no menu bar to put this in.
+   *
+   * Present so a project's `src-host/main.ts` compiles on both lanes — the
+   * whole reason this file mirrors the desktop one. The items are still built,
+   * so their handlers and any later `setEnabled` are ordinary no-ops rather
+   * than crashes; what is absent is somewhere to render them.
+   */
+  setMenu(_entries: MenuItem[]): boolean {
+    console.error(pending("setMenu", "a phone has no menu bar"));
+    return false;
   }
 
   /**

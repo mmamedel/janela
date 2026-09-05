@@ -239,6 +239,9 @@ export function ffiManifest(shimLib, { platform = process.platform, macSdkPath =
       ],
       returns: "i32",
     },
+    // No handle: the responder chain and the key window are process state,
+    // not per-window, so this is the one call that takes only its argument.
+    { name: "wvPerformAction", symbol: "wv_perform_action", params: ["string"], returns: "i32" },
     { name: "wvMenuSetEnabled", symbol: "wv_menu_set_enabled", params: ["i32", "i32", "i32"], returns: "i32" },
     { name: "wvMenuSetChecked", symbol: "wv_menu_set_checked", params: ["i32", "i32", "i32"], returns: "i32" },
     {
