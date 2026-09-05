@@ -46,8 +46,18 @@
 #include <gtk/gtk.h>
 // The editing actions (Copy, Paste, Undo) are WebKit's, not GTK's, and this is
 // the only header that declares them. It costs nothing to include: the build
-// already compiles and links against webkit2gtk-4.1 for the backend itself.
+// already compiles and links against WebKitGTK for the backend itself.
+//
+// Which header depends on the GTK version, because webkit2gtk-4.1 IS the GTK 3
+// build — the GTK 4 one is a different API version under a different name. The
+// build pins gtk+-3.0 today; this split mirrors the vendored backend's own so
+// that a GTK 4 attempt fails in the renderer, where the reason is written
+// down, rather than on an include line.
+#if GTK_MAJOR_VERSION >= 4
+#include <webkit/webkit.h>
+#else
 #include <webkit2/webkit2.h>
+#endif
 #endif
 
 namespace {
