@@ -142,9 +142,22 @@ app.setMenu([
 ]);
 
 save.setEnabled(false);          // later, without rebuilding
-save.setChecked(true);
 save.setLabel("Save As…");
 ```
+
+A tick needs `menuCheckItem`, not `menuItem`:
+
+```ts
+const dark = menuCheckItem("Dark mode", "", () => toggleTheme());
+dark.setChecked(true);
+```
+
+`setChecked` exists only on those, and calling it on a plain item is a compile
+error. That is GTK's constraint made visible: a tick needs `GtkCheckMenuItem`,
+a different widget chosen at construction, and an item cannot become one later.
+macOS and Windows would allow any item to carry a check — but a method that
+works on two platforms and silently does nothing on the third is worse than one
+that is simply absent.
 
 Keep the reference if you want to change an item later; there is no lookup,
 because there is no name to look up by. For a menu built from data, keep your

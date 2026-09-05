@@ -644,7 +644,7 @@ static int32_t apply_custom_menu(App *a, const std::string &spec) {
             objc::msg_send<id>(objc::get_class("NSMenuItem"),
                                objc::selector("separatorItem")));
       }
-    } else if (kind == "I" && f.size() >= 7 && stack.size() > 1) {
+    } else if (kind == "I" && f.size() >= 8 && stack.size() > 1) {
       // The host owns the tag: it indexes the handler registry in TypeScript,
       // so the numbering has to come from there rather than from insertion
       // order here.
@@ -665,6 +665,9 @@ static int32_t apply_custom_menu(App *a, const std::string &spec) {
       objc::msg_send<void>(it, objc::selector("setKeyEquivalentModifierMask:"),
                            mods);
       objc::msg_send<void>(it, objc::selector("setEnabled:"), f[5] == "1");
+      // f[7] says the item is checkable. AppKit lets any item carry a state,
+      // so it is unused here — it is on the wire for the GTK renderer, which
+      // has to choose GtkCheckMenuItem at construction.
       objc::msg_send<void>(it, objc::selector("setState:"),
                            static_cast<NSInteger>(f[6] == "1" ? 1 : 0));
       objc::msg_send<void>(stack.back(), objc::selector("addItem:"), it);

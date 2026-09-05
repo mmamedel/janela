@@ -228,6 +228,9 @@ export class MenuItem {
   items: MenuItem[];
   onClick: () => void;
   enabled = true;
+  // Data on the base so the flattener can read it without a type test; only
+  // CheckMenuItem exposes a way to change it.
+  checkable = false;
   checked = false;
 
   // Assigned when the item is mounted by setMenu; -1 while detached. The
@@ -264,14 +267,6 @@ export class MenuItem {
     }
   }
 
-  /** Tick or untick the item. */
-  setChecked(on: boolean): void {
-    this.checked = on;
-    if (this.ownerHandle >= 0 && this.tag >= 0) {
-      wvMenuSetChecked(this.ownerHandle, this.tag, on ? 1 : 0);
-    }
-  }
-
   /** Change the text without rebuilding the menu. */
   setLabel(label: string): void {
     this.label = label;
@@ -281,9 +276,39 @@ export class MenuItem {
   }
 }
 
+/**
+ * An item that can carry a tick.
+ *
+ * Separate from `MenuItem` because GTK decides this at construction: a tick
+ * needs `GtkCheckMenuItem`, a different widget, and an item cannot become one
+ * later. macOS and Windows would let any item show a check, but a method that
+ * works on two platforms and silently does nothing on the third is worse than
+ * one that is simply absent — so `setChecked` lives here, and calling it on a
+ * plain item is a compile error rather than a surprise on Linux.
+ */
+export class CheckMenuItem extends MenuItem {
+  constructor(label: string, accel: string, onClick: () => void) {
+    super(label, accel, false, [], onClick);
+    this.checkable = true;
+  }
+
+  /** Tick or untick the item. */
+  setChecked(on: boolean): void {
+    this.checked = on;
+    if (this.ownerHandle >= 0 && this.tag >= 0) {
+      wvMenuSetChecked(this.ownerHandle, this.tag, on ? 1 : 0);
+    }
+  }
+}
+
 /** A clickable entry. `accel` is "" for no shortcut. */
 export function menuItem(label: string, accel: string, onClick: () => void): MenuItem {
   return new MenuItem(label, accel, false, [], onClick);
+}
+
+/** A clickable entry that carries a tick. `accel` is "" for no shortcut. */
+export function menuCheckItem(label: string, accel: string, onClick: () => void): CheckMenuItem {
+  return new CheckMenuItem(label, accel, onClick);
 }
 
 /** A divider. */
@@ -730,7 +755,8 @@ export class JanelaAppImpl<
       e.ownerHandle = this.handle;
       rows.push(
         "I\x1f" + tag + "\x1f" + label + "\x1f" + parseAccel(e.accel) +
-          "\x1f" + (e.enabled ? "1" : "0") + "\x1f" + (e.checked ? "1" : "0"),
+          "\x1f" + (e.enabled ? "1" : "0") + "\x1f" + (e.checked ? "1" : "0") +
+          "\x1f" + (e.checkable ? "1" : "0"),
       );
     }
   }
