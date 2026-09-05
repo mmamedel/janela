@@ -192,9 +192,9 @@ Sizes are rounded KiB of the shipped artifact. Raw bytes:
 
 Where each column comes from:
 
-- **desktop (darwin-arm64)** — janela 0.18.0, scriptc 0.0.36, measured 2026-09-05 on darwin-arm64.
-- **Android `.apk`** — janela 0.18.0, scriptc 0.0.36, measured 2026-09-05 on Android arm64-v8a, build-tools 36.0.0, built on darwin-arm64.
-- **iOS `.app`** — janela 0.18.0, scriptc 0.0.36, measured 2026-09-05 on iOS 26.5 simulator SDK, built on darwin-arm64.
+- **desktop (darwin-arm64)** — janela 0.18.1, scriptc 0.0.36, measured 2026-09-05 on darwin-arm64.
+- **Android `.apk`** — janela 0.18.1, scriptc 0.0.36, measured 2026-09-05 on Android arm64-v8a, build-tools 36.0.0, built on darwin-arm64.
+- **iOS `.app`** — janela 0.18.1, scriptc 0.0.36, measured 2026-09-05 on iOS 26.5 simulator SDK, built on darwin-arm64.
 
 <!-- sizes:end -->
 

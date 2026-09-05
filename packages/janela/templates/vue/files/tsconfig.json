@@ -16,6 +16,7 @@
     "verbatimModuleSyntax": true
   },
   "include": [
+    "src/**/*.d.ts",
     "src/**/*.ts",
     "src/**/*.vue",
     "src-host/**/*.ts"
