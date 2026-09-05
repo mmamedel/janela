@@ -39,7 +39,7 @@ export const FRAMEWORK_ASSERTION = "framework-mounted";
  * false — so on iOS and Android the line is expected to be a FAIL, and
  * requiring it would make the mobile lanes red for behaving correctly.
  */
-export const DESKTOP_ASSERTIONS = ["menu-installed"];
+export const DESKTOP_ASSERTIONS = ["menu-installed", "menu-actions"];
 
 /**
  * Parse the battery's output for ONE run.

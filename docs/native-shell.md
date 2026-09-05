@@ -254,20 +254,49 @@ menuItem("Save and close", "", () => { write(); predefined.close(); });
 ```
 
 They are callable from anywhere, not only from a menu. Each returns `false`
-where the platform has no equivalent, and an item built on an unavailable one
-is dropped from the bar rather than rendered dead:
+where the platform has no equivalent:
 
 | action | macOS | Windows | Linux |
 |---|---|---|---|
 | `quit` `close` `minimize` `zoom` `fullscreen` | ✓ | ✓ | ✓ |
-| `undo` `redo` `cut` `copy` `paste` `selectAll` | ✓ | — | ✓ |
-| `about` `hide` `hideOthers` `showAll` | ✓ | — | — |
+| `undo` `redo` `cut` `copy` `paste` `selectAll` | ✓ | ✓ | ✓ |
+| `about` | ✓ | ✓ | ✓ |
+| `hide` `hideOthers` `showAll` | ✓ | — | — |
 
-The Windows gap is WebView2's: it runs the page out of process and exposes no
-copy/paste entry point. It handles Ctrl+C/X/V/Z/A itself, so **the keys work
-there** — only a menu *item* for them cannot. WebKitGTK does expose the
-commands (`webkit_web_view_execute_editing_command`), which is why Linux has
-them.
+Each platform reaches the editing commands by a different route, and the
+Windows one is the interesting one. WebView2 runs the page out of process and
+exposes no copy/paste entry point, and a webview blocks
+`document.execCommand("paste")` — but it does expose the **DevTools protocol**,
+and CDP's `Input.dispatchKeyEvent` takes a `commands` array: Blink's own editor
+commands, the same ones a real Ctrl+V runs, executed in the browser process
+where the clipboard lives. Measured against Chromium with a sentinel in the
+system clipboard: `copy` writes it, `paste` reads it, `cut` does both. Blink
+refuses the clipboard half when the page is not focused, which is why this
+dispatches at the webview rather than asking the page to do it.
+
+`undo`, `redo` and `selectAll` would also work through plain `ExecuteScript` —
+`document.execCommand` allows those without a user gesture, measured — but all
+six go the same way so there is one mechanism to be wrong rather than two.
+
+macOS uses AppKit selectors up the responder chain and Linux
+`webkit_web_view_execute_editing_command`. On Windows and Linux the call is
+dispatched rather than awaited, so `true` means the browser was asked, not that
+it has finished.
+
+`about` shows each platform's own About box — NSApplication's panel,
+`ShellAboutW`, `gtk_show_about_dialog` — named after the process, which is what
+the macOS application menu shows. A richer one is your app's to build.
+`ShellAboutW` spins a nested message loop, so it is posted to a later UI turn
+rather than run with the menu handler's TypeScript frame still beneath it; the
+GTK dialog presents and returns, so it needs no such care.
+
+The three that stop at macOS are not a missing API but a missing **concept**.
+`hide` is application state there — windows vanish, the app stays in the Dock,
+one click brings it back. Hiding a window on Windows or Linux instead takes it
+out of the taskbar with no way back short of a tray icon, and `hideOthers` /
+`showAll` reach into other applications: the nearest Windows call
+(`IShellDispatch::MinimizeAll`) minimizes you too, and on Wayland there is
+nothing at all.
 
 #### What each renderer had to solve
 
@@ -302,9 +331,25 @@ at `run()`. And `gtk_check_menu_item_set_active` emits `activate`, so
 `setChecked` blocks the item's own handler for the duration: otherwise the host
 reflecting state would invent a click.
 
-GTK 4 is the one platform that returns `false`: it removed `GtkMenuBar` in
-favour of `GMenuModel`, a different model with a different lifetime. The build
-pins `gtk+-3.0`, so that path is compiled out rather than guessed at.
+#### Linux is GTK 3, and not only for menus
+
+The build pins `gtk+-3.0` and `webkit2gtk-4.1`, and `setMenu` returns `false`
+under GTK 4 — it removed `GtkMenuBar` in favour of `GMenuModel`, a different
+model with a different lifetime.
+
+Menus are the smaller half of what a GTK 4 lane would mean. **`webkit2gtk-4.1`
+*is* the GTK 3 build of WebKitGTK** — the GTK 4 one is a different API version
+under a different name (`webkit/webkit.h`) — and the shim is GTK 3-only well
+outside menus: the file dialogs use `gtk_dialog_run` and
+`gtk_file_chooser_dialog_new`, both removed in GTK 4. So a GTK 4 build means a
+second WebKit API, a rewritten dialog path, and a `GMenuModel` /
+`GtkPopoverMenuBar` renderer whose accelerators need a `GtkShortcutController`,
+because webview.h never creates a `GtkApplication`.
+
+The vendored webview.h supports both, so the ceiling is ours rather than
+upstream's. Tauri's menu crate, muda, makes the same choice a build flag —
+mutually exclusive `gtk` and `gtk4` cargo features — which is the shape this
+would take here too.
 
 ## Windows: GUI subsystem
 

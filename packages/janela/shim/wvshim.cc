@@ -42,6 +42,9 @@
 // Win32; these add only what it does not use itself.
 #if defined(_WIN32)
 #include <commdlg.h>
+// ShellAboutW: the standard Windows About box, which is what `predefined.about`
+// should show here for the same reason macOS shows NSApplication's.
+#include <shellapi.h>
 #elif !defined(__APPLE__)
 #include <gtk/gtk.h>
 // The editing actions (Copy, Paste, Undo) are WebKit's, not GTK's, and this is
@@ -1289,6 +1292,106 @@ static std::string accel_text(const std::string &shown, unsigned long mods) {
   return out.empty() && shown.empty() ? std::string() : out + shown;
 }
 
+// ---- the editing commands, through the DevTools protocol -------------------
+//
+// WebView2 runs the page out of process and exposes no copy/paste entry point,
+// and a webview blocks document.execCommand("paste"). What it DOES expose is
+// the DevTools protocol, and CDP's Input.dispatchKeyEvent takes a `commands`
+// array: Blink's own editor commands, the same ones a real Ctrl+V runs,
+// executed in the browser process where the clipboard actually lives.
+//
+// Measured against Chromium (which is what WebView2 is), with a sentinel in
+// the system clipboard before and after: copy writes it, paste reads it, cut
+// does both. Blink refuses the clipboard half when the page is not focused,
+// which is why this dispatches at the webview rather than asking the page.
+//
+// undo, redo and selectAll would also work through plain ExecuteScript —
+// document.execCommand allows those without a user gesture, measured — but
+// routing all six the same way leaves one mechanism to be wrong instead of two.
+struct CdpDone final
+    : public ICoreWebView2CallDevToolsProtocolMethodCompletedHandler {
+  // The reply is of no interest; the call is fire-and-forget. A static
+  // instance with inert refcounting is why there is no lifetime to manage.
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) override {
+    if (!ppv) return E_POINTER;
+    if (riid == IID_IUnknown ||
+        riid == IID_ICoreWebView2CallDevToolsProtocolMethodCompletedHandler) {
+      *ppv = static_cast<ICoreWebView2CallDevToolsProtocolMethodCompletedHandler *>(this);
+      return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() override { return 2; }
+  ULONG STDMETHODCALLTYPE Release() override { return 1; }
+  HRESULT STDMETHODCALLTYPE Invoke(HRESULT, LPCWSTR) override { return S_OK; }
+};
+
+static ICoreWebView2 *core_webview(App *a) {
+  if (!a || !a->w) return nullptr;
+  void *h = webview_get_native_handle(
+      a->w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
+  if (!h) return nullptr;
+  auto *controller = static_cast<ICoreWebView2Controller *>(h);
+  ICoreWebView2 *core = nullptr;
+  if (FAILED(controller->get_CoreWebView2(&core))) return nullptr;
+  return core;  // borrowed: the controller owns it for the app's lifetime
+}
+
+// The key is the one the command's real shortcut uses, because `commands` is
+// "the editing commands associated with THIS key event" — Blink runs them in
+// place of the key's default handling, so a mismatched key would be a lie in
+// anything that observes the event.
+struct EditCommand {
+  const char *action;
+  const char *command;  // Blink's name, which is not always ours
+  int vk;
+  const char *key;
+  const char *code;
+  bool shift;
+};
+
+static int32_t cdp_edit(App *a, const EditCommand &e) {
+  ICoreWebView2 *core = core_webview(a);
+  if (!core) return -1;
+  char json[320];
+  // modifiers is a bitmask: 2 is Ctrl, 8 is Shift.
+  snprintf(json, sizeof(json),
+           "{\"type\":\"rawKeyDown\",\"modifiers\":%d,"
+           "\"windowsVirtualKeyCode\":%d,\"nativeVirtualKeyCode\":%d,"
+           "\"key\":\"%s\",\"code\":\"%s\",\"commands\":[\"%s\"]}",
+           e.shift ? 2 | 8 : 2, e.vk, e.vk, e.key, e.code, e.command);
+  static CdpDone done;
+  return SUCCEEDED(core->CallDevToolsProtocolMethod(
+             L"Input.dispatchKeyEvent", widen(json).c_str(), &done))
+             ? 0
+             : -1;
+}
+
+// The process name, which is what macOS's application menu shows and so what
+// About should say here too. Windows has no NSProcessInfo; the executable's
+// basename without its extension is the same thing by another route.
+static std::wstring process_name() {
+  wchar_t path[MAX_PATH];
+  DWORD n = GetModuleFileNameW(nullptr, path, MAX_PATH);
+  if (n == 0 || n >= MAX_PATH) return L"App";
+  std::wstring s(path, n);
+  size_t slash = s.find_last_of(L"\\/");
+  if (slash != std::wstring::npos) s = s.substr(slash + 1);
+  size_t dot = s.find_last_of(L'.');
+  if (dot != std::wstring::npos && dot > 0) s = s.substr(0, dot);
+  return s.empty() ? L"App" : s;
+}
+
+// ShellAboutW spins its own message loop, so it must not run with a TypeScript
+// frame beneath it — the menu handler that asked for it is still on the stack.
+// Posting it to a later UI turn is the same rule the file dialogs follow.
+static void about_on_ui_thread(webview_t w, void *) {
+  const std::wstring name = process_name();
+  ShellAboutW(static_cast<HWND>(webview_get_window(w)), name.c_str(), L"",
+              nullptr);
+}
+
 static int32_t perform_action(const std::string &action) {
   App *a = current_app();
   HWND hwnd = a && a->w ? static_cast<HWND>(webview_get_window(a->w))
@@ -1313,12 +1416,32 @@ static int32_t perform_action(const std::string &action) {
     platform_set_fullscreen(hwnd, !g_win_fullscreen);
     return 0;
   }
-  // Everything else has no Windows equivalent. The editing actions are the
-  // interesting refusal: WebView2 runs the page out of process and exposes no
-  // copy/paste entry point, and a webview blocks document.execCommand("paste")
-  // — but it handles Ctrl+C/X/V/Z/A itself, so the keys work and only a menu
-  // ITEM for them cannot. about/hide/hideOthers/showAll/services are macOS
-  // concepts with nothing to map to. False beats a dead menu entry.
+  if (action == "about") {
+    return webview_dispatch(a->w, about_on_ui_thread, nullptr) == WEBVIEW_ERROR_OK
+               ? 0
+               : -1;
+  }
+
+  static const EditCommand edits[] = {
+      {"undo", "undo", 'Z', "z", "KeyZ", false},
+      // Windows redo is Ctrl+Y where macOS is Shift+Cmd+Z. Blink's command
+      // name is the same either way; only the key event differs.
+      {"redo", "redo", 'Y', "y", "KeyY", false},
+      {"cut", "cut", 'X', "x", "KeyX", false},
+      {"copy", "copy", 'C', "c", "KeyC", false},
+      {"paste", "paste", 'V', "v", "KeyV", false},
+      {"selectAll", "selectAll", 'A', "a", "KeyA", false},
+  };
+  for (const EditCommand &e : edits) {
+    if (action == e.action) return cdp_edit(a, e);
+  }
+
+  // hide, hideOthers and showAll are what is left, and they are not a missing
+  // API but a missing CONCEPT. macOS hide is application state — windows
+  // vanish, the app stays in the Dock, one click brings it back. The nearest
+  // Windows call, ShowWindow(SW_HIDE), takes the window out of the taskbar and
+  // Alt+Tab with no way back short of a tray icon; hideOthers and showAll
+  // reach into other applications. False beats a dead menu entry.
   return -1;
 }
 
@@ -1649,8 +1772,26 @@ static int32_t perform_action(const std::string &action) {
     platform_set_fullscreen(window, !platform_is_fullscreen(window));
     return 0;
   }
-  // about/hide/hideOthers/showAll/services are macOS concepts. There is no
-  // desktop-wide "hide others" to call here, so false beats a dead item.
+  if (action == "about") {
+    // GTK's own About dialog, which is what a Linux user expects here for the
+    // same reason macOS shows NSApplication's. Unlike Windows' ShellAboutW it
+    // spins no nested loop — it presents and returns — so it is safe to call
+    // with the menu handler's TypeScript frame still beneath us.
+    //
+    // The program name is what macOS's application menu shows, by the nearest
+    // route Linux has: GTK sets it from argv[0] during init.
+    const char *name = g_get_prgname();
+    gtk_show_about_dialog(window, "program-name", name ? name : "App", NULL);
+    return 0;
+  }
+
+  // hide, hideOthers and showAll are what is left, and they are not a missing
+  // API but a missing CONCEPT. macOS hide is application state — windows
+  // vanish, the app stays in the Dock, one click brings it back. Hiding a GTK
+  // window instead takes it out of the taskbar with no way back short of a
+  // tray icon, and there is no desktop-wide "hide others" to call: that is the
+  // window manager's business, and on Wayland not even that. False beats a
+  // dead menu entry.
   return -1;
 }
 

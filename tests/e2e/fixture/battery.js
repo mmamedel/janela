@@ -137,6 +137,21 @@
       menu,
     );
 
+    // 3c. The platform actions answer without crashing, and the values land in
+    // the log. Windows routes the editing commands over the DevTools protocol
+    // (WebView2 exposes no copy/paste entry point), and this is the only place
+    // that path runs outside a real desktop — so what is asserted is "three
+    // booleans came back", and what is READ is which ones were true.
+    var acts = await window.janela.invoke("menuActions", null);
+    await report(
+      "menu-actions",
+      acts !== null &&
+        typeof acts.selectAll === "boolean" &&
+        typeof acts.copy === "boolean" &&
+        typeof acts.undo === "boolean",
+      acts,
+    );
+
     // 4. Timers fire in DUE order, not registration order (registered 80,20,50).
     var order = await window.janela.invoke("sleepOrder", null);
     await report("sleep-due-order", sameArray(order, ["s20", "s50", "s80"]), order);

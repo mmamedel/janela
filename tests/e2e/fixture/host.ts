@@ -73,6 +73,16 @@ export type AppCommands = {
    * would miss.
    */
   menuState: () => { set: boolean; enabled: boolean; checked: boolean; label: boolean };
+  /**
+   * What the platform actions report.
+   *
+   * Not asserted against fixed values — they legitimately differ per platform,
+   * and the host cannot tell which one it is on. The point is that each call
+   * returns a boolean rather than crashing, and that the VALUES reach the CI
+   * log: on Windows the editing commands travel over the DevTools protocol,
+   * and this is the only place that path is exercised outside a real desktop.
+   */
+  menuActions: () => { selectAll: boolean; copy: boolean; undo: boolean };
 };
 
 export type AppEvents = {
@@ -113,6 +123,16 @@ export function setup(app: App): void {
     label: item.setLabel("Renamed"),
   };
   app.command("menuState", () => menu);
+
+  // Called at request time rather than during setup: the editing commands act
+  // on the focused document, which does not exist yet while setup runs.
+  // `about` is deliberately absent — it opens a dialog, and a CI runner has
+  // nobody to dismiss it.
+  app.command("menuActions", () => ({
+    selectAll: predefined.selectAll(),
+    copy: predefined.copy(),
+    undo: predefined.undo(),
+  }));
 
   // --- template-compatible commands ---
 

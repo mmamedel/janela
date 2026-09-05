@@ -328,18 +328,30 @@ export function menuItem(label: string, accel: string, onClick: () => void): Men
  * webviews block it.
  *
  * An action with no equivalent on a platform returns false rather than
- * pretending, and a menu item built on one is dropped from the bar rather
- * than rendered dead. What exists where:
+ * pretending. What exists where:
  *
- * - everywhere: `quit`, `close`, `minimize`, `zoom`, `fullscreen`
- * - macOS and Linux: `undo`, `redo`, `cut`, `copy`, `paste`, `selectAll`
- * - macOS only: `about`, `hide`, `hideOthers`, `showAll`
+ * - everywhere: `quit`, `close`, `minimize`, `zoom`, `fullscreen`, `about`,
+ *   `undo`, `redo`, `cut`, `copy`, `paste`, `selectAll`
+ * - macOS only: `hide`, `hideOthers`, `showAll`
  *
- * The editing gap on Windows is WebView2's: it runs the page out of process
- * and exposes no copy/paste entry point, and a webview blocks
- * `document.execCommand("paste")`. It does handle Ctrl+C/X/V/Z/A itself, so
- * the KEYS work there — only a menu item for them cannot. WebKitGTK does
- * expose the commands, which is why Linux has them.
+ * The three that stop at macOS are not a missing API but a missing concept.
+ * `hide` is application state there — windows vanish, the app stays in the
+ * Dock, one click brings it back. Hiding a window on Windows or Linux instead
+ * takes it out of the taskbar with no way back short of a tray icon, and
+ * `hideOthers` / `showAll` reach into other applications: the nearest Windows
+ * call minimizes you too, and on Wayland there is nothing at all.
+ *
+ * `about` shows each platform's own About box — NSApplication's panel,
+ * `ShellAboutW`, `gtk_show_about_dialog` — named after the process, which is
+ * what the macOS application menu shows. A richer one is your app's to build.
+ *
+ * Each platform reaches the editing commands by its own route: AppKit
+ * selectors up the responder chain, WebKitGTK's
+ * `webkit_web_view_execute_editing_command`, and on Windows the DevTools
+ * protocol, since WebView2 runs the page out of process and exposes no
+ * copy/paste entry point of its own. On Windows and Linux the call is
+ * dispatched rather than awaited, so a `true` there means the browser was
+ * asked, not that it has finished.
  */
 export const predefined = {
   about: (): boolean => wvPerformAction("about") === 0,
