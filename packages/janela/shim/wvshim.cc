@@ -84,7 +84,11 @@ struct App {
   // reach one without rebuilding the bar. Retained; released on the next
   // setMenu. The menu bar is process-global on macOS, so only one app can own
   // it — see g_menu_owner.
-  std::vector<id> menu_items;
+  //
+  // `void *` rather than `id`: this struct is compiled on every platform and
+  // `id` is Objective-C, so naming it here breaks the Linux and Windows
+  // builds. The Apple code casts on the way in and out.
+  std::vector<void *> menu_items;
   // How many submenus the standard bar installed, so setMenu appends after
   // them and can remove only its own on a later call.
   size_t std_menu_count = 0;
@@ -576,7 +580,7 @@ static void remember_item(App *a, long tag, id item) {
 
 static id item_at(App *a, int32_t tag) {
   if (tag < 0 || static_cast<size_t>(tag) >= a->menu_items.size()) return nullptr;
-  return a->menu_items[static_cast<size_t>(tag)];
+  return static_cast<id>(a->menu_items[static_cast<size_t>(tag)]);
 }
 
 // Appends the host's submenus to the standard menu bar rather than replacing
@@ -599,8 +603,8 @@ static int32_t apply_custom_menu(App *a, const std::string &spec) {
     objc::msg_send<void>(menubar, objc::selector("removeItemAtIndex:"),
                          static_cast<NSInteger>(n - 1));
   }
-  for (id old_item : a->menu_items) {
-    if (old_item) objc::release(old_item);
+  for (void *old_item : a->menu_items) {
+    if (old_item) objc::release(static_cast<id>(old_item));
   }
   a->menu_items.clear();
 
