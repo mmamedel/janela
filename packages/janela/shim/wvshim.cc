@@ -1312,9 +1312,17 @@ struct CdpDone final
     : public ICoreWebView2CallDevToolsProtocolMethodCompletedHandler {
   // The reply is of no interest; the call is fire-and-forget. A static
   // instance with inert refcounting is why there is no lifetime to manage.
+  // The two IIDs come from different places, and each is the only one that
+  // links. IID_IUnknown lives in libuuid — pulling a whole library into every
+  // Windows build for one GUID is a worse trade than __uuidof, which mingw
+  // declares and the compiler folds in place. WebView2's own IIDs go the other
+  // way: the SDK header defines them `selectany`, but attaches no
+  // __declspec(uuid), so __uuidof on one is an undefined symbol. Both mistakes
+  // are LINK errors, which -fsyntax-only does not catch — see the win32 link
+  // check in the cross-compile notes.
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) override {
     if (!ppv) return E_POINTER;
-    if (riid == IID_IUnknown ||
+    if (riid == __uuidof(IUnknown) ||
         riid == IID_ICoreWebView2CallDevToolsProtocolMethodCompletedHandler) {
       *ppv = static_cast<ICoreWebView2CallDevToolsProtocolMethodCompletedHandler *>(this);
       return S_OK;
