@@ -141,6 +141,15 @@ passes. Device lanes read `os_log` / `logcat` rather than stdout, and the app's
 exit code is not observable there, so those lanes are judged purely on the
 assertions — which is the stronger signal anyway.
 
+[`tests/e2e/dynamic.test.mjs`](../tests/e2e/dynamic.test.mjs) covers
+`build.dynamic` (janela's opt-in to scriptc's `--dynamic`). Its two real
+desktop compiles respect `JANELA_TEST_LANES` the same way the battery above
+does — `JANELA_TEST_LANES=ios` skips them rather than paying for an extra
+build whose `--dynamic` linking on that lane's toolchain is not what was
+asked for. Its two `--target ios|android` cases assert only that janela
+refuses `build.dynamic` before any simulator/toolchain work, so they need no
+lane and run unconditionally.
+
 ## Knobs
 
 | Variable | Default | Meaning |

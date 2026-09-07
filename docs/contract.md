@@ -107,7 +107,9 @@ wrappers over the methods, kept so existing code keeps compiling.
   `app.emit("progress", 3, 10)` does not compile — instantiating a rest
   parameter from a generic indexed tuple gives `SC2011: values of type
   '[done: number, total: number]' have no static representation`, which would
-  require `--dynamic` and ~620 KB of embedded engine.
+  require `--dynamic` and ~620 KB of embedded engine — set `"build": {
+  "dynamic": true }` in `janela.conf.json` to opt a (desktop) project into it;
+  see the README's `build.dynamic` section.
 - **Types erase at runtime.** Payloads cross as JSON; nothing validates a
   malformed one. The contract buys compile-time safety only.
 - **The contract is optional.** `app.command(name, handler)` and the untyped
