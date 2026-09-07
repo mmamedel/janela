@@ -62,7 +62,33 @@ function loadConf(root) {
   for (const k of ["name", "identifier", "window"]) {
     if (!c[k]) fail(`janela.conf.json is missing '${k}'`);
   }
+  if (c.build !== undefined) {
+    if (typeof c.build !== "object" || c.build === null || Array.isArray(c.build)) {
+      fail("janela.conf.json's 'build' must be an object");
+    }
+    for (const k of Object.keys(c.build)) {
+      if (k !== "dynamic") fail(`janela.conf.json's 'build' has an unknown key '${k}' (known: dynamic)`);
+    }
+    if (c.build.dynamic !== undefined && typeof c.build.dynamic !== "boolean") {
+      fail("janela.conf.json's 'build.dynamic' must be a boolean");
+    }
+  }
   return c;
+}
+
+// scriptc 0.0.36 rejects --dynamic outright in --lib mode: a mobile build is
+// always a library build, and the dynamic engine has nowhere to link into
+// that archive. Called at the very top of every entry point that can reach a
+// mobile target — build() and both `dev` paths — so it fires before ANY
+// toolchain work (zig, xcrun/simctl, the Android SDK/NDK), not just before
+// scriptc itself.
+function assertDynamicSupported(conf, target) {
+  if (conf.build?.dynamic === true && (target === "ios" || target === "android")) {
+    fail(
+      "build.dynamic is not supported for iOS/Android: scriptc library builds cannot " +
+        "embed the dynamic engine (scriptc 0.0.36). Remove build.dynamic or build for desktop.",
+    );
+  }
 }
 
 // ---- frontend: plain HTML, or a Vite app -----------------------------------
@@ -408,6 +434,9 @@ function buildIos(root, conf, buildDir, outDir) {
 
 async function devIos(root) {
   const conf = loadConf(root);
+  // Before iosDeviceOrFail: that shells out to xcrun/simctl, and the point of
+  // this check is to fail before ANY toolchain work, not just before scriptc.
+  assertDynamicSupported(conf, "ios");
   const device = iosDeviceOrFail(iosConf(conf).device);
   const bundle = build(root, { target: "ios" });
 
@@ -679,8 +708,12 @@ function buildAndroid(root, conf, buildDir, outDir) {
 
 /// Boots an emulator if none is running, then installs and launches.
 async function devAndroid(root) {
-  const sdk = androidSdk();
   const conf = loadConf(root);
+  // Before androidSdk(): that resolves/validates the SDK/NDK on disk, and the
+  // point of this check is to fail before ANY toolchain work, not just before
+  // scriptc.
+  assertDynamicSupported(conf, "android");
+  const sdk = androidSdk();
   const a = androidConf(conf);
   const apk = build(root, { target: "android" });
 
@@ -957,6 +990,7 @@ function makeDmg(appDir, outDir, name, version) {
 
 function build(root, { devUrl = null, gui = true, target = "desktop" } = {}) {
   const conf = loadConf(root);
+  assertDynamicSupported(conf, target);
   const ios = target === "ios";
   const android = target === "android";
   // Both mobile targets are library-mode: the platform owns the loop and the
@@ -1072,9 +1106,14 @@ function build(root, { devUrl = null, gui = true, target = "desktop" } = {}) {
   console.log("janela: compiling TypeScript to a native binary");
   // An explicit --out is used verbatim, so the PE suffix is ours to add.
   const bin = join(outDir, process.platform === "win32" ? `${conf.name}.exe` : conf.name);
+  const scriptcArgs = ["node", scriptcBin(), "build", "entry.ts", "--ffi", "janela.ffi.json", "-o", bin];
+  // Opt-in: embeds quickjs-ng so `any`-typed code and npm-dependency JS run
+  // instead of failing static compilation. Desktop-only — assertDynamicSupported()
+  // above already refused a mobile target with this set.
+  if (conf.build?.dynamic) scriptcArgs.push("--dynamic");
   // No SCRIPTC_CC/SCRIPTC_TARGET on Windows: scriptc's default driver is
   // plain `clang`, which is exactly the MinGW-targeting clang checked above.
-  run(["node", scriptcBin(), "build", "entry.ts", "--ffi", "janela.ffi.json", "-o", bin], { cwd: buildDir });
+  run(scriptcArgs, { cwd: buildDir });
 
   // Symbol/debug metadata is ~16% of the binary and apps don't need it.
   // (On arm64 macOS, strip re-signs ad-hoc automatically. MinGW keeps DWARF

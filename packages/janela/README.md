@@ -267,6 +267,34 @@ The `{ args; result }` record form of 0.5.x–0.7.x is still accepted, and the
 untyped `invoke` / `listen` still work unchanged; the contract is additive,
 and the `vanilla` template still uses the global.
 
+## `build.dynamic`: the embedded dynamic engine
+
+`any`-typed host code — and an npm dependency's shipped JS — is a compile
+error by default (`SC2011`/`SC2013`): scriptc's static tier has no
+representation for either. Opt a project in with:
+
+```json
+{ "build": { "dynamic": true } }
+```
+
+This threads scriptc's `--dynamic` flag through `janela build`/`janela dev`,
+which embeds quickjs-ng in the binary and routes those "island" sites to it
+at runtime — everything else keeps compiling to native code as it always has.
+It costs size: roughly 0.6–1 MB, depending on platform (scriptc's own figure
+is ~620 KB; a trivial macOS arm64 build measured closer to 1 MB stripped).
+
+Two things worth knowing:
+
+- **Desktop only.** iOS and Android builds are always scriptc `--lib`
+  builds, and scriptc 0.0.36 rejects `--dynamic` there outright — `janela
+  build --target ios|android` fails immediately with a clear error if
+  `build.dynamic` is set, before touching zig/Xcode/the NDK.
+- **An untyped npm package still needs types.** scriptc does not read
+  `tsconfig.json`'s ambient files on its own — give the package proper
+  `@types/...`, or an ambient `.d.ts` pulled in with
+  `/// <reference path="...">` from something the entry graph actually
+  imports.
+
 ## Async commands
 
 A command that has to wait — or to chew through real work — should not freeze
