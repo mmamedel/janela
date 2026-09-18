@@ -47,8 +47,9 @@ until scriptc says otherwise.
 
 ## Why not FFI format 5
 
-scriptc 0.0.36 added a fifth FFI format whose one new capability is
-`invoke: "foreign"`: a callback that may be called from any native thread
+FFI format 5 — introduced upstream in scriptc 0.0.33, evaluated here on the
+0.0.36 pin — has one new capability: `invoke: "foreign"`, a callback that may
+be called from any native thread
 without the generator inserting a dispatch hop. It is gated to callbacks that
 are `retained`, return `void`, and carry a `context` entry
 (`ffi-manifest.js:189-202`, mirrored at `validate.js:1163-1174`) — of janela's

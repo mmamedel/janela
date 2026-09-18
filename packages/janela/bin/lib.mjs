@@ -157,16 +157,17 @@ export function mimeFor(p) {
  * that every branch is reachable from any host — a manifest that silently
  * loses a declaration fails at link time, on one platform, which is the worst
  * place to find out.
+ *
+ * FFI format 5 evaluated and rejected (scriptc 0.0.36 pin): format 5 adds
+ * `invoke: "foreign"`, but only for callbacks that are retained, return void,
+ * and carry a context — of the callbacks below, only wvOnTimer's qualifies.
+ * Foreign delivery marshals through scriptc's own event loop, and wv_run
+ * parks that loop for the app's whole life, so delivery would land after the
+ * window has closed — the one moment wv_run forbids it. Worse, a retained
+ * foreign registration holds that loop open at exit with no way to release
+ * it. So `ffi_format` stays 4 and no callback below takes `invoke`. See
+ * docs/async.md, "Why not FFI format 5".
  */
-// FFI format 5 evaluated and rejected (scriptc 0.0.36 pin): format 5 adds
-// `invoke: "foreign"`, but only for callbacks that are retained, return void,
-// and carry a context — of the callbacks below, only wvOnTimer's qualifies.
-// Foreign delivery marshals through scriptc's own event loop, and wv_run
-// parks that loop for the app's whole life, so delivery would land after the
-// window has closed — the one moment wv_run forbids it. Worse, a retained
-// foreign registration holds that loop open at exit with no way to release
-// it. So `ffi_format` stays 4 and no callback below takes `invoke`. See
-// docs/async.md, "Why not FFI format 5".
 export function ffiManifest(shimLib, { platform = process.platform, macSdkPath = null } = {}) {
   const functions = [
     { name: "wvCreate", symbol: "wv_create", params: ["i32"], returns: "i32" },

@@ -182,9 +182,11 @@ for (const platform of ["darwin", "win32", "linux"]) {
     // one level deep inside `params`; `{ context: ... }` entries carry no
     // nested descriptor, so a flat scan of `params` is sufficient.
     const m = ffiManifest(SHIM, { platform, macSdkPath: "/SDK" });
+    const seen = new Set();
     for (const f of m.functions) {
       for (const param of f.params) {
         if (param && typeof param === "object" && "callback" in param) {
+          seen.add(param.callback.id);
           assert.ok(
             !("invoke" in param.callback),
             `${f.name}: a foreign callback is delivered only after wv_run returns, and its ` +
@@ -193,6 +195,15 @@ for (const platform of ["darwin", "win32", "linux"]) {
         }
       }
     }
+    // Guard against the scan above passing vacuously: it must have actually
+    // visited janela's four retained/call callbacks (wvOnInvoke, wvOnTimer,
+    // wvJobTakeAt, wvOnMenu), not zero of them because a descriptor shape
+    // changed underneath it.
+    assert.deepEqual(
+      [...seen].sort(),
+      ["inv", "menu", "sink", "timer"],
+      `${platform}: expected all four callback descriptors (inv, timer, sink, menu) to be seen`,
+    );
   });
 }
 
