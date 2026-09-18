@@ -165,12 +165,33 @@ for (const platform of ["darwin", "win32", "linux"]) {
 
   test(`ffiManifest entries are well-formed on ${platform}`, () => {
     const m = ffiManifest(SHIM, { platform, macSdkPath: "/SDK" });
-    assert.equal(m.ffi_format, 4);
+    assert.equal(
+      m.ffi_format, 4,
+      "format 5's invoke:'foreign' is unusable while wv_run parks the script loop — docs/async.md",
+    );
     assert.ok(m.libraries.includes(SHIM), "the shim archive must be linked");
     for (const f of m.functions) {
       assert.ok(f.name && f.symbol, `every entry needs a name and a symbol: ${JSON.stringify(f)}`);
       assert.ok(Array.isArray(f.params), `${f.name}: params must be an array`);
       assert.ok(f.returns, `${f.name}: a return type is required`);
+    }
+  });
+
+  test(`ffiManifest declares no foreign-thread callbacks on ${platform}`, () => {
+    // Callback descriptors in this manifest are always `{ callback: { ... } }`
+    // one level deep inside `params`; `{ context: ... }` entries carry no
+    // nested descriptor, so a flat scan of `params` is sufficient.
+    const m = ffiManifest(SHIM, { platform, macSdkPath: "/SDK" });
+    for (const f of m.functions) {
+      for (const param of f.params) {
+        if (param && typeof param === "object" && "callback" in param) {
+          assert.ok(
+            !("invoke" in param.callback),
+            `${f.name}: a foreign callback is delivered only after wv_run returns, and its ` +
+              "registration holds the script loop open at exit",
+          );
+        }
+      }
     }
   });
 }

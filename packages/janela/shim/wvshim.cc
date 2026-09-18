@@ -13,6 +13,13 @@
 //     blocking call again; it no longer has to carry a callback whose "call
 //     scope" was standing in for "app lifetime".
 //
+// What format 5 does NOT remove, and why: it adds `invoke: "foreign"`, which
+// lets a callback fire from any thread without a dispatch hop — but only by
+// posting onto *scriptc's* event loop, and that loop is exactly what wv_run
+// parks below. post_timer / timer_on_ui_thread survive because they ride the
+// *platform* loop wv_run is spinning, not scriptc's; that is the pump this
+// process actually turns. See docs/async.md, "Why not FFI format 5".
+//
 // The shell owns scheduling. TS never holds a timer: it registers a
 // continuation under an id and calls wv_schedule(), and this shim calls back
 // into TS with that id once the delay is up. That is the same shape a library
@@ -2147,6 +2154,8 @@ void timer_on_ui_thread(webview_t, void *arg) {
   a->on_timer(id, a->on_timer_ctx);
 }
 
+// The pump: the platform loop webview_dispatch runs on keeps turning while
+// wv_run blocks scriptc's, which is why this hop is not a format-4 workaround.
 void post_timer(int32_t app, int32_t id) {
   if (app < 0 || app >= 8) return;
   App *a = &g_apps[app];
