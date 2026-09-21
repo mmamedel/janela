@@ -3,8 +3,9 @@
 Measured against scriptc 0.0.32 + webview.h, 2026-08-29; the design still
 holds on 0.0.36 (re-checked 2026-09-03 — library mode still refuses `async`
 and microtasks still do not drain across host re-entries, so the shell still
-owns the clock). Every claim here was verified with a probe binary, not
-inferred from documentation.
+owns the clock). FFI format 5 was evaluated on the same 0.0.36 pin and
+rejected, 2026-09-18 — see "Why not FFI format 5" below. Every claim here was
+verified with a probe binary, not inferred from documentation.
 
 ## The blocking finding
 
@@ -43,6 +44,46 @@ scriptc's runtime (refcounting, allocator) has no thread safety. Combined with
 the webview's own UI-thread affinity, this settles the architecture: **host
 code only ever runs on the UI thread.** Worker-thread TS is off the table
 until scriptc says otherwise.
+
+## Why not FFI format 5
+
+FFI format 5 — introduced upstream in scriptc 0.0.33, evaluated here on the
+0.0.36 pin — has one new capability: `invoke: "foreign"`, a callback that may
+be called from any native thread
+without the generator inserting a dispatch hop. It is gated to callbacks that
+are `retained`, return `void`, and carry a `context` entry
+(`ffi-manifest.js:189-202`, mirrored at `validate.js:1163-1174`) — of janela's
+four callbacks, only `wvOnTimer`'s qualifies; `wvOnInvoke` and `wvOnMenu`
+return `i32`, and `wvJobTakeAt`'s is `lifetime: "call"`.
+
+That still does not help here, because of how a foreign call is delivered. The
+generated trampoline stages the args and calls `scr_ffi_post()`
+(`scr_ffi_queue.c:237-255`), which appends to a process-global list and writes
+one byte to a wake pipe — nothing more. The list is drained only from
+*scriptc's own* event loop, via the hook `scr_ffi_install()` wires up
+(`scr_ffi_queue.c:314-329` → `scr_ffi_dispatch()` at `scr_async.c:2316`),
+inside the same `while` that owns the loop's sleep (`scr_async.c:2416-2459`).
+janela's loop is parked inside the blocking `wv_run()` for the app's entire
+life; it has not started when the window opens and does not turn again until
+`wv_run` returns. So a foreign-posted timer id would be delivered only after
+the window has closed — the one moment `wv_run` deliberately forbids delivery
+(it nulls the handlers on the way out precisely so nothing calls into TS once
+`run()` has returned). This is the same failure the author reported upstream
+in scriptc#260 after probing a blocking FFI call.
+
+It also cannot be registered safely for the app's lifetime: `scr_ffi_pending()`
+reports pending while any foreign registration exists at all, not just while
+calls are queued (`scr_ffi_queue.c:270-276`), and that value gates the loop's
+own exit check (`scr_async.c:2408-2416`). Teardown only runs from
+`scr_atexit(scr_ffi_teardown_all)` (`scr_ffi.c:22`) — after the loop, too late
+to release the hold. A retained `wvOnTimer` under format 5 would therefore
+plausibly keep the process from exiting once the window closes.
+
+`webview_dispatch` is the pump here, not a format-4 workaround: it runs on the
+*platform* loop `wv_run` is spinning, which is the only loop turning while the
+window is open. Format 5 would swap a turning loop for a parked one. So
+`ffi_format` stays 4, and janela declares no `invoke: "foreign"` callback
+(machine-checked in `packages/janela/test/unit/lib.test.mjs`).
 
 ## The design
 
@@ -96,7 +137,10 @@ Verified ordering with a 400 ms async command in flight:
 
 The upstream change that would lift this: thread-safe scriptc runtime objects
 (or a documented per-thread runtime), which would let the shim run handlers on
-a pool and marshal results back through `webview_dispatch`.
+a pool and marshal results back through `webview_dispatch`. A second, separate
+upstream change would lift the loop-parking problem above: a pump entry point
+(`run_once()` / `poll()`, scriptc#260) that lets a host give the script loop a
+turn from inside its own blocking call, instead of only between calls.
 
 ## Non-blocking file I/O
 
