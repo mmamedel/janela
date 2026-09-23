@@ -76,17 +76,22 @@ function loadConf(root) {
   return c;
 }
 
-// scriptc 0.0.36 rejects --dynamic outright in --lib mode: a mobile build is
+// scriptc 0.1.3 rejects --dynamic outright in --lib mode: a mobile build is
 // always a library build, and the dynamic engine has nowhere to link into
-// that archive. Called at the very top of every entry point that can reach a
-// mobile target — build() and both `dev` paths — so it fires before ANY
-// toolchain work (zig, xcrun/simctl, the Android SDK/NDK), not just before
-// scriptc itself.
+// that archive. Re-probed on 0.1.3 directly (`scriptc build --lib --profile
+// <p> --dynamic`, no positional): the refusal now fires even earlier than in
+// 0.0.36, at CLI-arg parsing — "build --lib takes no --dynamic/--backend/
+// --emit/--print/--optimization/--npm-static/--ffi/--external-types" — before
+// the compiler ever reaches SC4005 or the dynamic-engine linkage code
+// (ir/ir.js, index.js). The gate still holds; nothing here changes. Called at
+// the very top of every entry point that can reach a mobile target — build()
+// and both `dev` paths — so it fires before ANY toolchain work (zig,
+// xcrun/simctl, the Android SDK/NDK), not just before scriptc itself.
 function assertDynamicSupported(conf, target) {
   if (conf.build?.dynamic === true && (target === "ios" || target === "android")) {
     fail(
       "build.dynamic is not supported for iOS/Android: scriptc library builds cannot " +
-        "embed the dynamic engine (scriptc 0.0.36). Remove build.dynamic or build for desktop.",
+        "embed the dynamic engine (scriptc 0.1.3). Remove build.dynamic or build for desktop.",
     );
   }
 }
@@ -404,12 +409,12 @@ function buildIos(root, conf, buildDir, outDir) {
     `-I${join(KIT, "vendor-webview", "core", "include")}`,
     "-framework", "UIKit", "-framework", "WebKit", "-framework", "Foundation",
     lib,
-    // scriptc runs its section elimination only when it performs the final
-    // executable link itself; `--lib` deliberately keeps the archive intact
-    // (see executableSectionEliminationFlags in its native-toolchain.js), so
-    // on the mobile lanes the last link is ours and so is the stripping.
-    // ld64 dead-strips per symbol subsection, so the archive needs no
-    // -ffunction-sections to benefit: 409 KB -> 232 KB stripped.
+    // Since scriptc 0.1.3 (#287, PR #345), `--lib` archives DO carry
+    // executableSectionEliminationFlags — but only on linux/android; darwin's
+    // half of that flag set is still empty (native-toolchain.js), so nothing
+    // changes here: the archive was never missing sections on this platform.
+    // ld64 dead-strips per symbol subsection regardless, so the archive needs
+    // no -ffunction-sections to benefit: 409 KB -> 232 KB stripped.
     "-Wl,-dead_strip",
     "-o", join(bundle, conf.name),
   ]);
@@ -820,7 +825,8 @@ function buildShim(cacheDir) {
 // pass a linker flag: `system_libraries` entries are validated as bare library
 // names and explicitly rejected if they start with "-", `libraries` entries
 // must resolve to existing files, and no env var is read for extra flags
-// (checked in @scriptc/compiler 0.0.35: backend/cc.js, ffi/profile.js).
+// (checked in @scriptc/compiler 0.1.3: backend/cc.js, ffi/profile.js still
+// present and unchanged there).
 //
 // So the subsystem byte is rewritten in the linked PE instead. The entry point
 // is untouched — MinGW's mainCRTStartup runs either way; the field only tells

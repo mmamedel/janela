@@ -8,7 +8,10 @@
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   androidConf, androidPackage, ffiManifest, iosConf, libraryProfile, mimeFor,
   NAME_RE, patchPeSubsystem, PeError, rewriteHostSpecifier, suggestName,
@@ -398,4 +401,18 @@ test("the key accepts a Buffer, which is what readFileSync returns", () => {
     shimCacheKey(text, "1.0.0", "darwin", "-Iinc"),
     "the caller passes readFileSync's Buffer; a Buffer and its string must agree",
   );
+});
+
+// ---- scriptc pin ------------------------------------------------------------
+//
+// The size ledger (docs/sizes.json) and every "verified on scriptc X" doc line
+// carry the pin as a fact, not a range: a build with `^0.1.3` could silently
+// resolve a different compiler than the one those figures and claims were
+// measured against. This test is the machine check that invariant depends on.
+test("the scriptc dependency in package.json is an exact version", () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const pkg = JSON.parse(readFileSync(join(here, "..", "..", "package.json"), "utf8"));
+  const spec = pkg.dependencies?.scriptc;
+  assert.ok(spec, "packages/janela/package.json must depend on scriptc");
+  assert.match(spec, /^\d+\.\d+\.\d+$/, `scriptc must be pinned exactly (no ^/~/range), got "${spec}"`);
 });

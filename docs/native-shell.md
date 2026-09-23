@@ -362,10 +362,13 @@ pass a linker flag**:
 - `libraries` entries must resolve to existing files,
 - no environment variable is read for extra link flags.
 
-(Re-checked in `@scriptc/compiler` 0.0.36: `dist/ffi/profile.js`,
-`dist/backend/cc.js`. Still true — and scriptc's own PR for
-[#259](https://github.com/vercel-labs/scriptc/issues/259) was closed
-unmerged, so there is no linker-flag route on the horizon.)
+(Re-checked in `@scriptc/compiler` 0.1.3: `dist/ffi/profile.js`,
+`dist/backend/cc.js`. Still true — restated from the 0.0.36 finding since
+both files are unchanged between the two releases. scriptc's own earlier PRs
+for [#259](https://github.com/vercel-labs/scriptc/issues/259) (#269, #276)
+were closed unmerged, but the fix has since landed as PR #380 "fix(windows):
+support GUI executables", merged 2026-09-23 — **after** v0.1.3, so it is not
+in any release yet and this patch stays.)
 
 So `janela build` rewrites the `Subsystem` field in the linked PE instead —
 from `IMAGE_SUBSYSTEM_WINDOWS_CUI` (3) to `IMAGE_SUBSYSTEM_WINDOWS_GUI` (2).

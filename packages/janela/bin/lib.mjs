@@ -158,7 +158,11 @@ export function mimeFor(p) {
  * loses a declaration fails at link time, on one platform, which is the worst
  * place to find out.
  *
- * FFI format 5 evaluated and rejected (scriptc 0.0.36 pin): format 5 adds
+ * FFI format 5 evaluated and rejected (scriptc 0.1.3 pin, restated from the
+ * 0.0.36 analysis: `dist/ffi/*.d.ts`, `dist/ffi/ffi-manifest.d.ts` and
+ * `dist/backend/ffi-callbacks.d.ts` are byte-identical between the two
+ * releases, and the format-5 gate in `ffi-manifest.js` is unmoved, so
+ * f2f8392's analysis transfers unchanged): format 5 adds
  * `invoke: "foreign"`, but only for callbacks that are retained, return void,
  * and carry a context — of the callbacks below, only wvOnTimer's qualifies.
  * Foreign delivery marshals through scriptc's own event loop, and wv_run
@@ -272,6 +276,8 @@ export function ffiManifest(shimLib, { platform = process.platform, macSdkPath =
     // link never adds it. Without this the link dies with
     // "undefined symbol: clock_gettime" — reproducible with a plain
     // `scriptc build hello.ts` on Windows, no FFI involved.
+    // Still absent in 0.1.3 (`native-toolchain.js:2937-2939` returns `[]` for
+    // win32); upstream fix PR #367 merged 2026-09-21, not in any release yet.
     return {
       ffi_format: 4,
       functions,

@@ -56,13 +56,11 @@ and only 51 KB comes back). iOS `.app` 409,232 → 232,208 and the Android `.so`
 `scr_path_win32_*` / `scr_exec_*` symbols the desktop link had already dropped
 are now gone from both mobile lanes too.
 
-One slice is still upstream's, and is a genuine lane gap
-([#287](https://github.com/vercel-labs/scriptc/issues/287)):
-`compileLibArchive` does not pass `-ffunction-sections -fdata-sections`, so ELF
-GC works per translation unit rather than per function. With them the Android `.so` reaches
-674,616 — another **178 KB** — at no cost to a consumer who does not pass
-`--gc-sections`: the output keeps its size, section count, `.text` size and
-export set, and differs only in the order of functions within `.text`.
+## Retired in 0.1.3 (published 2026-09-18)
+
+| Upstream fix | Issue | What we deleted, and what it bought |
+|---|---|---|
+| PR #345 — preserve library section granularity | [#287](https://github.com/vercel-labs/scriptc/issues/287) | scriptc's `--lib` archives now carry per-function sections; janela's Android `--gc-sections --exclude-libs,ALL` link collects per function instead of per TU. Nothing deleted — the flags were always ours; the archive finally cooperates. Predicted from the compiler's `-ffunction-sections -fdata-sections` cflags addition (`native-toolchain.js`, `executableSectionEliminationFlags`), not yet re-measured on this pin: the Android `.so` was expected to move roughly 852,720 → 674,616 (**-178 KB**), at no cost to a consumer who does not pass `--gc-sections` — same size, section count, `.text` size and export set on the archive itself, differing only in the order of functions within `.text`. Treat the delta as a prediction until a clean build re-measures it (see docs/testing.md and this PR's notes on a blocking desktop-build regression under 0.1.3). |
 
 ## Still carried, with the issue that would let us delete it
 
@@ -70,8 +68,8 @@ export set, and differs only in the order of functions within `.text`.
 |---|---|---|
 | Avoid `JSON.stringify(null)` | A bare unit literal still crashes the compiler on 0.0.36: `SC9001: internal compiler error: in %init.0: bare unitLit 'null' outside a unionWrap`. One of [#262](https://github.com/vercel-labs/scriptc/issues/262)'s three cases, reported again after the close | #262's remaining case lands |
 | Avoid `Object.keys` on a *generic mapped type* | Still unsupported, but **no longer a crash** — 0.0.36 reports `SC2020: 'Object.keys' … has no scriptc lowering yet`. Verified 2026-09-03: `{ [K in keyof T]: … }` through a generic fails; `Object.keys` on a plain record compiles and runs | scriptc lowers `Object.keys` for mapped types |
-| Post-link PE `Subsystem` patch | No way to pass `-mwindows`; a console window otherwise sits behind the app | [#259](https://github.com/vercel-labs/scriptc/issues/259) gives us a linker-flag route. Their PR #269 was **closed unmerged**, so this one has no landing date |
-| `pthread` in `system_libraries` on Windows | scriptc's win32 link line still omits libwinpthread, so `clock_gettime` / `nanosleep` are undefined. Re-checked in 0.0.36: `native-toolchain.js` passes `-pthread` for POSIX drivers and `[]` for `win32` (its own code uses `CreateThread`), so our shim's POSIX time calls have nothing to link against | [#255](https://github.com/vercel-labs/scriptc/issues/255) is fixed |
+| Post-link PE `Subsystem` patch | No way to pass `-mwindows`; a console window otherwise sits behind the app | [#259](https://github.com/vercel-labs/scriptc/issues/259) fixed upstream, merged after v0.1.3, awaiting a release — PR #380 "fix(windows): support GUI executables", merged 2026-09-23 |
+| `pthread` in `system_libraries` on Windows | scriptc's win32 link line still omits libwinpthread, so `clock_gettime` / `nanosleep` are undefined. Re-checked in 0.1.3: `native-toolchain.js:2937-2939` still passes `-pthread` for POSIX drivers and `[]` for `win32`, so our shim's POSIX time calls have nothing to link against | [#255](https://github.com/vercel-labs/scriptc/issues/255) fixed upstream, merged after v0.1.3, awaiting a release — PR #367 "fix(windows): provide native timing shims", merged 2026-09-21 |
 
 Unchanged from before, and unaffected by 0.0.36: library mode still refuses
 `async`, and microtasks still never drain across host re-entries

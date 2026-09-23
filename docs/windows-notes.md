@@ -48,6 +48,11 @@ janela works around it by adding `pthread` to the FFI manifest's
 upstream** — plain `scriptc` on Windows cannot link at all without it, and the
 fix belongs in scriptc's win32 link line.
 
+**Status:** reported as [#255](https://github.com/vercel-labs/scriptc/issues/255),
+fixed upstream by PR #367 "fix(windows): provide native timing shims", merged
+2026-09-21 — **not in 0.1.3** (published 2026-09-18, before the fix landed).
+The `system_libraries` workaround stays until a release carries it.
+
 ## WebView2
 
 `webview.h`'s Win32 backend includes `WebView2.h`, which lives only in the

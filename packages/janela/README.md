@@ -286,7 +286,7 @@ is ~620 KB; a trivial macOS arm64 build measured closer to 1 MB stripped).
 Two things worth knowing:
 
 - **Desktop only.** iOS and Android builds are always scriptc `--lib`
-  builds, and scriptc 0.0.36 rejects `--dynamic` there outright — `janela
+  builds, and scriptc 0.1.3 rejects `--dynamic` there outright — `janela
   build --target ios|android` fails immediately with a clear error if
   `build.dynamic` is set, before touching zig/Xcode/the NDK.
 - **An untyped npm package still needs types.** scriptc does not read
@@ -596,7 +596,8 @@ app.command("add", (args) => {
 Mechanically: drop the `JSON.parse(argsJson)` (cast `args` instead), drop
 every `JSON.stringify` around a result, `resolve`/`reject`/`emit` payload, and
 return nothing at all where you used to return `"null"`. Requires Node 24 to
-build (scriptc 0.0.36's floor).
+build (scriptc 0.1.3's floor, unchanged from 0.0.36's — `engines.node` is
+still `>=24`).
 
 ## What the CLI hides
 

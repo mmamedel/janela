@@ -37,7 +37,7 @@ payload gets across a boundary that only passes scalars.
 > earliest shim marshalled bytes one at a time and why `wv_run` had to hold
 > the callback — not as a description of scriptc's FFI.
 >
-> On the current pin (0.0.36) the compiler reads formats 1–5, and janela's
+> On the current pin (0.1.3) the compiler reads formats 1–5, and janela's
 > own generated manifest declares **`ffi_format: 4`** with
 > `lifetime: "retained"` and `"string"` callback params — see
 > `.janela/build/janela.ffi.json` in any built project. `cstring`, `string`
@@ -94,7 +94,8 @@ inline. Worth filing upstream. Workaround used throughout `app/app.ts`: `+ 0`.
 
 > **Fixed.** Filed as
 > [#21](https://github.com/vercel-labs/scriptc/issues/21) and fixed by their
-> PR #268, released in **scriptc 0.0.36**. janela pins that release, and the
+> PR #268, released in **scriptc 0.0.36**. janela now pins 0.1.3, which still
+> carries the fix, and the
 > `+ 0` convention has been deleted from the runtime, the generated entry, the
 > templates and the demo. The snippets above are the historical record of the
 > bug, not current advice.
