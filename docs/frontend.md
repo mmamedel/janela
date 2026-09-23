@@ -174,27 +174,27 @@ without saying so.
 
 | template | desktop (darwin-arm64) | Android `.apk` | iOS `.app` |
 |---|---|---|---|
-| vanilla | 224 KB | 325 KB | 195 KB |
-| solid | 240 KB | 329 KB | 211 KB |
-| svelte | 256 KB | 337 KB | 227 KB |
-| vue | 289 KB | 349 KB | 259 KB |
-| react | 418 KB | 385 KB | 388 KB |
+| vanilla | 240 KB | 245 KB | 211 KB |
+| solid | 256 KB | 249 KB | 227 KB |
+| svelte | 289 KB | 257 KB | 243 KB |
+| vue | 305 KB | 269 KB | 276 KB |
+| react | 466 KB | 317 KB | 437 KB |
 
 Sizes are rounded KiB of the shipped artifact. Raw bytes:
 
 | template | desktop (darwin-arm64) | Android `.apk` | Android `.so` | iOS `.app` | iOS binary |
 |---|---|---|---|---|---|
-| vanilla | 229,392 | 332,299 | 844,880 | 199,633 | 198,816 |
-| solid | 245,912 | 336,395 | 854,960 | 216,161 | 215,352 |
-| svelte | 262,424 | 344,587 | 879,840 | 232,677 | 231,864 |
-| vue | 295,448 | 356,875 | 910,288 | 265,689 | 264,888 |
-| react | 427,560 | 393,739 | 1,043,968 | 397,809 | 397,000 |
+| vanilla | 246,048 | 250,379 | 667,488 | 216,225 | 215,408 |
+| solid | 262,584 | 254,475 | 677,744 | 232,753 | 231,944 |
+| svelte | 295,608 | 262,667 | 702,704 | 249,269 | 248,456 |
+| vue | 312,120 | 274,955 | 733,744 | 282,281 | 281,480 |
+| react | 477,256 | 324,107 | 896,160 | 447,425 | 446,616 |
 
 Where each column comes from:
 
-- **desktop (darwin-arm64)** — janela 0.19.0, scriptc 0.0.36, measured 2026-09-05 on darwin-arm64.
-- **Android `.apk`** — janela 0.19.0, scriptc 0.0.36, measured 2026-09-05 on Android arm64-v8a, build-tools 36.0.0, built on darwin-arm64.
-- **iOS `.app`** — janela 0.19.0, scriptc 0.0.36, measured 2026-09-05 on iOS 26.5 simulator SDK, built on darwin-arm64.
+- **desktop (darwin-arm64)** — janela 0.19.0, scriptc 0.1.3, measured 2026-09-23 on darwin-arm64.
+- **Android `.apk`** — janela 0.19.0, scriptc 0.1.3, measured 2026-09-23 on Android arm64-v8a, build-tools 36.0.0, built on darwin-arm64.
+- **iOS `.app`** — janela 0.19.0, scriptc 0.1.3, measured 2026-09-23 on iOS 26.5 simulator SDK, built on darwin-arm64.
 
 <!-- sizes:end -->
 
@@ -297,13 +297,15 @@ Android's dynamic exports 2,751 → 154. The `scr_path_win32_*` / `scr_exec_*`
 symbols that the desktop link had already dropped are now gone from both mobile
 lanes too. See [`shims-to-retire.md`](shims-to-retire.md).
 
-One saving is still upstream's: scriptc compiles the archive without
-`-ffunction-sections -fdata-sections`, so on ELF the GC works at
-whole-translation-unit granularity. Adding them would take the Android `.so`
-from 852,720 to 674,616 — another **178 KB** — and costs nothing for anyone who
-does not pass `--gc-sections`: same size, same section count, same `.text` size
-and the same 2,751-symbol export set, differing only in the order of functions
-within `.text`.
+One saving landed upstream: scriptc 0.1.3
+([#287](https://github.com/vercel-labs/scriptc/issues/287), their PR #345)
+compiles `--lib` archives with `-ffunction-sections -fdata-sections`, so on
+ELF the GC now works at per-function granularity instead of
+whole-translation-unit. That took the Android `.so` from 852,768 to 667,488 on
+`vanilla` — another **~181 KB**, close to the ~178 KB predicted from the
+archive's own section layout before this was measured — and costs nothing for
+anyone who does not pass `--gc-sections`: same section contract, differing
+only in the granularity available to a consumer's own link.
 
 A note on the table's history. The desktop column replaces figures that were
 correct when written — the previous 470 / 519 / 648 / 487 / 454 KB row
@@ -316,11 +318,9 @@ Two things worth noticing. **`solid` is smaller than `vanilla`** — not because
 Solid is free, but because the `vanilla` template ships a larger hand-written
 `index.html` (it demonstrates dialogs, file reading and window control inline)
 while Solid's flattened bundle is ~11 KB. And **the APK spread is much
-narrower** than the desktop spread — 325–385 KB against 224–418 KB — because an
-APK is dominated by the shared `.so` (853 KB–1.04 MB uncompressed) rather than
-by the frontend. Stripping the `.so` narrowed the APK range further, from 56 KB
-to 61 KB in absolute terms but from 12% to 18% of the smallest APK, so the
-frontend is now a slightly larger share of what ships.
+narrower** than the desktop spread — 245–317 KB against 240–466 KB — because an
+APK is dominated by the shared `.so` (652 KB–875 KB uncompressed) rather than
+by the frontend.
 
 The frontend is embedded as a string, so its bundle size lands in the binary
 roughly 1:1 — though small additions can be free, since macOS arm64 segments
