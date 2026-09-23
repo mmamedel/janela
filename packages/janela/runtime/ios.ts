@@ -310,7 +310,8 @@ export class JanelaAppImpl<
       for (let i = 0; i < this.names.length; i++) {
         if (this.names[i] === cmd) {
           this.deferred = -1;
-          const value = this.handlers[i](args);
+          const handler: CommandHandler = this.handlers[i];
+          const value = handler(args);
           // An async command parked its answer during the call above. Tell the
           // shell to hold the page's reply under that id instead of settling
           // now; hostSettle() answers it later.
