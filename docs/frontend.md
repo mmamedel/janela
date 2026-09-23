@@ -301,8 +301,8 @@ One saving landed upstream: scriptc 0.1.3
 ([#287](https://github.com/vercel-labs/scriptc/issues/287), their PR #345)
 compiles `--lib` archives with `-ffunction-sections -fdata-sections`, so on
 ELF the GC now works at per-function granularity instead of
-whole-translation-unit. That took the Android `.so` from 852,768 to 667,488 on
-`vanilla` — another **~181 KB**, close to the ~178 KB predicted from the
+whole-translation-unit. That took the Android `.so` from 844,880 to 667,488 on
+`vanilla` — another **~173 KB**, close to the ~178 KB predicted from the
 archive's own section layout before this was measured — and costs nothing for
 anyone who does not pass `--gc-sections`: same section contract, differing
 only in the granularity available to a consumer's own link.

@@ -60,18 +60,21 @@ are now gone from both mobile lanes too.
 
 | Upstream fix | Issue | What we deleted, and what it bought |
 |---|---|---|
-| PR #345 — preserve library section granularity | [#287](https://github.com/vercel-labs/scriptc/issues/287) | scriptc's `--lib` archives now carry per-function sections; janela's Android `--gc-sections --exclude-libs,ALL` link collects per function instead of per TU. Nothing deleted — the flags were always ours; the archive finally cooperates. Predicted from the compiler's `-ffunction-sections -fdata-sections` cflags addition (`native-toolchain.js`, `executableSectionEliminationFlags`), not yet re-measured on this pin: the Android `.so` was expected to move roughly 852,720 → 674,616 (**-178 KB**), at no cost to a consumer who does not pass `--gc-sections` — same size, section count, `.text` size and export set on the archive itself, differing only in the order of functions within `.text`. Treat the delta as a prediction until a clean build re-measures it (see docs/testing.md and this PR's notes on a blocking desktop-build regression under 0.1.3). |
+| PR #345 — preserve library section granularity | [#287](https://github.com/vercel-labs/scriptc/issues/287) | scriptc's `--lib` archives now carry per-function sections; janela's Android `--gc-sections --exclude-libs,ALL` link collects per function instead of per TU. Nothing deleted — the flags were always ours; the archive finally cooperates. Predicted from the compiler's `-ffunction-sections -fdata-sections` cflags addition (`native-toolchain.js`, `executableSectionEliminationFlags`), and now re-measured with the SC2011/SC9001 hoist fix in this PR clearing the desktop-build regression that had been blocking it: the Android `.so` moved 844,880 → 667,488 B (**-173 KB**), close to the ~178 KB predicted from the archive's own section layout, at no cost to a consumer who does not pass `--gc-sections` — same size, section count, `.text` size and export set on the archive itself, differing only in the order of functions within `.text`. |
 
 ## Still carried, with the issue that would let us delete it
 
 | What we carry | Why | Retire when |
 |---|---|---|
-| Avoid `JSON.stringify(null)` | A bare unit literal still crashes the compiler on 0.0.36: `SC9001: internal compiler error: in %init.0: bare unitLit 'null' outside a unionWrap`. One of [#262](https://github.com/vercel-labs/scriptc/issues/262)'s three cases, reported again after the close | #262's remaining case lands |
-| Avoid `Object.keys` on a *generic mapped type* | Still unsupported, but **no longer a crash** — 0.0.36 reports `SC2020: 'Object.keys' … has no scriptc lowering yet`. Verified 2026-09-03: `{ [K in keyof T]: … }` through a generic fails; `Object.keys` on a plain record compiles and runs | scriptc lowers `Object.keys` for mapped types |
+| Avoid `JSON.stringify(null)` | A bare unit literal still crashes the compiler — confirmed still reproduces on 0.1.3: `SC9001: internal compiler error: in %init.0: bare unitLit 'null' outside a unionWrap`. One of [#262](https://github.com/vercel-labs/scriptc/issues/262)'s three cases, split out as its own report after the close (see `scratchpad/issue-262a.md`) | scriptc fixes the bare-`null`-literal ICE |
+| Avoid `Object.keys` on a *generic mapped type* | Still crashes the compiler — confirmed still reproduces on 0.1.3: `SC9001: internal compiler error: … call %obj.keys.0 arg 0: expected record, got record`, when `Object.keys` receives a value typed through a generic mapped type instantiated by a type parameter (see `scratchpad/issue-262b.md`). `Object.keys` on a plain, non-generic record still compiles and runs. This supersedes the 0.0.36-era note that it had softened to a `SC2020` diagnostic — re-probed 2026-09-23 and it is an ICE again on this pin | scriptc fixes the generic-mapped-type ICE |
 | Post-link PE `Subsystem` patch | No way to pass `-mwindows`; a console window otherwise sits behind the app | [#259](https://github.com/vercel-labs/scriptc/issues/259) fixed upstream, merged after v0.1.3, awaiting a release — PR #380 "fix(windows): support GUI executables", merged 2026-09-23 |
 | `pthread` in `system_libraries` on Windows | scriptc's win32 link line still omits libwinpthread, so `clock_gettime` / `nanosleep` are undefined. Re-checked in 0.1.3: `native-toolchain.js:2937-2939` still passes `-pthread` for POSIX drivers and `[]` for `win32`, so our shim's POSIX time calls have nothing to link against | [#255](https://github.com/vercel-labs/scriptc/issues/255) fixed upstream, merged after v0.1.3, awaiting a release — PR #367 "fix(windows): provide native timing shims", merged 2026-09-21 |
 
-Unchanged from before, and unaffected by 0.0.36: library mode still refuses
-`async`, and microtasks still never drain across host re-entries
+Unchanged from before: library mode still refuses `async`, and microtasks
+still never drain across host re-entries
 ([#265](https://github.com/vercel-labs/scriptc/issues/265)) — that is the one
-that would let `commandAsync` collapse into `command`.
+that would let `commandAsync` collapse into `command`. Not re-probed on 0.1.3,
+but the `dist/ffi/*.d.ts` type surface is byte-identical between 0.0.36 and
+0.1.3, so the finding transfers by type-surface diff rather than a fresh
+probe.
