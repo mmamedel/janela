@@ -84,10 +84,10 @@ what requires an Apple or Google account — is in
 
 Requirements: Node 24+ and a C++ toolchain for the platform you are building —
 Xcode CLT on macOS; `g++` + `libwebkit2gtk-4.1-dev` on Linux; an llvm-mingw
-clang plus `SCRIPTC_LINKER=clang` on Windows (see [Windows](#windows) below).
-iOS additionally needs Xcode and `zig`; Android needs a JDK, the Android SDK,
-the NDK and `zig`. A worked example lives in [`examples/demo`](examples/demo)
-— commands, events, and a file reader.
+clang on Windows (see [Windows](#windows) below). iOS additionally needs Xcode
+and `zig`; Android needs a JDK, the Android SDK, the NDK and `zig`. A worked
+example lives in [`examples/demo`](examples/demo) — commands, events, and a
+file reader.
 
 ## Windows
 
@@ -99,10 +99,11 @@ runtime uses POSIX types and calls (`ssize_t`, `nanosleep`, `clock_gettime`)
 that the MSVC CRT does not provide. janela checks `clang -dumpmachine` and
 tells you if the wrong one is first on `PATH`.
 
-**scriptc 0.1.3 defaults to `zig` as its linker on Windows**, and that default
-does not work with janela's clang++-built webview shim — set
-`SCRIPTC_LINKER=clang` (janela's own CI does this) to route the link back
-through the same llvm-mingw clang. See
+**scriptc 0.1.3 defaults to a split-ABI executable route on Windows** that
+cannot link janela's clang++-built webview shim — janela pins
+`SCRIPTC_CC=clang` for every Windows build itself (no setup needed on your
+part), which routes scriptc back onto its single-ABI legacy pipeline through
+the same llvm-mingw clang. See
 [docs/windows-notes.md](../../docs/windows-notes.md) for detail.
 
 webview.h's Win32 backend includes `WebView2.h`, which Microsoft ships in a

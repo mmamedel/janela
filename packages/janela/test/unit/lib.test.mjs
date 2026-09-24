@@ -17,6 +17,7 @@ import {
   NAME_RE, patchPeSubsystem, PeError, rewriteHostSpecifier, suggestName,
   installCommand,
   packageManager,
+  scriptcEnv,
   shimCacheKey,
 } from "../../bin/lib.mjs";
 
@@ -415,4 +416,33 @@ test("the scriptc dependency in package.json is an exact version", () => {
   const spec = pkg.dependencies?.scriptc;
   assert.ok(spec, "packages/janela/package.json must depend on scriptc");
   assert.match(spec, /^\d+\.\d+\.\d+$/, `scriptc must be pinned exactly (no ^/~/range), got "${spec}"`);
+});
+
+// ---- scriptc env -------------------------------------------------------------
+//
+// scriptc >=0.1.3 auto-selects a split-ABI Windows route with no opt-out
+// (WINDOWS_X64_MSVC_TARGET, @scriptc/compiler backend/targets.js), which
+// cannot link janela's mingw-built webview shim. SCRIPTC_CC=clang restores
+// the single-ABI legacy pipeline every Windows build actually needs — see the
+// doc comment on scriptcEnv in lib.mjs.
+test("scriptcEnv pins SCRIPTC_CC=clang on win32 when the caller left it unset", () => {
+  const env = scriptcEnv({ PATH: "/usr/bin" }, "win32");
+  assert.equal(env.SCRIPTC_CC, "clang");
+  assert.equal(env.PATH, "/usr/bin", "unrelated env vars must pass through untouched");
+});
+
+test("scriptcEnv leaves an explicit user SCRIPTC_CC alone on win32", () => {
+  const env = scriptcEnv({ SCRIPTC_CC: "zigcc" }, "win32");
+  assert.equal(env.SCRIPTC_CC, "zigcc");
+});
+
+test("scriptcEnv never sets SCRIPTC_TARGET", () => {
+  const env = scriptcEnv({}, "win32");
+  assert.equal(env.SCRIPTC_TARGET, undefined);
+});
+
+test("scriptcEnv does not touch SCRIPTC_CC on darwin or linux", () => {
+  for (const platform of ["darwin", "linux"]) {
+    assert.equal(scriptcEnv({ PATH: "/usr/bin" }, platform).SCRIPTC_CC, undefined);
+  }
 });

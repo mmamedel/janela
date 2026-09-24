@@ -434,3 +434,33 @@ export function shimCacheKey(source, version, platform, includeFlag) {
     .update(`\u0000${version}\u0000${platform}\u0000${includeFlag}`)
     .digest("hex");
 }
+
+/**
+ * The environment every `scriptc` invocation is spawned with.
+ *
+ * scriptc >=0.1.3 auto-selects `WINDOWS_X64_MSVC_TARGET` on any win32 host
+ * with no opt-out (`@scriptc/compiler` `backend/targets.js`'s
+ * `nativeHostTarget`/`nativeCodegenTarget`): an MSVC-triple program object
+ * linked against a zig-mingw-built runtime pack via `zig cc`. janela's
+ * webview shim is a foreign mingw `clang++` object, and neither zig nor
+ * llvm-mingw clang can link that combination through the new route (see
+ * docs/windows-notes.md). Setting `SCRIPTC_CC=clang` restores 0.0.36's
+ * single-ABI legacy-C pipeline (`backend/external-c.js`'s
+ * `legacyCExecutablePathRequested`), which llvm-mingw clang compiles and
+ * links end to end — exactly what janela's Windows shim is built for.
+ * `SCRIPTC_TARGET` must stay unset alongside it: `resolveCc` rejects the pair
+ * (`backend/native-toolchain.js`).
+ *
+ * Retire this pin once scriptc's win32 route can link a foreign mingw C++
+ * object end to end (tracked upstream as scriptc#367) and a zig-based shim
+ * build has been validated (option C in the Windows decision notes).
+ *
+ * Takes the environment and platform rather than reading process.env /
+ * process.platform, so it is testable.
+ */
+export function scriptcEnv(baseEnv, platform) {
+  if (platform === "win32" && baseEnv.SCRIPTC_CC === undefined) {
+    return { ...baseEnv, SCRIPTC_CC: "clang" };
+  }
+  return { ...baseEnv };
+}

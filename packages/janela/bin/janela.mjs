@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import {
   ANDROID_ABI, ANDROID_TARGET_SDK, androidConf, ffiManifest, iosConf,
   installCommand, libraryProfile, mimeFor, NAME_RE, packageManager as pmFor,
-  shimCacheKey,
+  scriptcEnv, shimCacheKey,
   patchPeSubsystem, PeError, rewriteHostSpecifier, suggestName,
 } from "./lib.mjs";
 
@@ -385,7 +385,7 @@ function buildIos(root, conf, buildDir, outDir) {
   run(["node", scriptcBin(), "build", "--lib", "--profile", "profile.json"], {
     cwd: buildDir,
     env: {
-      ...process.env,
+      ...scriptcEnv(process.env, process.platform),
       SCRIPTC_CC: "zigcc",
       SCRIPTC_TARGET: "aarch64-apple-ios-simulator",
     },
@@ -575,7 +575,7 @@ function buildAndroid(root, conf, buildDir, outDir) {
   run(["node", scriptcBin(), "build", "--lib", "--profile", "profile.json"], {
     cwd: buildDir,
     env: {
-      ...process.env,
+      ...scriptcEnv(process.env, process.platform),
       SCRIPTC_CC: "zigcc",
       SCRIPTC_TARGET: "aarch64-linux-android",
       ANDROID_NDK_ROOT: sdk.ndk,
@@ -1117,9 +1117,11 @@ function build(root, { devUrl = null, gui = true, target = "desktop" } = {}) {
   // instead of failing static compilation. Desktop-only — assertDynamicSupported()
   // above already refused a mobile target with this set.
   if (conf.build?.dynamic) scriptcArgs.push("--dynamic");
-  // No SCRIPTC_CC/SCRIPTC_TARGET on Windows: scriptc's default driver is
-  // plain `clang`, which is exactly the MinGW-targeting clang checked above.
-  run(scriptcArgs, { cwd: buildDir });
+  // scriptcEnv pins SCRIPTC_CC=clang on win32 (see its doc comment in
+  // lib.mjs): scriptc >=0.1.3's default Windows route can't link janela's
+  // mingw webview shim, so every Windows build is forced back onto the
+  // single-ABI legacy pipeline, the same one 0.0.36 always used.
+  run(scriptcArgs, { cwd: buildDir, env: scriptcEnv(process.env, process.platform) });
 
   // Symbol/debug metadata is ~16% of the binary and apps don't need it.
   // (On arm64 macOS, strip re-signs ad-hoc automatically. MinGW keeps DWARF
