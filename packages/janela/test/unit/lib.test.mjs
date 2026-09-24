@@ -436,6 +436,13 @@ test("scriptcEnv leaves an explicit user SCRIPTC_CC alone on win32", () => {
   assert.equal(env.SCRIPTC_CC, "zigcc");
 });
 
+test("scriptcEnv treats an empty-string SCRIPTC_CC as unset on win32", () => {
+  // scriptc itself treats "" as unset (dist/backend/external-c.js:37), so an
+  // empty string here must be pinned to clang exactly like undefined.
+  const env = scriptcEnv({ SCRIPTC_CC: "" }, "win32");
+  assert.equal(env.SCRIPTC_CC, "clang");
+});
+
 test("scriptcEnv never sets SCRIPTC_TARGET", () => {
   const env = scriptcEnv({}, "win32");
   assert.equal(env.SCRIPTC_TARGET, undefined);

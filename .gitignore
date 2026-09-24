@@ -9,3 +9,6 @@ node_modules
 
 # scratch for scripts/measure-sizes.mjs
 .janela-sizes/
+
+# local investigation notes, never committed
+scratchpad/

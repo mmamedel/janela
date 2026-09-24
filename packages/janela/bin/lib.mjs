@@ -451,15 +451,16 @@ export function shimCacheKey(source, version, platform, includeFlag) {
  * `SCRIPTC_TARGET` must stay unset alongside it: `resolveCc` rejects the pair
  * (`backend/native-toolchain.js`).
  *
- * Retire this pin once scriptc's win32 route can link a foreign mingw C++
- * object end to end (tracked upstream as scriptc#367) and a zig-based shim
- * build has been validated (option C in the Windows decision notes).
+ * Retire this pin once upstream offers a win32 opt-out / GNU-ABI target for
+ * the precompiled runtime pack, or once a zig-based shim build has been
+ * validated (option C in the Windows decision notes; no upstream issue filed
+ * yet).
  *
  * Takes the environment and platform rather than reading process.env /
  * process.platform, so it is testable.
  */
 export function scriptcEnv(baseEnv, platform) {
-  if (platform === "win32" && baseEnv.SCRIPTC_CC === undefined) {
+  if (platform === "win32" && !baseEnv.SCRIPTC_CC) {
     return { ...baseEnv, SCRIPTC_CC: "clang" };
   }
   return { ...baseEnv };

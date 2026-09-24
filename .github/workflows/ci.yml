@@ -82,7 +82,7 @@ jobs:
       # script in scriptc or janela restores the bit — scriptc's postinstall
       # (scripts/warm-cache.mjs) skips native invocation entirely on hosts its
       # runtime pack already supports. Stopgap until upstream ships the fix;
-      # see docs/shims-to-retire.md and scratchpad/issue-0.1.3-linux-execbit.md.
+      # see docs/shims-to-retire.md. Upstream issue not yet filed.
       - name: Fix scriptc LLVM helper executable bit (Linux)
         if: runner.os == 'Linux'
         run: chmod +x node_modules/.pnpm/@scriptc+llvm-linux-x64-gnu@*/node_modules/@scriptc/llvm-linux-x64-gnu/bin/*

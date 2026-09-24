@@ -77,14 +77,12 @@ Windows user hits the same split-ABI route, not just the CI box.
 (`external-c.js:26-34`), not deprecated in the sense of "about to vanish" —
 it is explicitly kill-switchable by upstream CI
 (`SCRIPTC_LEGACY_C_PIPELINE=0`) and will outlive this release, but it is not
-a permanent destination. **Retire this pin** once scriptc's win32 route can
-link a foreign mingw C++ object end to end — tracked upstream as
-[scriptc#367](https://github.com/vercel-labs/scriptc/issues/367) — and a
+a permanent destination. **Retire this pin** once upstream offers a win32
+opt-out / GNU-ABI target for the precompiled runtime pack, or once a
 zig-based shim build has been validated (see "Debugging the link" below for
-how that was ruled out for now).
+how that was ruled out for now; no upstream issue filed yet).
 
-See `scratchpad/issue-0.1.3-windows-zig.md` and the row in
-[shims-to-retire.md](shims-to-retire.md).
+See the row in [shims-to-retire.md](shims-to-retire.md).
 
 ### Debugging the link
 
