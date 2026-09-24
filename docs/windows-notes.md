@@ -41,10 +41,26 @@ spawn zig ENOENT
 This is a different requirement from the clang-vs-zig choice below: that
 section is about `SCRIPTC_CC`, which now only selects the *deprecated* legacy
 generated-C pipeline (`external-c.js`'s `legacyCExecutablePathRequested`), not
-the new default link route. The llvm-mingw clang install is still required —
-it compiles janela's own webview shim object (`wvshim.obj`) — but CI/local
-builds additionally need `zig` on `PATH` for scriptc's own link step. See
-`scratchpad/issue-0.1.3-windows-zig.md` and the row in
+the new default link route.
+
+**In practice, zig doesn't work for janela either — for a new reason.**
+janela's webview shim object is compiled separately by llvm-mingw's `clang++`
+against mingw's C++ runtime. When scriptc's link then runs through zig, zig's
+bundled `libc++` (a different C++ runtime) has to be rebuilt from source to
+satisfy the shim's C++ symbols, and that rebuild fails deep inside zig's
+vendored `lib/libcxx/src` with no diagnosable error surfaced (scriptc's
+`ffiNativeBuildDetail`, `index.js:198-205`, keeps only the trailing 40 stderr
+lines when no known linker-error marker matches, and the actual `error:` line
+sits earlier than that, buried under nullability-warning spam). The fix is to
+route scriptc's link back through clang: `resolvePlatformLinker`
+(`backend/linker.js:20-21`) honors `SCRIPTC_LINKER` ahead of the target's
+`defaultLinker`, so janela's CI sets `SCRIPTC_LINKER=clang`, which resolves via
+`PATH` to the same llvm-mingw clang that compiled the shim — the combination
+this doc already documents as proven to build, link, and run. `zig` is still
+installed in CI (it is scriptc's own default and other code paths may still
+shell out to it bare), but it is not what makes the Windows lane pass.
+
+See `scratchpad/issue-0.1.3-windows-zig.md` and the row in
 [shims-to-retire.md](shims-to-retire.md).
 
 ## Upstream scriptc bug: winpthreads is never linked

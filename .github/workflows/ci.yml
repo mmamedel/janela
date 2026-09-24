@@ -39,6 +39,16 @@ jobs:
       # Enough to need staged reads without spending CI minutes on I/O.
       JANELA_TEST_BIG_MB: 16
       JANELA_TEST_TEMPLATES: vanilla,vue
+      # scriptc 0.1.3's windows-x64-msvc target defaults its executable link
+      # to zig (see the "Install zig" step below), but zig's own bundled
+      # libc++ then has to be rebuilt from source to satisfy the C++ symbols
+      # in janela's webview shim object — which is compiled separately by
+      # llvm-mingw's clang++ against mingw's C++ runtime, not zig's. That
+      # mismatch fails the link. clang is already resolvePlatformLinker's
+      # non-Windows default (this is a no-op on macOS/Linux), and llvm-mingw's
+      # clang is the toolchain docs/windows-notes.md documents as proven to
+      # build+link+run the whole thing, so pin the link driver back to it.
+      SCRIPTC_LINKER: clang
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
