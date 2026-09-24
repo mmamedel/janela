@@ -22,6 +22,31 @@ So janela requires a clang whose **default target** is mingw — llvm-mingw,
 MSYS2 clang64, WinLibs. That also means no `SCRIPTC_CC`/`SCRIPTC_TARGET` is
 needed: scriptc's default `clang` driver is already the right one.
 
+## New in 0.1.3: the default executable link now requires `zig` too
+
+scriptc 0.1.3 added a default LLVM-tier executable route (LLVM helper package
+codegen + a precompiled runtime pack) that supersedes the explicit-C pipeline
+described below whenever `SCRIPTC_CC` is unset. For `windows-x64-msvc`,
+`WINDOWS_X64_MSVC_TARGET.defaultLinker` in `@scriptc/compiler`'s
+`backend/targets.js` is hardcoded to `zig` (`defaultLinkerArgs: ["cc"]`) — the
+runtime pack is built against zig's own mingw-compatible sysroot, and only zig
+links it against the LLVM helper's generated MSVC-flavored object. Without a
+`zig` binary on `PATH`, the build fails with:
+
+```
+error SC5004: FFI native build failed: zig failed while building the generated program:
+spawn zig ENOENT
+```
+
+This is a different requirement from the clang-vs-zig choice below: that
+section is about `SCRIPTC_CC`, which now only selects the *deprecated* legacy
+generated-C pipeline (`external-c.js`'s `legacyCExecutablePathRequested`), not
+the new default link route. The llvm-mingw clang install is still required —
+it compiles janela's own webview shim object (`wvshim.obj`) — but CI/local
+builds additionally need `zig` on `PATH` for scriptc's own link step. See
+`scratchpad/issue-0.1.3-windows-zig.md` and the row in
+[shims-to-retire.md](shims-to-retire.md).
+
 ## Upstream scriptc bug: winpthreads is never linked
 
 scriptc's runtime calls `clock_gettime` and `nanosleep`, which mingw declares
