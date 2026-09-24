@@ -399,7 +399,9 @@ export class JanelaAppImpl<
   // Menu items in tag order; the tag IS the index. Rebuilt by setMenu.
   menuItems: MenuItem[] = [];
   // The handlers, separately: scriptc does not support calling a closure held
-  // on an object property (SC1090), only one reached through an array — the
+  // on an object property (SC1090). On 0.1.3, calling through an array index
+  // isn't sufficient either — the element type is lost at the use site
+  // (SC2011/SC9001) — so it must first be read into an annotated local, the
   // same reason command handlers live in `handlers`.
   menuHandlers: (() => void)[] = [];
   menuBound = false;
@@ -499,14 +501,16 @@ export class JanelaAppImpl<
       // A negative count means the job vanished; treat the payload as final
       // rather than spinning on it forever.
       if (taken > 0) {
-        this.drainParts[0].push(chunk);
+        const head: string[] = this.drainParts[0];
+        head.push(chunk);
         this.drainOff[0] = this.drainOff[0] + taken;
       }
 
       if (taken <= 0 || this.drainOff[0] >= this.drainSize[0]) {
         // Joining is one unavoidable O(n) copy: the callback is handed a
         // single string, so the whole payload must be materialised once.
-        const payload = this.drainParts[0].join("");
+        const parts: string[] = this.drainParts[0];
+        const payload = parts.join("");
         const cb = this.drainCbs[0];
         const ok = this.drainOk[0];
         wvJobFree(this.handle, this.drainIds[0]);
@@ -801,7 +805,10 @@ export class JanelaAppImpl<
     if (!this.menuBound) {
       // Registered once: the tag comes back and the item's own closure runs.
       wvOnMenu(this.handle, (tag) => {
-        if (tag >= 0 && tag < this.menuHandlers.length) this.menuHandlers[tag]();
+        if (tag >= 0 && tag < this.menuHandlers.length) {
+          const onClick: () => void = this.menuHandlers[tag];
+          onClick();
+        }
         return 0;
       });
       this.menuBound = true;
@@ -867,7 +874,8 @@ export class JanelaAppImpl<
       const args = JSON.parse(env[1]) as unknown;
       for (let i = 0; i < this.names.length; i++) {
         if (this.names[i] === cmd) {
-          wvReply(h, encode(this.handlers[i](args)));
+          const handler: CommandHandler = this.handlers[i];
+          wvReply(h, encode(handler(args)));
           return 0;
         }
       }
@@ -890,7 +898,8 @@ export class JanelaAppImpl<
               wvResolve(h, id, status);
             };
           };
-          this.asyncHandlers[i](args, settle(0), settle(1));
+          const asyncHandler: AsyncCommandHandler = this.asyncHandlers[i];
+          asyncHandler(args, settle(0), settle(1));
           return 0;
         }
       }

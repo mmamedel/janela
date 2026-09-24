@@ -1,11 +1,16 @@
 # Async commands: what the platform actually allows
 
 Measured against scriptc 0.0.32 + webview.h, 2026-08-29; the design still
-holds on 0.0.36 (re-checked 2026-09-03 — library mode still refuses `async`
-and microtasks still do not drain across host re-entries, so the shell still
-owns the clock). FFI format 5 was evaluated on the same 0.0.36 pin and
-rejected, 2026-09-18 — see "Why not FFI format 5" below. Every claim here was
-verified with a probe binary, not inferred from documentation.
+holds on 0.1.3 (restated from the 0.0.36 re-check of 2026-09-03 — library mode
+still refuses `async` and microtasks still do not drain across host
+re-entries, so the shell still owns the clock; not re-probed on 0.1.3, but the
+format-5 gate and every `dist/ffi/*.d.ts` are byte-identical between 0.0.36
+and 0.1.3, so the 0.0.36 finding transfers by type-surface diff rather than a
+fresh probe). FFI format 5 was evaluated on the 0.0.36 pin and rejected,
+2026-09-18 — see "Why not FFI format 5" below; re-verified by the same
+type-surface diff on 0.1.3, not re-probed. Every claim here was verified with
+a probe binary, not inferred from documentation, except where this paragraph
+says otherwise.
 
 ## The blocking finding
 
@@ -48,7 +53,10 @@ until scriptc says otherwise.
 ## Why not FFI format 5
 
 FFI format 5 — introduced upstream in scriptc 0.0.33, evaluated here on the
-0.0.36 pin — has one new capability: `invoke: "foreign"`, a callback that may
+0.0.36 pin and re-verified on 0.1.3 by type-surface diff (not re-probed:
+`dist/ffi/*.d.ts`, `dist/ffi/ffi-manifest.d.ts` and
+`dist/backend/ffi-callbacks.d.ts` are byte-identical between the two
+releases) — has one new capability: `invoke: "foreign"`, a callback that may
 be called from any native thread
 without the generator inserting a dispatch hop. It is gated to callbacks that
 are `retained`, return `void`, and carry a `context` entry
@@ -232,3 +240,32 @@ code that touches large strings:
   `text.length` alone costs 6 ms. That is *your* cost, not the drain's — a
   callback that probes a huge string will stall the window no matter how
   carefully the runtime delivered it.
+
+## Where a drain would go (design record, no code)
+
+[#265](https://github.com/vercel-labs/scriptc/issues/265) proposes exactly the
+missing piece: a host-callable job checkpoint (`scr_drain_jobs()`, PR #288,
+open/unmerged) that runs pending `process.nextTick`/promise-job queues to
+joint exhaustion without being a loop turn — no clock read, no timer fires, no
+unhandled-rejection verdict. If and when a release contains it, the two
+re-entry points on the executable lane are already identified: `trampoline()`
+immediately after `a->on_invoke(...)` returns and before/after the
+`webview_return` at `shim/wvshim.cc:2110-2128`, and `timer_on_ui_thread()`
+after `a->on_timer(id, …)` at `wvshim.cc:2148-2155`. On the library lane the
+equivalent is a `jl_drain` beside `jl_reset`.
+
+Two things block staging this today, both verified against 0.1.3:
+
+- The library half needs a version gate. `abi`'s keys are a strict allowlist
+  (`library-profile.js:380`, `rejectUnknownKeys`); emitting a `drain_symbol`
+  key against any compiler that does not recognize it hard-fails every iOS
+  and Android build with "unknown field '…' (a typo here would change the
+  ABI; remove it)".
+- The desktop half cannot be optimistically linked. `scriptc_drain` has zero
+  occurrences anywhere in `@scriptc/compiler@0.1.3`'s dist; declaring
+  `extern "C" bool scriptc_drain(void);` and calling it fails the link. The
+  usual escape — `__attribute__((weak))` plus a null check — works on Mach-O
+  and ELF but is not reliable for an undefined weak symbol under mingw/PE,
+  which is janela's most fragile lane already (see the Windows notes above).
+
+So this stays a design record until a release contains #288.

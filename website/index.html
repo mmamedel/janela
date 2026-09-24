@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>janela — desktop and mobile apps in pure TypeScript, compiled to native</title>
-<meta name="description" content="janela (Portuguese for window): desktop, iOS and Android apps in pure TypeScript, compiled to native. No Rust, no Node, no Electron. Desktop binaries around 190-390 KB.">
+<meta name="description" content="janela (Portuguese for window): desktop, iOS and Android apps in pure TypeScript, compiled to native. No Rust, no Node, no Electron. Desktop binaries around 240-466 KB.">
 <link rel="icon" type="image/svg+xml" href="janela-favicon.svg"
       media="(prefers-color-scheme: light)">
 <link rel="icon" type="image/svg+xml" href="janela-favicon-dark.svg"
@@ -231,7 +231,7 @@
     <p class="tagline">Desktop and mobile apps in pure TypeScript, compiled to native.</p>
     <p class="subtag">No Rust. No Node. No Electron. Your backend is TypeScript compiled to a real
       native binary; your frontend runs in the OS webview. macOS, Linux, Windows, iOS and Android —
-      <strong>one runtime, and desktop binaries around 190–390&nbsp;KB.</strong></p>
+      <strong>one runtime, and desktop binaries around 240–466&nbsp;KB.</strong></p>
     <div class="install"><span class="p">$</span> pnpm create janela</div>
     <div class="cta">
       <a class="btn primary" href="https://github.com/mmamedel/janela">
@@ -338,7 +338,7 @@
     <div class="cards">
       <div class="card">
         <h3><span class="mini" aria-hidden="true"><i></i><i></i><i></i><i></i></span>Tiny binaries</h3>
-        <p>Roughly 190–390&nbsp;KB per desktop app and 195–388&nbsp;KB packaged for a phone. No bundled browser, no bundled
+        <p>Roughly 240–466&nbsp;KB per desktop app and 211–437&nbsp;KB packaged for a phone. No bundled browser, no bundled
           runtime — the window is the webview your OS already ships. Sizes below.</p>
       </div>
       <div class="card">
@@ -392,13 +392,13 @@
       <table class="tbl">
         <thead><tr><th>Target</th><th>Vanilla</th><th>With Vue</th></tr></thead>
         <tbody>
-          <tr><td class="plat">Desktop (macOS arm64)</td><td class="num">224 KB</td><td class="num">289 KB</td></tr>
-          <tr><td class="plat">iOS (simulator)</td><td class="num">195 KB</td><td class="num">259 KB</td></tr>
-          <tr><td class="plat">Android (APK)</td><td class="num">325 KB</td><td class="num">349 KB</td></tr>
+          <tr><td class="plat">Desktop (macOS arm64)</td><td class="num">240 KB</td><td class="num">305 KB</td></tr>
+          <tr><td class="plat">iOS (simulator)</td><td class="num">211 KB</td><td class="num">276 KB</td></tr>
+          <tr><td class="plat">Android (APK)</td><td class="num">245 KB</td><td class="num">269 KB</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="tbl-note">All figures measured directly at 0.14.1 on scriptc 0.0.36 — the desktop row roughly halved when 0.0.36 added stdlib tree-shaking, and the mobile rows fell 43% and 31% once janela dead-stripped the two library-mode links that tree-shaking does not reach. Every one of the five
+    <p class="tbl-note">All figures measured directly at janela 0.19.0 on scriptc 0.1.3 (2026-09-23) — versus the 0.0.36 baseline (224 / 195 / 325 KB), desktop grew ~7% and iOS grew ~8%, while Android fell ~25%, once scriptc's library-archive section-granularity fix (#287) let janela's existing <code>--gc-sections</code> link collect dead code per function instead of per translation unit. Every one of the five
       templates — vanilla, Vue, React, Svelte, Solid — is built and run on all three
       targets; the full matrix is in
       <a href="https://github.com/mmamedel/janela/blob/main/docs/frontend.md">docs/frontend.md</a>.

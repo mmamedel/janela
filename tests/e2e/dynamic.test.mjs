@@ -4,7 +4,7 @@
 // opting a janela project into `"build": { "dynamic": true }` in
 // janela.conf.json threads scriptc's `--dynamic` flag through, embedding
 // quickjs-ng so that tier compiles and runs instead. Desktop only — a mobile
-// build is always a scriptc `--lib` build, and scriptc 0.0.36 rejects
+// build is always a scriptc `--lib` build, and scriptc 0.1.3 rejects
 // `--dynamic` there outright, so janela fails loudly before touching
 // zig/Xcode/the NDK.
 //
@@ -42,7 +42,7 @@ const skipDesktop = desktopReady ? false : "desktop lane not selected (JANELA_TE
 
 // The trigger: an any-typed value flowing through the '+' operator. Passed as
 // a plain function parameter rather than assigned to a local `const x: any`
-// inside the caller — scriptc 0.0.36's island analysis picks up the site
+// inside the caller — scriptc 0.1.3's island analysis picks up the site
 // either way, but keeping the operator in its own top-level helper (called
 // from setup(), the way a real command handler would call it) is the shape
 // that reliably lands the site in the dynamic tier rather than being folded

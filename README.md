@@ -6,7 +6,7 @@
 # janela — monorepo
 
 > Desktop and mobile apps in pure TypeScript, compiled to native. No Rust, no Node, no Electron.
-> macOS · Linux · Windows · iOS · Android — one runtime, ~190–390 KB desktop binaries.
+> macOS · Linux · Windows · iOS · Android — one runtime, ~240–466 KB desktop binaries.
 > **[janela.dev docs → mmamedel.github.io/janela](https://mmamedel.github.io/janela/)** ·
 > **[npm](https://www.npmjs.com/package/janela)**
 

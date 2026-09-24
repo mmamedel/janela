@@ -23,8 +23,8 @@ importers:
   packages/janela:
     dependencies:
       scriptc:
-        specifier: 0.0.36
-        version: 0.0.36
+        specifier: 0.1.3
+        version: 0.1.3
     devDependencies:
       typescript:
         specifier: ^5.9.3
@@ -34,22 +34,75 @@ importers:
 
 packages:
 
-  '@scriptc/compiler@0.0.36':
-    resolution: {integrity: sha512-3NRngr5BB7P6ynraWSS1gB9M+XoApp0SSmaV999hvaM1loqdgySQEUNfhJNWD2FBPxOSk1MxGc3zrKDN+2drJw==}
+  '@scriptc/compiler@0.1.3':
+    resolution: {integrity: sha512-mDaLIQxo4HePxlBnFBgVXK/tk4aG2aYzAExZFUKePLQux1Vn1b+F1p6YFBotOgZmARKnyFEtuazxa3prhKezZQ==}
 
-  '@scriptc/llvm-darwin-arm64@0.0.36':
-    resolution: {integrity: sha512-FPupxAkIaEbOSBGwIVihAmTXSX94Cln43WRFgEOm9OWGDjYCdKuVZ2/ftjqo+ptTi3k65W7KgW6SrvywC70rRA==}
+  '@scriptc/llvm-darwin-arm64@0.1.3':
+    resolution: {integrity: sha512-shEEWDyA+OngMubNLCKxHcS9VnXWchpU6i+82RqWSQnMXLhqtARmDIoHo7JXiByP0rdUKFl6MtD6hOMnDmZmdA==}
     cpu: [arm64]
     os: [darwin]
     hasBin: true
 
-  '@scriptc/runtime-darwin-arm64@0.0.36':
-    resolution: {integrity: sha512-WvrBGmUmWejvrRZ59HehXlyuRW4++/ciO303ZEHiEc96l1hdPefvjFZMK6offxRCi5en5l4O8Odj4UcAnG9K3g==}
+  '@scriptc/llvm-linux-arm64-gnu@0.1.3':
+    resolution: {integrity: sha512-GrPuDECqPbQJgvhAheXIQ7rLFNkw634obW9Bzh+LnpZ3t1qdKmMn1l26jtuNJtNoAgAqdIeu+TaIndyV3zTVLg==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@scriptc/llvm-linux-arm64-musl@0.1.3':
+    resolution: {integrity: sha512-XvVgvEu+xovNYdbcA6ERfQ9pc63Z+7DNZ7e6aqPHVVL8587FZiNqVCJCMroQHx+b4LT4OaXoUnOz1X1ZK1kpLA==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@scriptc/llvm-linux-x64-gnu@0.1.3':
+    resolution: {integrity: sha512-MGlzW992128wLDNM0rFZYztmj4whP0V8nBwR2NwDl82qIFNdMvF5fm8+bZBKHML/o6HuRtc5fUB/d9tTsiCv1g==}
+    cpu: [x64]
+    os: [linux]
+
+  '@scriptc/llvm-linux-x64-musl@0.1.3':
+    resolution: {integrity: sha512-YPTLUgFPCxOPjW4iZWkb/+5E6viGu9peVHRBiFEQHLny1L51VZCrXjaHiMx6vxhu8BLx83z8dZ5E8IRvmZMaSw==}
+    cpu: [x64]
+    os: [linux]
+
+  '@scriptc/llvm-win32-x64-msvc@0.1.3':
+    resolution: {integrity: sha512-ZTbFe1hJ5NIXEWxMZF97XPb09LCwUjJn1zcWVi/666EgiKXDsUDgsqZlaHVa1++xoGLM7+xg7U0LHqfp9rc+aA==}
+    cpu: [x64]
+    os: [win32]
+
+  '@scriptc/runtime-darwin-arm64@0.1.3':
+    resolution: {integrity: sha512-u019928QpovUVMqDK7JG06O7XhJRXSVwHmhlQKXhji7rhmcpDI06TPjBpemqzLPj95wUNvkGEsCy6bxJde0iyw==}
     cpu: [arm64]
     os: [darwin]
 
-  '@scriptc/runtime@0.0.36':
-    resolution: {integrity: sha512-5WGzxlWvx28Qc+oE6QsbJfHVZ1WX5fDAQUvcOgrInzATzkEws4knnBs0y+5J7Sn0HnyYD/Wg4HNBwg47MlDKng==}
+  '@scriptc/runtime-linux-arm64-gnu@0.1.3':
+    resolution: {integrity: sha512-ecbHsZZcD8Jri8qnYjjtq1YvgpJbMDaYRCO9ORuQmIyTYyJ3T7ONkLpSMngiCR8WBUHD+0lNBYwx2kW5eZgf9w==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@scriptc/runtime-linux-arm64-musl@0.1.3':
+    resolution: {integrity: sha512-96m4xpbU9tRULv8Kxdhm1IRJQTjKPFejxUSkZA1BQpc2mMUSIK1bLkHbhF3EKjzSXfYduw2WTsI63sD5UxLafA==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@scriptc/runtime-linux-x64-gnu@0.1.3':
+    resolution: {integrity: sha512-rSpCKaW+wv8FbT/1kTrU6gjy5reQTLLB4yspM/whr3+Xf+I8m1eGzjGLfpz1Uadaz7iMMii/Moc0iy5Jc2oysw==}
+    cpu: [x64]
+    os: [linux]
+
+  '@scriptc/runtime-linux-x64-musl@0.1.3':
+    resolution: {integrity: sha512-Nz2pU856xaiPWwSTpiaiPyRVFXnlrZBGu/Na12z4nS8Js7Ke6MrpmB3aU03Lc8EfjPXHpfKxuN5Ypdhk5KWq4A==}
+    cpu: [x64]
+    os: [linux]
+
+  '@scriptc/runtime-wasm32-wasi@0.1.3':
+    resolution: {integrity: sha512-zUjBXgPmYR9Ucb8PQyi+RLPDa63GHmzhrjcg6lbPsvdnPpVY3rHITEgyAyrmglPrav5cgDaUIo+kyaYyprJ3OQ==}
+
+  '@scriptc/runtime-win32-x64-msvc@0.1.3':
+    resolution: {integrity: sha512-vvyZhrKJKsBs8hxHpVlfpbZtF9Gt3H6pGiQdjaTVLJDa1wCzFnFhjkOphjbXxcEWJfKVH76aY1oZu6ROYqJJ7A==}
+    cpu: [x64]
+    os: [win32]
+
+  '@scriptc/runtime@0.1.3':
+    resolution: {integrity: sha512-yVgtWmGwUri7ydAKsZh/f2KVw/1YKmZSalGWO6I/HmdQRiV1fwD38k3EF4ig94PEHZGDcsabQsGvUfr2Z2f17w==}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
@@ -171,8 +224,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  scriptc@0.0.36:
-    resolution: {integrity: sha512-jxyL8VMi771nU3PuYCj8U+P6sQGgioD5yIMigXbUyVEDyR3IUrxkkZH/Iu/j8Z0VM5cTaLqLr65Gk8ff3wciNQ==}
+  scriptc@0.1.3:
+    resolution: {integrity: sha512-DQ/vidq82khltI60rRN/3ww9IvpzpY+WQXbp0RUVjQKRfb3VeChBRj/aIDaZquWIAuMVrONNAtcx4Y44T95JJQ==}
     engines: {node: '>=24'}
     hasBin: true
 
@@ -188,22 +241,66 @@ packages:
 
 snapshots:
 
-  '@scriptc/compiler@0.0.36':
+  '@scriptc/compiler@0.1.3':
     dependencies:
-      '@scriptc/runtime': 0.0.36
+      '@scriptc/runtime': 0.1.3
       typescript: 7.0.2
       typescript5: typescript@5.9.3
     optionalDependencies:
-      '@scriptc/llvm-darwin-arm64': 0.0.36
-      '@scriptc/runtime-darwin-arm64': 0.0.36
+      '@scriptc/llvm-darwin-arm64': 0.1.3
+      '@scriptc/llvm-linux-arm64-gnu': 0.1.3
+      '@scriptc/llvm-linux-arm64-musl': 0.1.3
+      '@scriptc/llvm-linux-x64-gnu': 0.1.3
+      '@scriptc/llvm-linux-x64-musl': 0.1.3
+      '@scriptc/llvm-win32-x64-msvc': 0.1.3
+      '@scriptc/runtime-darwin-arm64': 0.1.3
+      '@scriptc/runtime-linux-arm64-gnu': 0.1.3
+      '@scriptc/runtime-linux-arm64-musl': 0.1.3
+      '@scriptc/runtime-linux-x64-gnu': 0.1.3
+      '@scriptc/runtime-linux-x64-musl': 0.1.3
+      '@scriptc/runtime-wasm32-wasi': 0.1.3
+      '@scriptc/runtime-win32-x64-msvc': 0.1.3
 
-  '@scriptc/llvm-darwin-arm64@0.0.36':
+  '@scriptc/llvm-darwin-arm64@0.1.3':
     optional: true
 
-  '@scriptc/runtime-darwin-arm64@0.0.36':
+  '@scriptc/llvm-linux-arm64-gnu@0.1.3':
     optional: true
 
-  '@scriptc/runtime@0.0.36': {}
+  '@scriptc/llvm-linux-arm64-musl@0.1.3':
+    optional: true
+
+  '@scriptc/llvm-linux-x64-gnu@0.1.3':
+    optional: true
+
+  '@scriptc/llvm-linux-x64-musl@0.1.3':
+    optional: true
+
+  '@scriptc/llvm-win32-x64-msvc@0.1.3':
+    optional: true
+
+  '@scriptc/runtime-darwin-arm64@0.1.3':
+    optional: true
+
+  '@scriptc/runtime-linux-arm64-gnu@0.1.3':
+    optional: true
+
+  '@scriptc/runtime-linux-arm64-musl@0.1.3':
+    optional: true
+
+  '@scriptc/runtime-linux-x64-gnu@0.1.3':
+    optional: true
+
+  '@scriptc/runtime-linux-x64-musl@0.1.3':
+    optional: true
+
+  '@scriptc/runtime-wasm32-wasi@0.1.3':
+    optional: true
+
+  '@scriptc/runtime-win32-x64-msvc@0.1.3':
+    optional: true
+
+  '@scriptc/runtime@0.1.3': {}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true
@@ -265,9 +362,9 @@ snapshots:
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
 
-  scriptc@0.0.36:
+  scriptc@0.1.3:
     dependencies:
-      '@scriptc/compiler': 0.0.36
+      '@scriptc/compiler': 0.1.3
 
   typescript@5.9.3: {}
 

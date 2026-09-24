@@ -56,24 +56,27 @@ and only 51 KB comes back). iOS `.app` 409,232 → 232,208 and the Android `.so`
 `scr_path_win32_*` / `scr_exec_*` symbols the desktop link had already dropped
 are now gone from both mobile lanes too.
 
-One slice is still upstream's, and is a genuine lane gap
-([#287](https://github.com/vercel-labs/scriptc/issues/287)):
-`compileLibArchive` does not pass `-ffunction-sections -fdata-sections`, so ELF
-GC works per translation unit rather than per function. With them the Android `.so` reaches
-674,616 — another **178 KB** — at no cost to a consumer who does not pass
-`--gc-sections`: the output keeps its size, section count, `.text` size and
-export set, and differs only in the order of functions within `.text`.
+## Retired in 0.1.3 (published 2026-09-18)
+
+| Upstream fix | Issue | What we deleted, and what it bought |
+|---|---|---|
+| PR #345 — preserve library section granularity | [#287](https://github.com/vercel-labs/scriptc/issues/287) | scriptc's `--lib` archives now carry per-function sections; janela's Android `--gc-sections --exclude-libs,ALL` link collects per function instead of per TU. Nothing deleted — the flags were always ours; the archive finally cooperates. Predicted from the compiler's `-ffunction-sections -fdata-sections` cflags addition (`native-toolchain.js`, `executableSectionEliminationFlags`), and now re-measured with the SC2011/SC9001 hoist fix in this PR clearing the desktop-build regression that had been blocking it: the Android `.so` moved 844,880 → 667,488 B (**-173 KB**), close to the ~178 KB predicted from the archive's own section layout, at no cost to a consumer who does not pass `--gc-sections` — same size, section count, `.text` size and export set on the archive itself, differing only in the order of functions within `.text`. |
 
 ## Still carried, with the issue that would let us delete it
 
 | What we carry | Why | Retire when |
 |---|---|---|
-| Avoid `JSON.stringify(null)` | A bare unit literal still crashes the compiler on 0.0.36: `SC9001: internal compiler error: in %init.0: bare unitLit 'null' outside a unionWrap`. One of [#262](https://github.com/vercel-labs/scriptc/issues/262)'s three cases, reported again after the close | #262's remaining case lands |
-| Avoid `Object.keys` on a *generic mapped type* | Still unsupported, but **no longer a crash** — 0.0.36 reports `SC2020: 'Object.keys' … has no scriptc lowering yet`. Verified 2026-09-03: `{ [K in keyof T]: … }` through a generic fails; `Object.keys` on a plain record compiles and runs | scriptc lowers `Object.keys` for mapped types |
-| Post-link PE `Subsystem` patch | No way to pass `-mwindows`; a console window otherwise sits behind the app | [#259](https://github.com/vercel-labs/scriptc/issues/259) gives us a linker-flag route. Their PR #269 was **closed unmerged**, so this one has no landing date |
-| `pthread` in `system_libraries` on Windows | scriptc's win32 link line still omits libwinpthread, so `clock_gettime` / `nanosleep` are undefined. Re-checked in 0.0.36: `native-toolchain.js` passes `-pthread` for POSIX drivers and `[]` for `win32` (its own code uses `CreateThread`), so our shim's POSIX time calls have nothing to link against | [#255](https://github.com/vercel-labs/scriptc/issues/255) is fixed |
+| Avoid `JSON.stringify(null)` | A bare unit literal still crashes the compiler — confirmed still reproduces on 0.1.3: `SC9001: internal compiler error: in %init.0: bare unitLit 'null' outside a unionWrap`. One of [#262](https://github.com/vercel-labs/scriptc/issues/262)'s three cases, split out as its own report after the close (see `scratchpad/issue-262a.md`) | scriptc fixes the bare-`null`-literal ICE |
+| Avoid `Object.keys` on a *generic mapped type* | Still crashes the compiler — confirmed still reproduces on 0.1.3: `SC9001: internal compiler error: … call %obj.keys.0 arg 0: expected record, got record`, when `Object.keys` receives a value typed through a generic mapped type instantiated by a type parameter (see `scratchpad/issue-262b.md`). `Object.keys` on a plain, non-generic record still compiles and runs. This supersedes the 0.0.36-era note that it had softened to a `SC2020` diagnostic — re-probed 2026-09-23 and it is an ICE again on this pin | scriptc fixes the generic-mapped-type ICE |
+| Post-link PE `Subsystem` patch | No way to pass `-mwindows`; a console window otherwise sits behind the app | [#259](https://github.com/vercel-labs/scriptc/issues/259) fixed upstream, merged after v0.1.3, awaiting a release — PR #380 "fix(windows): support GUI executables", merged 2026-09-23 |
+| `pthread` in `system_libraries` on Windows | scriptc's win32 link line still omits libwinpthread, so `clock_gettime` / `nanosleep` are undefined. Re-checked in 0.1.3: `native-toolchain.js:2937-2939` still passes `-pthread` for POSIX drivers and `[]` for `win32`, so our shim's POSIX time calls have nothing to link against | [#255](https://github.com/vercel-labs/scriptc/issues/255) fixed upstream, merged after v0.1.3, awaiting a release — PR #367 "fix(windows): provide native timing shims", merged 2026-09-21 |
+| `chmod +x` on `@scriptc/llvm-linux-x64-gnu`'s helper binary in CI (`.github/workflows/ci.yml`) | The 0.1.3 optional package ships `bin/scriptc-llvm-codegen` without its executable bit surviving pnpm's content-addressable store; scriptc's own `SC3003` readable+executable check (`native-codegen.js:118-121`) then rejects it, and no lifecycle script (scriptc's `postinstall` skips native invocation entirely on hosts its runtime pack supports — `scripts/warm-cache.mjs`) restores it | scriptc ships the helper package with its executable bit preserved, or chmods it in `postinstall`. Upstream issue not yet filed |
+| `SCRIPTC_CC=clang` pin for every Windows build (`packages/janela/bin/lib.mjs`'s `scriptcEnv`, used from `bin/janela.mjs`) | scriptc 0.1.3's `windows-x64-msvc` target (`WINDOWS_X64_MSVC_TARGET` in `backend/targets.js`) is selected on any win32 host with no opt-out, and links an MSVC-triple program object against a zig-mingw-built runtime pack via `zig cc`. Neither zig-as-linker nor llvm-mingw-clang-as-linker reliably links that combination with janela's foreign mingw `clang++`-built webview shim object. `SCRIPTC_CC=clang` skips the new route entirely, forcing scriptc back onto its legacy generated-C pipeline (`external-c.js`'s `legacyCExecutablePathRequested`) — byte-for-byte the single-ABI route 0.0.36 always used | upstream offers a win32 opt-out / GNU-ABI target for the precompiled runtime pack, or a zig-based shim build (rebuilding janela's webview shim with `zig c++` against zig's bundled libc++) has been validated end to end. No upstream issue filed yet |
 
-Unchanged from before, and unaffected by 0.0.36: library mode still refuses
-`async`, and microtasks still never drain across host re-entries
+Unchanged from before: library mode still refuses `async`, and microtasks
+still never drain across host re-entries
 ([#265](https://github.com/vercel-labs/scriptc/issues/265)) — that is the one
-that would let `commandAsync` collapse into `command`.
+that would let `commandAsync` collapse into `command`. Not re-probed on 0.1.3,
+but the `dist/ffi/*.d.ts` type surface is byte-identical between 0.0.36 and
+0.1.3, so the finding transfers by type-surface diff rather than a fresh
+probe.

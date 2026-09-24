@@ -158,7 +158,11 @@ export function mimeFor(p) {
  * loses a declaration fails at link time, on one platform, which is the worst
  * place to find out.
  *
- * FFI format 5 evaluated and rejected (scriptc 0.0.36 pin): format 5 adds
+ * FFI format 5 evaluated and rejected (scriptc 0.1.3 pin, restated from the
+ * 0.0.36 analysis: `dist/ffi/*.d.ts`, `dist/ffi/ffi-manifest.d.ts` and
+ * `dist/backend/ffi-callbacks.d.ts` are byte-identical between the two
+ * releases, and the format-5 gate in `ffi-manifest.js` is unmoved, so
+ * f2f8392's analysis transfers unchanged): format 5 adds
  * `invoke: "foreign"`, but only for callbacks that are retained, return void,
  * and carry a context — of the callbacks below, only wvOnTimer's qualifies.
  * Foreign delivery marshals through scriptc's own event loop, and wv_run
@@ -272,6 +276,8 @@ export function ffiManifest(shimLib, { platform = process.platform, macSdkPath =
     // link never adds it. Without this the link dies with
     // "undefined symbol: clock_gettime" — reproducible with a plain
     // `scriptc build hello.ts` on Windows, no FFI involved.
+    // Still absent in 0.1.3 (`native-toolchain.js:2937-2939` returns `[]` for
+    // win32); upstream fix PR #367 merged 2026-09-21, not in any release yet.
     return {
       ffi_format: 4,
       functions,
@@ -427,4 +433,35 @@ export function shimCacheKey(source, version, platform, includeFlag) {
     .update(source)
     .update(`\u0000${version}\u0000${platform}\u0000${includeFlag}`)
     .digest("hex");
+}
+
+/**
+ * The environment every `scriptc` invocation is spawned with.
+ *
+ * scriptc >=0.1.3 auto-selects `WINDOWS_X64_MSVC_TARGET` on any win32 host
+ * with no opt-out (`@scriptc/compiler` `backend/targets.js`'s
+ * `nativeHostTarget`/`nativeCodegenTarget`): an MSVC-triple program object
+ * linked against a zig-mingw-built runtime pack via `zig cc`. janela's
+ * webview shim is a foreign mingw `clang++` object, and neither zig nor
+ * llvm-mingw clang can link that combination through the new route (see
+ * docs/windows-notes.md). Setting `SCRIPTC_CC=clang` restores 0.0.36's
+ * single-ABI legacy-C pipeline (`backend/external-c.js`'s
+ * `legacyCExecutablePathRequested`), which llvm-mingw clang compiles and
+ * links end to end — exactly what janela's Windows shim is built for.
+ * `SCRIPTC_TARGET` must stay unset alongside it: `resolveCc` rejects the pair
+ * (`backend/native-toolchain.js`).
+ *
+ * Retire this pin once upstream offers a win32 opt-out / GNU-ABI target for
+ * the precompiled runtime pack, or once a zig-based shim build has been
+ * validated (option C in the Windows decision notes; no upstream issue filed
+ * yet).
+ *
+ * Takes the environment and platform rather than reading process.env /
+ * process.platform, so it is testable.
+ */
+export function scriptcEnv(baseEnv, platform) {
+  if (platform === "win32" && !baseEnv.SCRIPTC_CC) {
+    return { ...baseEnv, SCRIPTC_CC: "clang" };
+  }
+  return { ...baseEnv };
 }

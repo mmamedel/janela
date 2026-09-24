@@ -11,9 +11,9 @@ Desktop and mobile apps in pure TypeScript, compiled to native. No Rust, no
 Node, no Electron. The backend is TypeScript compiled to a native binary by
 [scriptc](https://scriptc.dev); the window is the OS webview via
 [webview/webview](https://github.com/webview/webview). A desktop binary comes
-out around 190–390 KB — 191 KB for the smallest template — with no bundled
+out around 240–466 KB — 240 KB for the smallest template — with no bundled
 browser and no bundled runtime; iOS and Android bundles land around
-195–388 KB. Those are the *starter's* figures: it calls one command, so it
+211–437 KB. Those are the *starter's* figures: it calls one command, so it
 links almost nothing beyond the runtime. Reaching for a platform API adds its
 code — the native file dialog and the worker-thread reader together are about
 35 KB — which is the shape worth remembering: what you pay is what you call. Per-template figures are in
@@ -98,6 +98,13 @@ MSYS2's `clang64` toolchain, or WinLibs. MSVC does **not** work: scriptc's
 runtime uses POSIX types and calls (`ssize_t`, `nanosleep`, `clock_gettime`)
 that the MSVC CRT does not provide. janela checks `clang -dumpmachine` and
 tells you if the wrong one is first on `PATH`.
+
+**scriptc 0.1.3 defaults to a split-ABI executable route on Windows** that
+cannot link janela's clang++-built webview shim — janela pins
+`SCRIPTC_CC=clang` for every Windows build itself (no setup needed on your
+part), which routes scriptc back onto its single-ABI legacy pipeline through
+the same llvm-mingw clang. See
+[docs/windows-notes.md](../../docs/windows-notes.md) for detail.
 
 webview.h's Win32 backend includes `WebView2.h`, which Microsoft ships in a
 nuget package rather than in the Windows SDK, so the first build downloads
@@ -286,7 +293,7 @@ is ~620 KB; a trivial macOS arm64 build measured closer to 1 MB stripped).
 Two things worth knowing:
 
 - **Desktop only.** iOS and Android builds are always scriptc `--lib`
-  builds, and scriptc 0.0.36 rejects `--dynamic` there outright — `janela
+  builds, and scriptc 0.1.3 rejects `--dynamic` there outright — `janela
   build --target ios|android` fails immediately with a clear error if
   `build.dynamic` is set, before touching zig/Xcode/the NDK.
 - **An untyped npm package still needs types.** scriptc does not read
@@ -596,7 +603,8 @@ app.command("add", (args) => {
 Mechanically: drop the `JSON.parse(argsJson)` (cast `args` instead), drop
 every `JSON.stringify` around a result, `resolve`/`reject`/`emit` payload, and
 return nothing at all where you used to return `"null"`. Requires Node 24 to
-build (scriptc 0.0.36's floor).
+build (scriptc 0.1.3's floor, unchanged from 0.0.36's — `engines.node` is
+still `>=24`).
 
 ## What the CLI hides
 

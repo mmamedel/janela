@@ -55,7 +55,11 @@ jobs:
 
       # scriptc's Windows runtime needs a full mingw-w64 (ssize_t, nanosleep,
       # clock_gettime), so the Windows leg uses llvm-mingw's clang rather than
-      # the runner's MSVC-targeting one. Prepended to PATH so it wins.
+      # the runner's MSVC-targeting one. Prepended to PATH so it wins. janela
+      # pins SCRIPTC_CC=clang on win32 (bin/lib.mjs's scriptcEnv), which
+      # routes scriptc's own build+link through this same clang — one ABI
+      # end to end, including janela's webview-shim compile. See
+      # docs/windows-notes.md.
       - name: Install llvm-mingw (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -70,6 +74,18 @@ jobs:
           & "$bin\clang" -dumpmachine
 
       - run: pnpm install --frozen-lockfile
+
+      # scriptc 0.1.3's @scriptc/llvm-linux-x64-gnu optional package ships
+      # bin/scriptc-llvm-codegen without its executable bit surviving
+      # pnpm's content-addressable store, so the compiler's own readable+
+      # executable check (SC3003, native-codegen.js) rejects it. No lifecycle
+      # script in scriptc or janela restores the bit — scriptc's postinstall
+      # (scripts/warm-cache.mjs) skips native invocation entirely on hosts its
+      # runtime pack already supports. Stopgap until upstream ships the fix;
+      # see docs/shims-to-retire.md. Upstream issue not yet filed.
+      - name: Fix scriptc LLVM helper executable bit (Linux)
+        if: runner.os == 'Linux'
+        run: chmod +x node_modules/.pnpm/@scriptc+llvm-linux-x64-gnu@*/node_modules/@scriptc/llvm-linux-x64-gnu/bin/*
 
       # Fast gates first: these need no toolchain and fail in seconds, so a
       # broken contract or a bad CLI argument does not wait on a full build.

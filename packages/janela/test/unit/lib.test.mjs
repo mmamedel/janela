@@ -8,12 +8,16 @@
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   androidConf, androidPackage, ffiManifest, iosConf, libraryProfile, mimeFor,
   NAME_RE, patchPeSubsystem, PeError, rewriteHostSpecifier, suggestName,
   installCommand,
   packageManager,
+  scriptcEnv,
   shimCacheKey,
 } from "../../bin/lib.mjs";
 
@@ -398,4 +402,54 @@ test("the key accepts a Buffer, which is what readFileSync returns", () => {
     shimCacheKey(text, "1.0.0", "darwin", "-Iinc"),
     "the caller passes readFileSync's Buffer; a Buffer and its string must agree",
   );
+});
+
+// ---- scriptc pin ------------------------------------------------------------
+//
+// The size ledger (docs/sizes.json) and every "verified on scriptc X" doc line
+// carry the pin as a fact, not a range: a build with `^0.1.3` could silently
+// resolve a different compiler than the one those figures and claims were
+// measured against. This test is the machine check that invariant depends on.
+test("the scriptc dependency in package.json is an exact version", () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const pkg = JSON.parse(readFileSync(join(here, "..", "..", "package.json"), "utf8"));
+  const spec = pkg.dependencies?.scriptc;
+  assert.ok(spec, "packages/janela/package.json must depend on scriptc");
+  assert.match(spec, /^\d+\.\d+\.\d+$/, `scriptc must be pinned exactly (no ^/~/range), got "${spec}"`);
+});
+
+// ---- scriptc env -------------------------------------------------------------
+//
+// scriptc >=0.1.3 auto-selects a split-ABI Windows route with no opt-out
+// (WINDOWS_X64_MSVC_TARGET, @scriptc/compiler backend/targets.js), which
+// cannot link janela's mingw-built webview shim. SCRIPTC_CC=clang restores
+// the single-ABI legacy pipeline every Windows build actually needs — see the
+// doc comment on scriptcEnv in lib.mjs.
+test("scriptcEnv pins SCRIPTC_CC=clang on win32 when the caller left it unset", () => {
+  const env = scriptcEnv({ PATH: "/usr/bin" }, "win32");
+  assert.equal(env.SCRIPTC_CC, "clang");
+  assert.equal(env.PATH, "/usr/bin", "unrelated env vars must pass through untouched");
+});
+
+test("scriptcEnv leaves an explicit user SCRIPTC_CC alone on win32", () => {
+  const env = scriptcEnv({ SCRIPTC_CC: "zigcc" }, "win32");
+  assert.equal(env.SCRIPTC_CC, "zigcc");
+});
+
+test("scriptcEnv treats an empty-string SCRIPTC_CC as unset on win32", () => {
+  // scriptc itself treats "" as unset (dist/backend/external-c.js:37), so an
+  // empty string here must be pinned to clang exactly like undefined.
+  const env = scriptcEnv({ SCRIPTC_CC: "" }, "win32");
+  assert.equal(env.SCRIPTC_CC, "clang");
+});
+
+test("scriptcEnv never sets SCRIPTC_TARGET", () => {
+  const env = scriptcEnv({}, "win32");
+  assert.equal(env.SCRIPTC_TARGET, undefined);
+});
+
+test("scriptcEnv does not touch SCRIPTC_CC on darwin or linux", () => {
+  for (const platform of ["darwin", "linux"]) {
+    assert.equal(scriptcEnv({ PATH: "/usr/bin" }, platform).SCRIPTC_CC, undefined);
+  }
 });
